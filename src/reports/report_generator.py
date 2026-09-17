@@ -8,7 +8,7 @@ class ReportGenerator:
         report_path = os.path.join(output_dir, "Recovery_Report.txt")
         
         with open(report_path, "w", encoding="utf-8") as f:
-            f.write("=== NTFS RECOVERY REPORT ===\n")
+            f.write("=== DISK RESSURECT REPORT ===\n")
             f.write(f"Total Files Extracted: {extracted_count}\n")
             f.write("============================\n\n")
             f.write("FILES FOUND IN VFS (Including skipped/corrupted):\n")

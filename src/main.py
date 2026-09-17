@@ -19,7 +19,7 @@ MFT_FRAGS = [
 ]
 
 def main():
-    print("=" * 50 + "\n PRO DATA RECOVERY ENGINE \n" + "=" * 50)
+    print("=" * 50 + "\n DISK-RESSURECT DATA RECOVERY \n" + "=" * 50)
     disk = RawDisk(DISK_NUM)
 
     # 1. Scanner
