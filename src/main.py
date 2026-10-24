@@ -41,10 +41,14 @@ def main():
         vfs = builder.build()
         builder.inject_ghosts(ghost_records)
 
-        # 4. Extract with the original GitHub filters and single-pass logic.
+        # 4. Extract photos, videos and common Office documents.
         extractor = Extractor(disk, vfs, vol_start)
         extractor.set_filters(
-            exts=['.jpg', '.jpeg', '.pdf', '.mp4'],
+            exts=[
+                '.jpg', '.jpeg', '.png', '.mp4',
+                '.pdf', '.doc', '.docx', '.docm', '.rtf',
+                '.xls', '.xlsx', '.xlsm',
+            ],
             dirs=['windows', 'program files', 'bkp fotos notebook'],
             min_kb=5
         )

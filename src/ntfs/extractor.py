@@ -4,13 +4,30 @@ from utils.progress import Progress
 
 class Extractor:
     """Extracts valid files using header validation."""
+    ZIP_SIGNATURE = b"PK\x03\x04"
+    OLE_SIGNATURE = bytes.fromhex("D0CF11E0A1B11AE1")
+
     def __init__(self, disk, vfs_nodes, vol_start, cluster_size=4096):
         self.disk = disk
         self.nodes = vfs_nodes
         self.vol_start = vol_start
         self.c_size = cluster_size
         self.filters = {'ext': set(), 'dirs': set(), 'min_kb': 0}
-        self.sigs = {'.jpg': b'\xFF\xD8', '.jpeg': b'\xFF\xD8', '.pdf': b'%PDF', '.png': b'\x89PNG'}
+        self.sigs = {
+            '.jpg': b'\xFF\xD8',
+            '.jpeg': b'\xFF\xD8',
+            '.pdf': b'%PDF',
+            '.png': b'\x89PNG',
+            # OOXML files (DOCX/XLSX and macro-enabled variants) are ZIP containers.
+            '.docx': self.ZIP_SIGNATURE,
+            '.docm': self.ZIP_SIGNATURE,
+            '.xlsx': self.ZIP_SIGNATURE,
+            '.xlsm': self.ZIP_SIGNATURE,
+            # Legacy Word/Excel documents use Microsoft's OLE Compound File format.
+            '.doc': self.OLE_SIGNATURE,
+            '.xls': self.OLE_SIGNATURE,
+            '.rtf': b'{\\rtf',
+        }
 
     def set_filters(self, exts, dirs, min_kb):
         self.filters['ext'] = {e.lower() for e in exts}
@@ -63,5 +80,11 @@ class Extractor:
                                 f.write(chunk[:to_write])
                                 left -= to_write
                         if not first_chunk: extracted += 1
-            except: pass
+            except OSError:
+                # Continue with other files when a run is unreadable or the
+                # destination cannot be written.
+                pass
+            finally:
+                progress.update(target_index)
+        progress.finish()
         return extracted
