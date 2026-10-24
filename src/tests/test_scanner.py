@@ -24,12 +24,20 @@ class FakeDisk:
 def make_mft_record(mft_lcn):
     record = bytearray(1024)
     record[:4] = b"FILE"
+    struct.pack_into("<HH", record, 4, 0x30, 3)
+    record[0x30:0x36] = b"\xAA\xBB\0\0\0\0"
+    record[510:512] = b"\xAA\xBB"
+    record[1022:1024] = b"\xAA\xBB"
     attr_offset = 0x38
     struct.pack_into("<H", record, 20, attr_offset)
-    struct.pack_into("<I", record, attr_offset, 0x80)
-    struct.pack_into("<I", record, attr_offset + 4, 64)
-    struct.pack_into("<H", record, attr_offset + 32, 56)
-    record[attr_offset + 56:attr_offset + 60] = bytes((0x11, 1, mft_lcn, 0))
+    attr_length = 72
+    struct.pack_into("<II", record, attr_offset, 0x80, attr_length)
+    record[attr_offset + 8] = 1
+    struct.pack_into("<H", record, attr_offset + 32, 64)
+    struct.pack_into("<Q", record, attr_offset + 48, 1024)
+    record[attr_offset + 64:attr_offset + 71] = b"\x41\x01" + int(mft_lcn).to_bytes(4, "little", signed=True) + b"\x00"
+    struct.pack_into("<I", record, 24, attr_offset + attr_length + 4)
+    struct.pack_into("<I", record, attr_offset + attr_length, 0xFFFFFFFF)
     return bytes(record)
 
 

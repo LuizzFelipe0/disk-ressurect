@@ -6,7 +6,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "."))
 
 from disk.raw_disk import RawDisk
 from disk.scanner import DiskScanner
-from disk.mft_carver import GhostMFTCarver
+from disk.output_safety import OutputSafetyGuard
 from ntfs.tree_builder import TreeBuilder
 from ntfs.extractor import Extractor
 from reports.report_generator import ReportGenerator
@@ -23,6 +23,8 @@ MFT_FRAGS = [
 def main():
     started = time.perf_counter()
     print("=" * 50 + "\n DISK-RESSURECT DATA RECOVERY \n" + "=" * 50)
+    output_disks = OutputSafetyGuard().validate(OUTPUT_DIR, DISK_NUM)
+    print(f"[*] [Safety] Recovery output uses physical disk(s): {output_disks}")
     disk = RawDisk(DISK_NUM)
     try:
         # 1. Scanner
@@ -32,16 +34,12 @@ def main():
             print("[!] Failed to find VOL_START")
             return
 
-        # 2. Ghost MFT scan; retained baseline behavior for this comparison run.
-        ghost_records = GhostMFTCarver(disk).hunt(0, 25 * 1024 * 1024 * 1024)
-        ghost_records = {}
-
-        # 3. Build VFS with batched physical reads.
+        # 2. Build the catalog from the primary MFT. Orphan-record scanning is
+        # intentionally deferred until it can feed the same selectable tree.
         builder = TreeBuilder(disk, MFT_FRAGS, MFT_FRAGS[0]['phys'])
         vfs = builder.build()
-        builder.inject_ghosts(ghost_records)
 
-        # 4. Extract photos, videos and common Office documents.
+        # 3. Extract photos, videos and common Office documents.
         extractor = Extractor(disk, vfs, vol_start)
         extractor.set_filters(
             exts=[
@@ -54,8 +52,8 @@ def main():
         )
         success_count = extractor.extract(OUTPUT_DIR)
 
-        # 5. Report
-        ReportGenerator.generate(vfs, OUTPUT_DIR, success_count)
+        # 4. Report
+        ReportGenerator.generate(vfs, OUTPUT_DIR, success_count, extractor.results)
         print(f"\n[+] Done! {success_count} files successfully recovered.")
         return success_count
     finally:

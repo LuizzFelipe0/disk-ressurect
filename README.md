@@ -7,7 +7,7 @@ A NTFS data recovery and forensic engine written in pure Python. This software i
 Unlike basic file carvers that recover files without names, this engine reconstructs the original directory tree whenever possible.
 
 * Virtual File System (VFS): Reads the $MFT and mounts the original folder structure in memory before extraction.
-* Ghost MFT Carving: Hunts for orphaned MFT records in unallocated space to rescue files whose directory references were destroyed.
+* Ghost MFT Carving: The carver remains available, but the current CLI does not run it. Its previous result was discarded before extraction, adding a long scan without affecting recovered files. It can be reconnected when orphan records can participate in the selectable catalog.
 * Smart Header Validation: Reads physical file signatures (magic numbers) during extraction to skip corrupted or overwritten files.
 * Deep Scan (File Carver): A fallback raw signature scanner for data located in unallocated space.
 * Extraction Filters: Allows whitelisting specific extensions and blacklisting system directories to avoid extracting useless data.
@@ -20,6 +20,12 @@ The project is structured into independent layers to ensure scalability for futu
 * scanner.py (Discovery): Uses mathematical triangulation and VBR scanning to discover partition offsets (VOL_START).
 * ntfs/ (VFS Layer): Contains the MFT Parser and Tree Builder, responsible for linking parent-child relationships and resolving absolute paths.
 * extractor.py (Extraction Layer): Applies filtering rules and safely extracts files to the destination drive.
+
+## Recovery catalog and selection
+
+`TreeBuilder` creates the in-memory folder/file catalog and keeps parent/child links on each `FileNode`. `Extractor.candidate_nodes()` exposes files that pass the active filters. `Extractor.plan_selection(nodes)` expands selected folders into eligible descendants and deduplicates nested selections; `Extractor.extract(..., selected_nodes=...)` accepts that plan. This keeps the recovery engine independent of PyQt6 while providing the backend contract for hierarchical folder/file checkboxes.
+
+The output directory is checked against the source physical disk before recovery starts. Extraction results carry a status and reason per file, and the report includes rejection counts by extension. Incomplete disk reads and MFT data extents are not counted as successful recoveries.
 
 ## Prerequisites
 
@@ -47,3 +53,12 @@ OUTPUT_DIR = r"X:\Safe\Destination\Path"
 MFT_FRAGS = [
     {"phys": 0xC6500000, "count": 113664, "base_idx": 0}
 ]
+```
+
+## Tests
+
+Run the unit suite without accessing a physical disk:
+
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s src\tests -v
+```

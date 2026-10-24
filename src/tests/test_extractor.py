@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -29,16 +30,30 @@ def make_node(name, content, full_path=None, lcn=1):
     return SimpleNamespace(
         record=record,
         full_path=full_path or name,
+        children=[],
+        parent=None,
     )
+
+
+def make_ooxml(member):
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr(member, "<document/>")
+    return payload.getvalue()
 
 
 class ExtractorOfficeFormatTests(unittest.TestCase):
     def make_extractor(self, nodes, contents):
         # Use 4-byte clusters so the tests do not allocate large buffers.
         required_size = 0
+        next_lcn = 1
         for node in nodes.values():
-            lcn = node.record.data_runs[0][0]
             content = contents[node.record.name]
+            lcn = next_lcn
+            cluster_count = (len(content) + 3) // 4
+            node.record.data_runs = [(lcn, cluster_count)]
+            next_lcn += cluster_count + 2
             required_size = max(required_size, lcn * 4 + len(content))
         disk_data = bytearray(required_size)
         for node in nodes.values():
@@ -55,14 +70,14 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
 
     def test_office_and_pdf_extensions_are_selected_but_overwritten_folder_is_excluded(self):
         included = [
-            make_node('report.pdf', b'%PDFdata'),
+            make_node('report.pdf', b'%PDF-data'),
             make_node('legacy.doc', bytes.fromhex('D0CF11E0A1B11AE1')),
-            make_node('modern.docx', b'PK\x03\x04data'),
-            make_node('macro.docm', b'PK\x03\x04data'),
+            make_node('modern.docx', make_ooxml('word/document.xml')),
+            make_node('macro.docm', make_ooxml('word/document.xml')),
             make_node('notes.rtf', b'{\\rtfdata'),
             make_node('legacy.xls', bytes.fromhex('D0CF11E0A1B11AE1')),
-            make_node('sheet.xlsx', b'PK\x03\x04data'),
-            make_node('macro.xlsm', b'PK\x03\x04data'),
+            make_node('sheet.xlsx', make_ooxml('xl/workbook.xml')),
+            make_node('macro.xlsm', make_ooxml('xl/workbook.xml')),
         ]
         excluded = make_node(
             'photo.pdf', b'%PDFdata',
@@ -75,14 +90,14 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
 
     def test_extracts_supported_signatures_and_rejects_mismatch(self):
         contents = {
-            'report.pdf': b'%PDFdata',
+            'report.pdf': b'%PDF-data',
             'legacy.doc': bytes.fromhex('D0CF11E0A1B11AE1'),
-            'modern.docx': b'PK\x03\x04data',
-            'macro.docm': b'PK\x03\x04data',
+            'modern.docx': make_ooxml('word/document.xml'),
+            'macro.docm': make_ooxml('word/document.xml'),
             'notes.rtf': b'{\\rtfdata',
             'legacy.xls': bytes.fromhex('D0CF11E0A1B11AE1'),
-            'sheet.xlsx': b'PK\x03\x04data',
-            'macro.xlsm': b'PK\x03\x04data',
+            'sheet.xlsx': make_ooxml('xl/workbook.xml'),
+            'macro.xlsm': make_ooxml('xl/workbook.xml'),
             'broken.xlsx': b'not-a-zip',
         }
         nodes = {
@@ -103,6 +118,58 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
                 with open(os.path.join(output_dir, name), 'rb') as recovered_file:
                     self.assertEqual(recovered_file.read(), contents[name])
             self.assertFalse(os.path.exists(os.path.join(output_dir, 'broken.xlsx')))
+
+    def test_short_disk_read_is_reported_and_never_published_as_recovered(self):
+        content = b"%PDF-complete"
+        node = make_node('report.pdf', content)
+        extractor = self.make_extractor({'report': node}, {'report.pdf': content})
+        extractor.disk = FakeDisk(b"%PDF")
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+        with tempfile.TemporaryDirectory(dir=root) as output_dir:
+            with contextlib.redirect_stdout(io.StringIO()):
+                recovered = extractor.extract(output_dir)
+            self.assertEqual(recovered, 0)
+            self.assertEqual(extractor.results[0].status, 'incomplete_read')
+            self.assertFalse(os.path.exists(os.path.join(output_dir, 'report.pdf')))
+
+    def test_checked_folder_expands_to_eligible_descendants_only(self):
+        content = b"%PDF-report"
+        folder = make_node('folder', b'', full_path='folder')
+        folder.record.is_dir = True
+        child = make_node('inside.pdf', content, full_path=os.path.join('folder', 'inside.pdf'))
+        child.record.data_runs = [(2, (len(content) + 3) // 4)]
+        child.parent = folder
+        folder.children.append(child)
+        skipped = make_node('ignored.pdf', content, full_path=os.path.join('bkp fotos notebook', 'ignored.pdf'))
+        skipped.parent = folder
+        folder.children.append(skipped)
+        nodes = {'child': child, 'skipped': skipped}
+        extractor = self.make_extractor(nodes, {'inside.pdf': content, 'ignored.pdf': content})
+
+        self.assertEqual(extractor.plan_selection([folder]), [child])
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        with tempfile.TemporaryDirectory(dir=root) as output_dir:
+            with contextlib.redirect_stdout(io.StringIO()):
+                recovered = extractor.extract(output_dir, selected_nodes=[folder])
+            self.assertEqual(recovered, 1)
+            self.assertTrue(os.path.exists(os.path.join(output_dir, 'folder', 'inside.pdf')))
+            self.assertFalse(os.path.exists(os.path.join(output_dir, 'bkp fotos notebook', 'ignored.pdf')))
+
+    def test_progress_callback_receives_each_result(self):
+        content = b"%PDF-report"
+        node = make_node('report.pdf', content)
+        extractor = self.make_extractor({'report': node}, {'report.pdf': content})
+        events = []
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+        with tempfile.TemporaryDirectory(dir=root) as output_dir:
+            with contextlib.redirect_stdout(io.StringIO()):
+                extractor.extract(output_dir, progress_callback=lambda *event: events.append(event))
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][0:2], (1, 1))
+        self.assertEqual(events[0][2].status, 'recovered')
 
 
 if __name__ == '__main__':

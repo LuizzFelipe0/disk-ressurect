@@ -36,7 +36,13 @@ class TreeBuilder:
             while read_index < count:
                 batch_count = min(batch_records, count - read_index)
                 offset = fragment["phys"] + read_index * 1024
-                raw_batch = self.disk.read_at(offset, batch_count * 1024)
+                requested_bytes = batch_count * 1024
+                raw_batch = self.disk.read_at(offset, requested_bytes)
+                if len(raw_batch) != requested_bytes:
+                    raise OSError(
+                        f"Short MFT read at {offset:#x}: "
+                        f"received {len(raw_batch)} of {requested_bytes} bytes"
+                    )
                 complete_records = len(raw_batch) // 1024
                 for item in range(complete_records):
                     begin = item * 1024
@@ -49,9 +55,6 @@ class TreeBuilder:
                 processed += batch_count
                 read_index += batch_count
                 progress.update(processed)
-                if len(raw_batch) != batch_count * 1024:
-                    break
-
         progress.finish()
         print("[*] [VFS] Linking parents and children...")
         self.root_nodes = []
