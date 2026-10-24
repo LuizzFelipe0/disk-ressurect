@@ -5,6 +5,7 @@ class ReportGenerator:
     @staticmethod
     def generate(vfs_nodes, output_dir, extracted_count):
         print("[*] [Report] Generating recovery report...")
+        os.makedirs(output_dir, exist_ok=True)
         report_path = os.path.join(output_dir, "Recovery_Report.txt")
         
         with open(report_path, "w", encoding="utf-8") as f:

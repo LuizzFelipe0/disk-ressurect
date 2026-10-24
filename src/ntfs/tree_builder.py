@@ -1,6 +1,7 @@
 import os
 import re
 from ntfs.mft_parser import MFTRecord
+from utils.progress import Progress
 
 class FileNode:
     def __init__(self, record):
@@ -23,23 +24,43 @@ class TreeBuilder:
 
     def build(self):
         print("[*] [VFS] Reading MFT fragments...")
-        for frag in self.fragments:
-            for i in range(frag['count']):
-                phys = frag['phys'] + (i * 1024)
-                raw = self.disk.read_at(phys, 1024)
-                if raw[:4] == b"FILE":
-                    idx = frag['base_idx'] + i
-                    rec = MFTRecord(raw, idx, self.disk, self.base_offset)
-                    if rec.is_valid and rec.name:
-                        self.nodes[idx] = FileNode(rec)
-        
+        total_records = sum(fragment["count"] for fragment in self.fragments)
+        progress = Progress("MFT read", total_records, width=24)
+        processed = 0
+        batch_records = 4096  # 4 MiB of 1 KiB MFT records per physical read.
+
+        for fragment in self.fragments:
+            count = fragment["count"]
+            base_index = fragment["base_idx"]
+            read_index = 0
+            while read_index < count:
+                batch_count = min(batch_records, count - read_index)
+                offset = fragment["phys"] + read_index * 1024
+                raw_batch = self.disk.read_at(offset, batch_count * 1024)
+                complete_records = len(raw_batch) // 1024
+                for item in range(complete_records):
+                    begin = item * 1024
+                    raw = raw_batch[begin:begin + 1024]
+                    if raw[:4] == b"FILE":
+                        index = base_index + read_index + item
+                        record = MFTRecord(raw, index, self.disk, self.base_offset)
+                        if record.is_valid and record.name:
+                            self.nodes[index] = FileNode(record)
+                processed += batch_count
+                read_index += batch_count
+                progress.update(processed)
+                if len(raw_batch) != batch_count * 1024:
+                    break
+
+        progress.finish()
         print("[*] [VFS] Linking parents and children...")
-        for idx, node in self.nodes.items():
-            pid = node.record.parent_index
-            if pid in self.nodes and pid != idx and idx != 5:
-                pnode = self.nodes[pid]
-                pnode.children.append(node)
-                node.parent = pnode
+        self.root_nodes = []
+        for index, node in self.nodes.items():
+            parent_index = node.record.parent_index
+            if parent_index in self.nodes and parent_index != index and index != 5:
+                parent = self.nodes[parent_index]
+                parent.children.append(node)
+                node.parent = parent
             else:
                 self.root_nodes.append(node)
 

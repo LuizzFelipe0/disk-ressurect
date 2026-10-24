@@ -1,5 +1,7 @@
 import os
 
+from utils.progress import Progress
+
 class Extractor:
     """Extracts valid files using header validation."""
     def __init__(self, disk, vfs_nodes, vol_start, cluster_size=4096):
@@ -26,9 +28,9 @@ class Extractor:
     def extract(self, out_dir):
         targets = [n for n in self.nodes.values() if self._should_extract(n)]
         print(f"[*] [Extractor] Starting extraction of {len(targets)} files...")
-        
+        progress = Progress("File extraction", len(targets), width=24)
         extracted = 0
-        for node in targets:
+        for target_index, node in enumerate(targets, 1):
             dest = os.path.join(out_dir, node.full_path)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             
