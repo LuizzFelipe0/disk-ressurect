@@ -5,7 +5,6 @@ class ReportGenerator:
     """Generates an extraction log report."""
     @staticmethod
     def generate(vfs_nodes, output_dir, extracted_count, extraction_results=None):
-        print("[*] [Report] Generating recovery report...")
         os.makedirs(output_dir, exist_ok=True)
         report_path = os.path.join(output_dir, "Recovery_Report.txt")
         

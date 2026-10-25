@@ -1,4 +1,3 @@
-import contextlib
 import io
 import os
 import sys
@@ -63,12 +62,11 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         extractor = Extractor(FakeDisk(bytes(disk_data)), nodes, vol_start=0, cluster_size=4)
         extractor.set_filters(
             exts=['.pdf', '.doc', '.docx', '.docm', '.rtf', '.xls', '.xlsx', '.xlsm'],
-            dirs=['windows', 'program files', 'bkp fotos notebook'],
             min_kb=0,
         )
         return extractor
 
-    def test_office_and_pdf_extensions_are_selected_but_overwritten_folder_is_excluded(self):
+    def test_supported_file_types_follow_user_selection_without_folder_blacklists(self):
         included = [
             make_node('report.pdf', b'%PDF-data'),
             make_node('legacy.doc', bytes.fromhex('D0CF11E0A1B11AE1')),
@@ -79,14 +77,17 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
             make_node('sheet.xlsx', make_ooxml('xl/workbook.xml')),
             make_node('macro.xlsm', make_ooxml('xl/workbook.xml')),
         ]
-        excluded = make_node(
-            'photo.pdf', b'%PDFdata',
-            full_path='bkp fotos notebook\\photo.pdf',
+        nested = make_node(
+            'photo.pdf', b'%PDF-data',
+            full_path='user-selected-folder\\photo.pdf',
         )
         extractor = self.make_extractor({}, {})
 
         self.assertTrue(all(extractor._should_extract(node) for node in included))
-        self.assertFalse(extractor._should_extract(excluded))
+        self.assertTrue(extractor._should_extract(nested))
+        extractor.set_filters(exts=['.pdf'], min_kb=0)
+        self.assertTrue(extractor._should_extract(nested))
+        self.assertFalse(extractor._should_extract(included[1]))
 
     def test_extracts_supported_signatures_and_rejects_mismatch(self):
         contents = {
@@ -108,12 +109,10 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
 
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
-            output = io.StringIO()
-            with contextlib.redirect_stdout(output):
-                recovered = extractor.extract(output_dir)
+            recovered = extractor.extract(output_dir)
 
             self.assertEqual(recovered, 8)
-            self.assertIn('100%', output.getvalue())
+            self.assertIn("available signature/container checks", extractor.results[0].reason)
             for name in list(contents)[:-1]:
                 with open(os.path.join(output_dir, name), 'rb') as recovered_file:
                     self.assertEqual(recovered_file.read(), contents[name])
@@ -127,13 +126,12 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
         with tempfile.TemporaryDirectory(dir=root) as output_dir:
-            with contextlib.redirect_stdout(io.StringIO()):
-                recovered = extractor.extract(output_dir)
+            recovered = extractor.extract(output_dir)
             self.assertEqual(recovered, 0)
             self.assertEqual(extractor.results[0].status, 'incomplete_read')
             self.assertFalse(os.path.exists(os.path.join(output_dir, 'report.pdf')))
 
-    def test_checked_folder_expands_to_eligible_descendants_only(self):
+    def test_checked_folder_expands_to_all_user_selected_type_descendants(self):
         content = b"%PDF-report"
         folder = make_node('folder', b'', full_path='folder')
         folder.record.is_dir = True
@@ -141,20 +139,19 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         child.record.data_runs = [(2, (len(content) + 3) // 4)]
         child.parent = folder
         folder.children.append(child)
-        skipped = make_node('ignored.pdf', content, full_path=os.path.join('bkp fotos notebook', 'ignored.pdf'))
-        skipped.parent = folder
-        folder.children.append(skipped)
-        nodes = {'child': child, 'skipped': skipped}
-        extractor = self.make_extractor(nodes, {'inside.pdf': content, 'ignored.pdf': content})
+        nested = make_node('nested.pdf', content, full_path=os.path.join('selected folder', 'nested.pdf'))
+        nested.parent = folder
+        folder.children.append(nested)
+        nodes = {'child': child, 'nested': nested}
+        extractor = self.make_extractor(nodes, {'inside.pdf': content, 'nested.pdf': content})
 
-        self.assertEqual(extractor.plan_selection([folder]), [child])
+        self.assertEqual(extractor.plan_selection([folder]), [child, nested])
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
         with tempfile.TemporaryDirectory(dir=root) as output_dir:
-            with contextlib.redirect_stdout(io.StringIO()):
-                recovered = extractor.extract(output_dir, selected_nodes=[folder])
-            self.assertEqual(recovered, 1)
+            recovered = extractor.extract(output_dir, selected_nodes=[folder])
+            self.assertEqual(recovered, 2)
             self.assertTrue(os.path.exists(os.path.join(output_dir, 'folder', 'inside.pdf')))
-            self.assertFalse(os.path.exists(os.path.join(output_dir, 'bkp fotos notebook', 'ignored.pdf')))
+            self.assertTrue(os.path.exists(os.path.join(output_dir, 'selected folder', 'nested.pdf')))
 
     def test_progress_callback_receives_each_result(self):
         content = b"%PDF-report"
@@ -164,8 +161,7 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
         with tempfile.TemporaryDirectory(dir=root) as output_dir:
-            with contextlib.redirect_stdout(io.StringIO()):
-                extractor.extract(output_dir, progress_callback=lambda *event: events.append(event))
+            extractor.extract(output_dir, progress_callback=lambda *event: events.append(event))
 
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0][0:2], (1, 1))

@@ -1,7 +1,7 @@
 import os
 import re
+from typing import Callable
 from ntfs.mft_parser import MFTRecord
-from utils.progress import Progress
 
 class FileNode:
     def __init__(self, record):
@@ -15,19 +15,20 @@ class FileNode:
 
 class TreeBuilder:
     """Builds a Virtual File System (VFS) in memory."""
-    def __init__(self, disk, fragments, base_offset):
+    def __init__(self, disk, fragments, base_offset, record_size=1024):
         self.disk = disk
         self.fragments = fragments
         self.base_offset = base_offset
+        self.record_size = int(record_size)
+        if self.record_size < 512 or self.record_size % 512:
+            raise ValueError("MFT record size must be a positive multiple of 512 bytes")
         self.nodes = {}
         self.root_nodes = []
 
-    def build(self):
-        print("[*] [VFS] Reading MFT fragments...")
+    def build(self, progress_callback: Callable[[int, int], None] | None = None):
         total_records = sum(fragment["count"] for fragment in self.fragments)
-        progress = Progress("MFT read", total_records, width=24)
         processed = 0
-        batch_records = 4096  # 4 MiB of 1 KiB MFT records per physical read.
+        batch_records = max(1, (4 * 1024 * 1024) // self.record_size)
 
         for fragment in self.fragments:
             count = fragment["count"]
@@ -35,37 +36,43 @@ class TreeBuilder:
             read_index = 0
             while read_index < count:
                 batch_count = min(batch_records, count - read_index)
-                offset = fragment["phys"] + read_index * 1024
-                requested_bytes = batch_count * 1024
+                offset = fragment["phys"] + read_index * self.record_size
+                requested_bytes = batch_count * self.record_size
                 raw_batch = self.disk.read_at(offset, requested_bytes)
                 if len(raw_batch) != requested_bytes:
                     raise OSError(
                         f"Short MFT read at {offset:#x}: "
                         f"received {len(raw_batch)} of {requested_bytes} bytes"
                     )
-                complete_records = len(raw_batch) // 1024
+                complete_records = len(raw_batch) // self.record_size
                 for item in range(complete_records):
-                    begin = item * 1024
-                    raw = raw_batch[begin:begin + 1024]
+                    begin = item * self.record_size
+                    raw = raw_batch[begin:begin + self.record_size]
                     if raw[:4] == b"FILE":
                         index = base_index + read_index + item
-                        record = MFTRecord(raw, index, self.disk, self.base_offset)
+                        record = MFTRecord(
+                            raw,
+                            index,
+                            self.disk,
+                            offset + begin,
+                            self.record_size,
+                        )
                         if record.is_valid and record.name:
                             self.nodes[index] = FileNode(record)
                 processed += batch_count
                 read_index += batch_count
-                progress.update(processed)
-        progress.finish()
-        print("[*] [VFS] Linking parents and children...")
-        self.root_nodes = []
+                if progress_callback is not None:
+                    progress_callback(processed, total_records)
         for index, node in self.nodes.items():
             parent_index = node.record.parent_index
-            if parent_index in self.nodes and parent_index != index and index != 5:
-                parent = self.nodes[parent_index]
+            parent = self.nodes.get(parent_index)
+            if (parent is not None and parent.record.is_dir
+                    and parent_index != index and index != 5):
                 parent.children.append(node)
                 node.parent = parent
-            else:
-                self.root_nodes.append(node)
+
+        self._detach_parent_cycles()
+        self.root_nodes = [node for node in self.nodes.values() if node.parent is None]
 
         self._resolve_paths()
         return self.nodes
@@ -73,23 +80,53 @@ class TreeBuilder:
     def inject_ghosts(self, ghost_dict):
         """Injects orphaned records found by Deep Scan into a 'Lost Files' folder."""
         if not ghost_dict: return
-        print(f"[*] [VFS] Injecting {len(ghost_dict)} ghost records into VFS...")
         for idx, rec in ghost_dict.items():
             node = FileNode(rec)
             node.full_path = os.path.join("Lost_Files_DeepScan", node.sanitize(rec.name))
             self.nodes[idx] = node
 
     def _resolve_paths(self):
-        for root in self.root_nodes:
-            self._traverse(root, "")
+        visited = set()
+        pending = [(root, "") for root in reversed(self.root_nodes)]
+        while pending:
+            node, parent_path = pending.pop()
+            identity = id(node)
+            if identity in visited:
+                continue
+            visited.add(identity)
+            name = node.sanitize(node.record.name)
+            node.full_path = (
+                name if node.record.index == 5 or not parent_path
+                else os.path.join(parent_path, name)
+            )
+            if not node.record.is_allocated and not node.record.is_dir:
+                directory, filename = os.path.split(node.full_path)
+                node.full_path = os.path.join(directory, f"[DELETED]_{filename}")
+            pending.extend((child, node.full_path) for child in reversed(node.children))
 
-    def _traverse(self, node, curr_path):
-        cname = node.sanitize(node.record.name)
-        node.full_path = cname if node.record.index == 5 or not curr_path else os.path.join(curr_path, cname)
-        # Prefix deleted files
-        if not node.record.is_allocated and not node.record.is_dir:
-            dir_name, file_name = os.path.split(node.full_path)
-            node.full_path = os.path.join(dir_name, f"[DELETED]_{file_name}")
-            
-        for child in node.children:
-            self._traverse(child, node.full_path)
+        # Preserve disconnected records in the catalog even if a damaged parent
+        # reference made them unreachable from every valid root.
+        for node in self.nodes.values():
+            if id(node) not in visited:
+                node.full_path = node.sanitize(node.record.name)
+
+    def _detach_parent_cycles(self):
+        """Break corrupt parent-reference cycles at a deterministic record."""
+        visited = set()
+        for start in self.nodes.values():
+            chain = []
+            positions = {}
+            current = start
+            while current is not None and id(current) not in visited:
+                identity = id(current)
+                if identity in positions:
+                    cycle = chain[positions[identity]:]
+                    detached = min(cycle, key=lambda item: item.record.index)
+                    if detached.parent is not None:
+                        detached.parent.children.remove(detached)
+                        detached.parent = None
+                    break
+                positions[identity] = len(chain)
+                chain.append(current)
+                current = current.parent
+            visited.update(id(node) for node in chain)

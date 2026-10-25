@@ -5,12 +5,12 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from utils.progress import Progress
+from domain.recovery_catalog import RecoveryCatalog
 
 
 @dataclass(frozen=True)
 class ExtractionResult:
-    """Outcome for one file, suitable for CLI reports and a future GUI model."""
+    """Outcome for one file, shared by the recovery workflow and report."""
 
     node: object
     status: str
@@ -53,34 +53,28 @@ class Extractor:
         ".mp4": ((4, b"ftyp"),),
     }
 
-    def __init__(self, disk, vfs_nodes, vol_start, cluster_size=4096):
+    def __init__(self, disk, vfs_nodes, vol_start, cluster_size=4096, root_nodes=None):
         self.disk = disk
         self.nodes = vfs_nodes
+        self.catalog = RecoveryCatalog(vfs_nodes, root_nodes)
         self.vol_start = vol_start
         self.c_size = cluster_size
-        self.filters = {"ext": set(), "dirs": set(), "min_kb": 0}
+        self.filters = {"ext": set(self.SIGNATURES), "min_kb": 0}
         self.results = []
         self.stats_by_extension = {}
 
-    def set_filters(self, exts, dirs, min_kb):
-        self.filters["ext"] = {extension.lower() for extension in exts}
-        self.filters["dirs"] = {directory.lower() for directory in dirs}
+    def set_filters(self, exts=None, min_kb=0):
+        self.filters["ext"] = set(self.SIGNATURES) if exts is None else {
+            extension.casefold() for extension in exts
+        }
         self.filters["min_kb"] = max(0, int(min_kb))
 
     def _should_extract(self, node):
-        if node.record.is_dir or node.record.file_size <= self.filters["min_kb"] * 1024:
-            return False
-        extension = os.path.splitext(node.record.name.lower())[1]
-        if self.filters["ext"] and extension not in self.filters["ext"]:
-            return False
-        path_parts = {
-            part.casefold()
-            for part in node.full_path.replace("/", "\\").split("\\")
-            if part
-        }
-        if path_parts.intersection(self.filters["dirs"]):
-            return False
-        return True
+        return self.catalog.is_eligible(
+            node,
+            set(self.SIGNATURES).intersection(self.filters["ext"]),
+            self.filters["min_kb"] * 1024,
+        )
 
     def candidate_nodes(self):
         """Return eligible files while retaining their parent/child tree links.
@@ -88,7 +82,15 @@ class Extractor:
         A GUI can use the tree nodes as hierarchical checkbox items, then pass
         the checked descendant files to ``extract`` as ``selected_nodes``.
         """
-        return [node for node in self.nodes.values() if self._should_extract(node)]
+        return self.catalog.eligible_files(
+            self.SIGNATURES,
+            self.filters["ext"],
+            self.filters["min_kb"] * 1024,
+        )
+
+    @classmethod
+    def supported_extensions(cls):
+        return tuple(sorted(cls.SIGNATURES))
 
     def plan_selection(self, selected_nodes):
         """Expand checked files/folders into an ordered, deduplicated file plan.
@@ -97,23 +99,7 @@ class Extractor:
         a folder includes eligible descendants, while selecting a file includes
         only that file. The returned nodes still carry their VFS parent links.
         """
-        eligible = {id(node): node for node in self.candidate_nodes()}
-        selected_ids = set()
-        visited = set()
-
-        def visit(node):
-            identity = id(node)
-            if identity in visited:
-                return
-            visited.add(identity)
-            if identity in eligible:
-                selected_ids.add(identity)
-            for child in getattr(node, "children", ()):
-                visit(child)
-
-        for node in selected_nodes:
-            visit(node)
-        return [node for node in eligible.values() if id(node) in selected_ids]
+        return self.catalog.plan_selection(selected_nodes, self.candidate_nodes())
 
     def extract(
         self,
@@ -123,9 +109,8 @@ class Extractor:
     ):
         """Extract candidates, optionally limiting work to selected tree nodes.
 
-        ``selected_nodes=None`` preserves command-line behavior and extracts all
-        candidates. A GUI should flatten checked folder descendants into the
-        file-node collection supplied here.
+        ``selected_nodes=None`` extracts all candidates that pass the active
+        filters. The desktop interface passes checked folders and files here.
         """
         candidates = self.candidate_nodes()
         if selected_nodes is None:
@@ -133,10 +118,8 @@ class Extractor:
         else:
             targets = self.plan_selection(selected_nodes)
 
-        print(f"[*] [Extractor] Starting extraction of {len(targets)} files...")
         self.results = []
         self.stats_by_extension = {}
-        progress = Progress("File extraction", len(targets), width=24) if progress_callback is None else None
         recovered_count = 0
 
         for completed, node in enumerate(targets, 1):
@@ -146,13 +129,9 @@ class Extractor:
             extension_stats[result.status] += 1
             if result.status == "recovered":
                 recovered_count += 1
-            if progress_callback is None:
-                progress.update(completed)
-            else:
+            if progress_callback is not None:
                 progress_callback(completed, len(targets), result)
 
-        if progress is not None:
-            progress.finish()
         return recovered_count
 
     def _extract_one(self, out_dir, node):
@@ -247,7 +226,12 @@ class Extractor:
                 return ExtractionResult(node, "invalid_container", container_error, bytes_written)
 
             os.replace(temporary_path, destination)
-            return ExtractionResult(node, "recovered", "Complete data and format validation succeeded", bytes_written)
+            return ExtractionResult(
+                node,
+                "recovered",
+                "All file bytes were read and the available signature/container checks passed",
+                bytes_written,
+            )
         except OSError as exc:
             return ExtractionResult(node, "io_error", str(exc), bytes_written)
         except (ValueError, TypeError, OverflowError) as exc:

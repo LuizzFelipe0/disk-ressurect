@@ -52,6 +52,7 @@ class MFTParserTests(unittest.TestCase):
         self.assertEqual(record.parent_index, 5)
         self.assertEqual(record.resident_data, b"data")
         self.assertEqual(record.file_size, 4)
+        self.assertEqual(record.allocated_size, 4)
         self.assertTrue(record.data_is_complete)
 
     def test_rejects_record_with_mismatched_update_sequence(self):

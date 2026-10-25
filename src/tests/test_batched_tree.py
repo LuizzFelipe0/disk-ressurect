@@ -1,6 +1,8 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from ntfs.tree_builder import TreeBuilder
@@ -30,6 +32,30 @@ class BatchedTreeTests(unittest.TestCase):
         builder = TreeBuilder(disk, [{"phys": 100, "count": 1, "base_idx": 0}], 0)
         with self.assertRaisesRegex(OSError, "Short MFT read"):
             builder.build()
+
+    def test_reports_batch_progress_through_callback(self):
+        disk = FakeDisk(b"x" * (100 + 1024))
+        builder = TreeBuilder(disk, [{"phys": 100, "count": 1, "base_idx": 0}], 0)
+        events = []
+        builder.build(progress_callback=lambda completed, total: events.append((completed, total)))
+        self.assertEqual(events, [(1, 1)])
+
+    def test_records_keep_their_physical_offset_instead_of_partition_start(self):
+        disk = FakeDisk(bytes(4096) + b"FILE" + bytes(1020))
+        parsed = SimpleNamespace(
+            is_valid=True,
+            name="photo.jpg",
+            index=0,
+            parent_index=None,
+            is_allocated=True,
+            is_dir=False,
+        )
+        builder = TreeBuilder(disk, [{"phys": 4096, "count": 1, "base_idx": 0}], 512)
+
+        with patch("ntfs.tree_builder.MFTRecord", return_value=parsed) as parser:
+            builder.build()
+
+        self.assertEqual(parser.call_args.args[3], 4096)
 
 
 if __name__ == "__main__":

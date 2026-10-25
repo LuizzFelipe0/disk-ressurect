@@ -1,9 +1,8 @@
-import contextlib
-import io
 import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from disk.carver import Carver
@@ -30,8 +29,7 @@ class CarverTests(unittest.TestCase):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
         with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
-            with contextlib.redirect_stdout(io.StringIO()):
-                carver.carve(0, len(disk.data), output_dir)
+            carver.carve(0, len(disk.data), output_dir)
 
             recovered_path = os.path.join(output_dir, "RAW_00000.jpg")
             with open(recovered_path, "rb") as recovered_file:
@@ -45,10 +43,20 @@ class CarverTests(unittest.TestCase):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
         with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
-            with contextlib.redirect_stdout(io.StringIO()):
-                carver.carve(0, len(disk.data), output_dir)
+            carver.carve(0, len(disk.data), output_dir)
 
             self.assertEqual(os.listdir(output_dir), [])
+
+    def test_surfaces_output_write_errors_instead_of_counting_failed_files(self):
+        jpeg = b"\xFF\xD8\xFFimage-data\xFF\xD9"
+        disk = FakeDisk(b"xxxx" + jpeg)
+        carver = self.make_carver(disk)
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
+            with patch("builtins.open", side_effect=PermissionError("write denied")):
+                with self.assertRaisesRegex(PermissionError, "write denied"):
+                    carver.carve(0, len(disk.data), output_dir)
 
 
 if __name__ == "__main__":

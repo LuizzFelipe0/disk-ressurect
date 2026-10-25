@@ -1,6 +1,6 @@
 import struct
 from ntfs.mft_parser import MFTRecord
-from utils.progress import Progress
+from typing import Callable
 
 class GhostMFTCarver:
     """Scans the disk for orphaned MFT records to rescue fragmented files."""
@@ -8,15 +8,16 @@ class GhostMFTCarver:
         self.disk = disk
         self.mft_sig = b"FILE"
 
-    def hunt(self, start_phys, end_phys):
-        print("[*] [GhostCarver] Hunting for orphaned MFT records...")
+    def hunt(self, start_phys, end_phys, progress_callback: Callable[[int, int], None] | None = None):
         chunk_size = 20 * 1024 * 1024
         ghosts = {}
         current = start_phys
-        progress = Progress("Ghost MFT scan", end_phys - start_phys, width=24)
         
         while current < end_phys:
-            data = self.disk.read_at(current, chunk_size)
+            request_size = min(chunk_size, end_phys - current)
+            data = self.disk.read_at(current, request_size)
+            if not data:
+                break
             pos = 0
             while True:
                 pos = data.find(self.mft_sig, pos)
@@ -32,8 +33,7 @@ class GhostMFTCarver:
                         if rec.is_valid and rec.name and rec.data_runs:
                             ghosts[fake_id] = rec
                 pos += 4
-            current += chunk_size
-            progress.update(current - start_phys)
-        progress.finish()
-        print(f"[+] [GhostCarver] Found {len(ghosts)} ghost records.")
+            current += request_size
+            if progress_callback is not None:
+                progress_callback(current - start_phys, end_phys - start_phys)
         return ghosts

@@ -8,7 +8,6 @@ class DiskScanner:
 
     def discover_via_mft_record(self, mft_phys):
         """Calculates VOL_START by reading the $MFT runlist."""
-        print(f"[*] [Scanner] Analyzing $MFT at {hex(mft_phys)}...")
         raw = self.disk.read_at(mft_phys, 1024)
         record = MFTRecord(raw, 0)
         if not record.is_valid or not record.data_runs:

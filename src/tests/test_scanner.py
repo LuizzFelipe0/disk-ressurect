@@ -1,5 +1,3 @@
-import contextlib
-import io
 import os
 import struct
 import sys
@@ -47,8 +45,7 @@ class DiskScannerTests(unittest.TestCase):
         mft_lcn = 2
         scanner = DiskScanner(FakeDisk(make_mft_record(mft_lcn), mft_physical_offset))
 
-        with contextlib.redirect_stdout(io.StringIO()):
-            volume_start = scanner.discover_via_mft_record(mft_physical_offset)
+        volume_start = scanner.discover_via_mft_record(mft_physical_offset)
 
         self.assertEqual(volume_start, mft_physical_offset - mft_lcn * scanner.cluster_size)
 
@@ -56,8 +53,7 @@ class DiskScannerTests(unittest.TestCase):
         physical_offset = 0xC6500000
         scanner = DiskScanner(FakeDisk(b"NOPE" + bytes(1020), physical_offset))
 
-        with contextlib.redirect_stdout(io.StringIO()):
-            volume_start = scanner.discover_via_mft_record(physical_offset)
+        volume_start = scanner.discover_via_mft_record(physical_offset)
 
         self.assertIsNone(volume_start)
 

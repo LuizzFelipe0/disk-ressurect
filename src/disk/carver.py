@@ -14,15 +14,15 @@ class Carver:
     def set_blacklist(self, clusters):
         self.blacklist_clusters = clusters
 
-    def carve(self, start_phys, end_phys, output_dir):
-        print("[*] [Carver] Starting Deep Scan...")
+    def carve(self, start_phys, end_phys, output_dir, progress_callback=None):
         os.makedirs(output_dir, exist_ok=True)
         count = 0
         current = start_phys
         step = self.chunk_size - self.max_file_size 
         
         while current < end_phys:
-            data = self.disk.read_at(current, self.chunk_size)
+            request_size = min(self.chunk_size, end_phys - current)
+            data = self.disk.read_at(current, request_size)
             if not data: break
             pos = 0
             while True:
@@ -45,9 +45,13 @@ class Carver:
                 else:
                     pos = start_idx + 2
             current += step
-        print(f"[+] [Carver] Recovered {count} orphan files.")
+            if progress_callback is not None:
+                progress_callback(min(current - start_phys, end_phys - start_phys), end_phys - start_phys)
+        return count
 
     def _save(self, out_dir, idx, data):
-        try:
-            with open(os.path.join(out_dir, f"RAW_{idx:05d}.jpg"), "wb") as f: f.write(data)
-        except: pass
+        path = os.path.join(out_dir, f"RAW_{idx:05d}.jpg")
+        with open(path, "wb") as output:
+            written = output.write(data)
+        if written != len(data):
+            raise OSError(f"Short write while saving carved file: {path}")
