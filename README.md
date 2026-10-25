@@ -42,7 +42,7 @@ The output directory is checked against the source physical disk before recovery
 Launch the desktop application from the repository root:
 
 ```powershell
-.\venv\Scripts\python.exe src\gui_main.py
+.\venv\Scripts\python.exe src\main.py
 ```
 
 The GUI uses only Tkinter and ttk from Python's standard library. It provides a light, iOS-inspired theme, reusable cards and controls, a resizable folder/file browser, and scrollable file type choices. Users select a physical source disk, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks.

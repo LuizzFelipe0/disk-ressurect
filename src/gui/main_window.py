@@ -21,7 +21,6 @@ from gui.widgets import (
     configure_theme,
 )
 from ntfs.extractor import Extractor
-from recovery_config import DEFAULT_OUTPUT_DIRECTORY
 
 
 class RecoveryMainWindow(tk.Tk):
@@ -106,7 +105,7 @@ class RecoveryMainWindow(tk.Tk):
         destination.grid(row=2, column=0, sticky="ew", pady=(0, 9))
         destination.columnconfigure(1, weight=1)
         ttk.Label(destination, text="Save recovered files to", style="CardMuted.TLabel").grid(row=0, column=0, padx=(0, 10))
-        self.output_var = tk.StringVar(master=self, value=DEFAULT_OUTPUT_DIRECTORY)
+        self.output_var = tk.StringVar(master=self, value="")
         self.output_entry = TextInput(destination, textvariable=self.output_var)
         self.output_entry.grid(row=0, column=1, sticky="ew", padx=(0, 9))
         self.browse_button = SecondaryButton(destination, "Choose folder…", command=self._choose_output)
