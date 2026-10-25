@@ -1,60 +1,63 @@
-import sys
 import os
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-
-from disk.raw_disk import RawDisk
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from disk.carver import Carver
-from ntfs.tree_builder import TreeBuilder
-from disk.scanner import DiskScanner
 
-DISK_NUM = 2
-OUTPUT = r"D:\HD_Recuperado_DeepScan"
 
-# O mesmo mapa da MFT usado no main.py
-MFT_FRAGMENTS = [
-    {"phys": 0xC6500000, "count": 113664, "base_idx": 0},
-    {"phys": 0xfce823000, "count": 500000, "base_idx": 113664}
-]
+class FakeDisk:
+    def __init__(self, data):
+        self.data = data
 
-def generate_blacklist(vfs):
-    """Mapeia os clusters ocupados por arquivos da pasta indesejada."""
-    blocked_lcns = set()
-    print("[*] Gerando mapa de clusters para ignorar arquivos do backup...")
-    
-    for node in vfs.values():
-        if "bkp fotos notebook" in node.full_path.lower():
-            if not node.record.is_dir:
-                for lcn, length in node.record.data_runs:
-                    if lcn is not None:
-                        # Adiciona todos os clusters que compõem este arquivo na blacklist
-                        for i in range(length):
-                            blocked_lcns.add(lcn + i)
-                            
-    return blocked_lcns
+    def read_at(self, offset, size):
+        return self.data[offset:offset + size]
 
-def run_smart_carver():
-    disk = RawDisk(DISK_NUM)
-    
-    # 1. Monta o VFS para sabermos onde os arquivos indesejados estão
-    print("[*] Construindo Sistema de Arquivos Virtual (VFS) para análise...")
-    builder = TreeBuilder(disk, MFT_FRAGMENTS, mft_base_offset=MFT_FRAGMENTS[0]['phys'])
-    vfs = builder.build()
-    
-    # 2. Gera a Blacklist
-    blacklist = generate_blacklist(vfs)
-    
-    # 3. Inicia o Carver
-    carver = Carver(disk)
-    carver.set_blocked_clusters(blacklist)
-    
-    # Varre a zona de destruição (0 a 25GB)
-    start = 0
-    end = 25 * 1024 * 1024 * 1024 
-    
-    carver.carve(start, end, OUTPUT)
-    
-    disk.close()
+
+class CarverTests(unittest.TestCase):
+    def make_carver(self, disk):
+        carver = Carver(disk, cluster_size=4)
+        carver.chunk_size = carver.max_file_size + len(disk.data)
+        return carver
+
+    def test_recovers_jpeg_from_fake_disk(self):
+        jpeg = b"\xFF\xD8\xFFimage-data\xFF\xD9"
+        disk = FakeDisk(b"xxxx" + jpeg)
+        carver = self.make_carver(disk)
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
+            carver.carve(0, len(disk.data), output_dir)
+
+            recovered_path = os.path.join(output_dir, "RAW_00000.jpg")
+            with open(recovered_path, "rb") as recovered_file:
+                self.assertEqual(recovered_file.read(), jpeg)
+
+    def test_skips_jpeg_in_blacklisted_cluster(self):
+        jpeg = b"\xFF\xD8\xFFimage-data\xFF\xD9"
+        disk = FakeDisk(b"xxxx" + jpeg)
+        carver = self.make_carver(disk)
+        carver.set_blacklist({1})
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
+            carver.carve(0, len(disk.data), output_dir)
+
+            self.assertEqual(os.listdir(output_dir), [])
+
+    def test_surfaces_output_write_errors_instead_of_counting_failed_files(self):
+        jpeg = b"\xFF\xD8\xFFimage-data\xFF\xD9"
+        disk = FakeDisk(b"xxxx" + jpeg)
+        carver = self.make_carver(disk)
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
+            with patch("builtins.open", side_effect=PermissionError("write denied")):
+                with self.assertRaisesRegex(PermissionError, "write denied"):
+                    carver.carve(0, len(disk.data), output_dir)
+
 
 if __name__ == "__main__":
-    run_smart_carver()
+    unittest.main()
