@@ -1,0 +1,38 @@
+{
+  "name": "disk-ressurect-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Electron desktop interface for the Disk Ressurect Python recovery engine",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:electron": "tsc --project tsconfig.json",
+    "build:frontend": "tsc --project tsconfig.frontend.json --noEmit && vite build --config vite.config.ts",
+    "build": "npm run build:electron && npm run build:frontend",
+    "dev": "concurrently -k \"vite --config vite.config.ts\" \"npm run desktop:dev\"",
+    "desktop:dev": "npm run build:electron && node scripts/dev-electron.cjs",
+    "start": "npm run build && electron .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "styled-components": "^6.3.9"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/styled-components": "^5.1.36",
+    "@types/node": "^22.10.0",
+    "concurrently": "^9.1.0",
+    "electron": "^45.0.0",
+    "jsdom": "^25.0.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.4.5",
+    "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "electron@45.0.0": true
+  }
+}
