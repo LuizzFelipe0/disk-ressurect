@@ -18,8 +18,8 @@ function getApi() {
 
 export const recoveryService = {
   listDisks: (): Promise<DiskInfo[]> => getApi().listDisks(),
-  listPartitions: (diskNumber: number, deepScan = false): Promise<VolumeInfo[]> =>
-    getApi().listPartitions(diskNumber, deepScan),
+  listPartitions: (diskNumber: number, deepScan = false, resume = false): Promise<VolumeInfo[]> =>
+    getApi().listPartitions(diskNumber, deepScan, resume),
   scanCatalog: (volumeId: string): Promise<CatalogInfo> => getApi().scanCatalog(volumeId),
   getChildren: (nodeId: string): Promise<CatalogNode[]> => getApi().getChildren(nodeId),
   recover: (options: RecoveryOptions): Promise<RecoveryResult> => getApi().recover(options),

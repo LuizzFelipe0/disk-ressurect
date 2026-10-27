@@ -2,6 +2,7 @@ from disk.scanning.partition_scan import (
     AlignedSignaturePipe,
     DiskChunkSource,
     DiskRange,
+    ScanCheckpoint,
     NTFSBootSectorParser,
 )
 from disk.models import PartitionEntry
@@ -32,13 +33,21 @@ class LostPartitionScanner:
             self.volume_scanner,
         )
 
-    def scan(self, progress_callback=None, candidate_callback=None):
-        return self.scan_ranges(self._scan_ranges(), progress_callback, candidate_callback)
+    def scan(self, progress_callback=None, candidate_callback=None, checkpoint=None,
+             checkpoint_callback=None):
+        return self.scan_ranges(
+            self._scan_ranges(), progress_callback, candidate_callback,
+            checkpoint, checkpoint_callback,
+        )
 
-    def scan_ranges(self, ranges, progress_callback=None, candidate_callback=None):
+    def scan_ranges(self, ranges, progress_callback=None, candidate_callback=None,
+                    checkpoint: ScanCheckpoint | None = None, checkpoint_callback=None):
         """Run the same discovery pipeline against selected byte ranges."""
         volumes_by_offset = {}
-        chunks = self.chunk_source(ranges, progress_callback)
+        overlap = len(NTFSBootSectorParser.SIGNATURE) + 3 - 1
+        chunks = self.chunk_source(
+            ranges, progress_callback, checkpoint, checkpoint_callback, overlap,
+        )
         for boot_offset in self.signature_pipe(chunks):
             for volume in self.candidate_validator(boot_offset):
                 if volume.partition_offset not in volumes_by_offset:

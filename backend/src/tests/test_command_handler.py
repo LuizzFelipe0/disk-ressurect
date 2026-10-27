@@ -49,7 +49,8 @@ class FakeInventory:
             progress_callback(0, 1, "Checking partition")
         return self.volumes
 
-    def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None):
+    def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
+                               resume_checkpoint=None, checkpoint_callback=None):
         if candidate_callback:
             candidate_callback(tuple(self.volumes))
         return self.list_ntfs_volumes(disk_number, progress_callback)
@@ -89,7 +90,7 @@ class FakeRepository:
     def load(self, disk):
         return self.entries.get(disk.number)
 
-    def save(self, disk, volumes):
+    def save(self, disk, volumes, checkpoint=None):
         result = CachedDeepScan("2026-01-01T00:00:00+00:00", tuple(volumes))
         self.entries[disk.number] = result
         return result
@@ -126,7 +127,8 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
     def test_deep_scan_candidates_survive_an_interrupted_scan_and_backend_restart(self):
         class InterruptedInventory(FakeInventory):
-            def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None):
+            def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
+                                       resume_checkpoint=None, checkpoint_callback=None):
                 candidate_callback(tuple(self.volumes))
                 raise OSError("Simulated interruption after finding a candidate")
 

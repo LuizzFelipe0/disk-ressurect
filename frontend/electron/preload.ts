@@ -3,8 +3,8 @@ import type { DesktopApi } from "./contracts";
 
 const api: DesktopApi = {
   listDisks: () => ipcRenderer.invoke("recovery:list-disks"),
-  listPartitions: (diskNumber, deepScan) =>
-    ipcRenderer.invoke("recovery:list-partitions", { diskNumber, deepScan }),
+  listPartitions: (diskNumber, deepScan, resume = false) =>
+    ipcRenderer.invoke("recovery:list-partitions", { diskNumber, deepScan, resume }),
   scanCatalog: (volumeId) => ipcRenderer.invoke("recovery:scan-catalog", { volumeId }),
   getChildren: (nodeId) => ipcRenderer.invoke("recovery:catalog-children", { nodeId }),
   recover: (options) => ipcRenderer.invoke("recovery:extract", options),

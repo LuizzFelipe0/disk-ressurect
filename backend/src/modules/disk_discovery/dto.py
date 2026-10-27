@@ -5,11 +5,13 @@ from dataclasses import dataclass
 class PartitionScanRequestDto:
     disk_number: int
     deep_scan: bool = False
+    resume: bool = False
 
     @classmethod
     def from_payload(cls, payload):
         disk_number = payload.get("diskNumber")
         deep_scan = payload.get("deepScan", False)
+        resume = payload.get("resume", False)
         if isinstance(disk_number, bool):
             raise ValueError("diskNumber must be an integer")
         try:
@@ -20,7 +22,11 @@ class PartitionScanRequestDto:
             raise ValueError("diskNumber cannot be negative")
         if not isinstance(deep_scan, bool):
             raise ValueError("deepScan must be a boolean")
-        return cls(disk_number, deep_scan)
+        if not isinstance(resume, bool):
+            raise ValueError("resume must be a boolean")
+        if resume and not deep_scan:
+            raise ValueError("resume requires deepScan")
+        return cls(disk_number, deep_scan, resume)
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,7 @@ class DiskDto:
     serial_number: str
     display_name: str
     cached_partitions: tuple[PartitionDto, ...] = ()
+    deep_scan_resume_available: bool = False
 
     def to_dict(self):
         return {
@@ -66,4 +73,5 @@ class DiskDto:
             "serialNumber": self.serial_number,
             "displayName": self.display_name,
             "cachedPartitions": [item.to_dict() for item in self.cached_partitions],
+            "deepScanResumeAvailable": self.deep_scan_resume_available,
         }

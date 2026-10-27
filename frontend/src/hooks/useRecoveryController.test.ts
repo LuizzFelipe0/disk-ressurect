@@ -104,4 +104,29 @@ describe("useRecoveryController backend lifecycle", () => {
     expect(listPartitions).not.toHaveBeenCalled();
     expect(result.current.status).toContain("canceled");
   });
+
+  it("retries a failed deep scan by resuming its saved position", async () => {
+    listDisks.mockResolvedValueOnce([{
+      number: 1, model: "Test disk", sizeBytes: 1024, serialNumber: "USB-1", displayName: "Disk 1",
+    }]);
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectDisk("1"));
+    listDisks.mockResolvedValueOnce([{
+      number: 4, model: "Test disk", sizeBytes: 1024, serialNumber: "USB-1",
+      displayName: "Disk 4", deepScanResumeAvailable: true,
+    }]);
+    listPartitions.mockRejectedValueOnce(new Error("USB read failed"));
+
+    await act(async () => { await result.current.findPartitions(true); });
+    expect(result.current.partitionScanCanResume).toBe(true);
+    expect(result.current.error).toBe("USB read failed");
+
+    listPartitions.mockResolvedValueOnce([]);
+    await act(async () => { await result.current.findPartitions(true, true); });
+
+    expect(listPartitions).toHaveBeenNthCalledWith(1, 1, true, false);
+    expect(listPartitions).toHaveBeenNthCalledWith(2, 4, true, true);
+    expect(result.current.partitionScanCanResume).toBe(false);
+  });
 });

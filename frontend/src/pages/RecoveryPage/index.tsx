@@ -21,6 +21,7 @@ import {
   FormGrid,
   PageHeader,
   PageLayout,
+  ProgressRow,
   SelectionActions,
   SelectionSummary,
   StatusLine,
@@ -122,7 +123,16 @@ export const RecoveryPage: React.FC = () => {
 
       <Footer>
         <StatusLine><span>{recovery.status}</span><span>{recovery.progress?.total ? `${recovery.progress.completed.toLocaleString()}/${recovery.progress.total.toLocaleString()} · ${progressPercent}%` : ""}</span></StatusLine>
-        <progress max={100} value={progressPercent} />
+        <ProgressRow>
+          <progress max={100} value={progressPercent} />
+          {recovery.partitionScanCanResume && recovery.selectedDiskNumber && (
+            <ActionButton
+              type="button"
+              disabled={recovery.busy}
+              onClick={() => void recovery.findPartitions(true, true)}
+            >Retry scan</ActionButton>
+          )}
+        </ProgressRow>
         {recovery.error && <ErrorNotice spaced>Details: {recovery.error}</ErrorNotice>}
         {!recovery.isAdministrator && <>
           <ErrorNotice spaced>Physical disk access requires elevated permission. The source will be opened in read-only mode.</ErrorNotice>
