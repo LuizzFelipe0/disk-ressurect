@@ -3,6 +3,7 @@ venv/
 build/
 dist/
 *.spec.bak
+frontend/node_modules/
 
 __pycache__/
 *.py[cod]
