@@ -43,10 +43,14 @@ class CommandContractTests(unittest.TestCase):
 
     def test_partition_scan_request_validates_disk_number_and_deep_scan_flag(self):
         self.assertEqual(PartitionScanRequestDto.from_payload({"diskNumber": "3", "deepScan": True}).disk_number, 3)
+        resume = PartitionScanRequestDto.from_payload({"diskNumber": 3, "deepScan": True, "resume": True})
+        self.assertTrue(resume.resume)
         with self.assertRaisesRegex(ValueError, "cannot be negative"):
             PartitionScanRequestDto.from_payload({"diskNumber": -1})
         with self.assertRaisesRegex(ValueError, "must be a boolean"):
             PartitionScanRequestDto.from_payload({"diskNumber": 1, "deepScan": "true"})
+        with self.assertRaisesRegex(ValueError, "resume requires deepScan"):
+            PartitionScanRequestDto.from_payload({"diskNumber": 1, "resume": True})
 
     def test_recovery_request_rejects_invalid_filters_and_ids(self):
         with self.assertRaisesRegex(ValueError, "selectedNodeIds"):

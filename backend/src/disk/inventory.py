@@ -6,6 +6,7 @@ from disk.platform import create_disk_enumerator, disk_reader_factory
 from disk.deep_scan.lost_partition_scanner import LostPartitionScanner
 from disk.scanning.mft_anchor_scan import MFTAnchorScanner
 from disk.models import NTFSVolume, PhysicalDisk
+from disk.scanning.partition_scan import ScanCheckpoint
 from disk.ntfs_discovery.anchor_resolver import MFTAnchorVolumeResolver
 from disk.ntfs_discovery.volume_scanner import NTFSVolumeScanner
 
@@ -36,20 +37,22 @@ class DiskInventory:
         disk_number,
         progress_callback=None,
         candidate_callback: Callable[[tuple[NTFSVolume, ...]], None] | None = None,
+        resume_checkpoint: ScanCheckpoint | None = None,
+        checkpoint_callback: Callable[[ScanCheckpoint], None] | None = None,
     ) -> list[NTFSVolume]:
         disk = self.disk_factory(int(disk_number))
         try:
             # A surviving $MFT record zero can locate an NTFS volume even when
             # both partition-table entries and boot sectors were overwritten.
-            anchor = MFTAnchorScanner(disk).scan(progress_callback)
-            if anchor is not None:
+            anchor = None if resume_checkpoint is not None else MFTAnchorScanner(disk).scan(progress_callback)
+            if resume_checkpoint is None and anchor is not None:
                 volume = MFTAnchorVolumeResolver(disk, int(disk_number)).resolve(anchor)
                 if volume is not None:
                     if candidate_callback:
                         candidate_callback((volume,))
                     return [volume]
             return LostPartitionScanner(disk, int(disk_number)).scan(
-                progress_callback, candidate_callback,
+                progress_callback, candidate_callback, resume_checkpoint, checkpoint_callback,
             )
         finally:
             disk.close()

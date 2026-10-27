@@ -108,6 +108,13 @@ export const Footer = styled(InfoCard)`
   progress::-webkit-progress-value { background: #3282dc; border-radius: 9px; }
 `;
 
+export const ProgressRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  progress { flex: 1; min-width: 0; }
+`;
+
 export const StatusLine = styled.div`
   display: flex;
   justify-content: space-between;

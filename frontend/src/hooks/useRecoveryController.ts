@@ -17,6 +17,7 @@ export function useRecoveryController() {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("Starting the Python recovery service…");
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
+  const [partitionScanCanResume, setPartitionScanCanResume] = useState(false);
   const [disks, setDisks] = useState<DiskInfo[]>([]);
   const [selectedDiskNumber, setSelectedDiskNumber] = useState("");
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
@@ -137,7 +138,9 @@ export function useRecoveryController() {
   }, []);
 
   const selectDisk = useCallback((diskNumber: string) => {
-    const savedPartitions = disks.find((disk) => String(disk.number) === diskNumber)?.cachedPartitions ?? [];
+    const selectedDisk = disks.find((disk) => String(disk.number) === diskNumber);
+    const savedPartitions = selectedDisk?.cachedPartitions ?? [];
+    setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
     setSelectedDiskNumber(diskNumber);
     setVolumes(savedPartitions);
     setSelectedVolumeId("");
@@ -152,13 +155,15 @@ export function useRecoveryController() {
     }
   }, [clearCatalog, disks]);
 
-  const findPartitions = useCallback(async (deepScan: boolean) => {
+  const findPartitions = useCallback(async (deepScan: boolean, resume = false) => {
     if (!selectedDiskNumber) return;
     if (!await ensureAdministrator()) return;
-    setBusy(true); setError(""); setProgress(null);
-    setStatus(deepScan ? "Searching for lost NTFS partitions…" : "Scanning partitions…");
+    setBusy(true); setError("");
+    if (!resume) setProgress(null);
+    if (!resume) setPartitionScanCanResume(false);
+    setStatus(resume ? "Resuming lost-partition scan…" : deepScan ? "Searching for lost NTFS partitions…" : "Scanning partitions…");
     try {
-      const foundVolumes = await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan);
+      const foundVolumes = await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan, resume);
       const diskNumber = Number(selectedDiskNumber);
       const disk = disks.find((item) => item.number === diskNumber);
       const savedDeepScan = disk?.cachedPartitions ?? [];
@@ -166,14 +171,42 @@ export function useRecoveryController() {
         ? foundVolumes
         : [...new Map([...savedDeepScan, ...foundVolumes].map((volume) => [volume.id, volume])).values()];
       setVolumes(displayedVolumes);
+      setPartitionScanCanResume(false);
       setDisks((current) => current.map((item) => item.number === diskNumber
-        ? { ...item, cachedPartitions: deepScan ? foundVolumes : savedDeepScan }
+        ? {
+          ...item,
+          cachedPartitions: deepScan ? foundVolumes : savedDeepScan,
+          deepScanResumeAvailable: deepScan ? false : item.deepScanResumeAvailable,
+        }
         : item));
       setSelectedVolumeId(""); clearCatalog();
       setStatus(displayedVolumes.length
         ? `${displayedVolumes.length} NTFS partition(s) found. Select one to build the catalog.`
         : "No readable NTFS partitions were found.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Partition search failed."); }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStatus("Partition search failed. The scan position has been saved when available.");
+      if (deepScan) {
+        try {
+          const refreshedDisks = await recoveryService.listDisks();
+          setDisks(refreshedDisks);
+          const previousDisk = disks.find((disk) => disk.number === Number(selectedDiskNumber));
+          const selectedDisk = refreshedDisks.find((disk) => disk.number === Number(selectedDiskNumber)
+            && (!previousDisk || disk.serialNumber === previousDisk.serialNumber))
+            ?? (previousDisk?.serialNumber
+              ? refreshedDisks.find((disk) => disk.serialNumber === previousDisk.serialNumber)
+              : refreshedDisks.find((disk) => disk.model === previousDisk?.model
+                && disk.sizeBytes === previousDisk.sizeBytes));
+          if (selectedDisk && selectedDisk.number !== Number(selectedDiskNumber)) {
+            setSelectedDiskNumber(String(selectedDisk.number));
+          }
+          setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
+          if (selectedDisk?.cachedPartitions) setVolumes(selectedDisk.cachedPartitions);
+        } catch {
+          setPartitionScanCanResume(false);
+        }
+      }
+    }
     finally { setBusy(false); }
   }, [selectedDiskNumber, disks, clearCatalog, ensureAdministrator]);
 
@@ -278,6 +311,7 @@ export function useRecoveryController() {
 
   return {
     backendStatus, isAdministrator, busy, error, status, progress, disks, selectedDiskNumber, volumes,
+    partitionScanCanResume,
     selectedVolumeId, catalog, childrenById, loadingFolderIds, expandedFolderIds,
     selectedIds, availableExtensions, extensions, minimumSizeKb, outputDirectory,
     refreshDisks, selectDisk, findPartitions, selectVolume, buildCatalog, toggleFolder,

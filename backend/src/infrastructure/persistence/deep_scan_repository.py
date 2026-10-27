@@ -9,6 +9,7 @@ from pathlib import Path
 
 from modules.disk_discovery.models import CachedDeepScan
 from disk.models import NTFSVolume
+from disk.scanning.partition_scan import ScanCheckpoint
 
 
 class JsonDeepScanRepository:
@@ -49,23 +50,53 @@ class JsonDeepScanRepository:
             return None
         if any(not self._fits_disk(volume, int(disk.size_bytes)) for volume in volumes):
             return None
-        return CachedDeepScan(scanned_at=scanned_at, volumes=volumes)
+        checkpoint = self._deserialize_checkpoint(entry.get("checkpoint"))
+        return CachedDeepScan(scanned_at=scanned_at, volumes=volumes, checkpoint=checkpoint)
 
-    def save(self, disk, volumes):
+    def save(self, disk, volumes, checkpoint=None):
         scanned_at = datetime.now(timezone.utc).isoformat()
         key = self.disk_key(disk)
         entry = {
             "scannedAt": scanned_at,
             "volumes": [self._serialize_volume(volume) for volume in volumes],
+            "checkpoint": self._serialize_checkpoint(checkpoint),
         }
         if self.path is None:
             self._memory[key] = entry
-            return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes))
+            return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes), checkpoint=checkpoint)
 
         document = self._read_document()
         document["disks"][key] = entry
         self._write_document(document)
-        return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes))
+        return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes), checkpoint=checkpoint)
+
+    @staticmethod
+    def _serialize_checkpoint(checkpoint):
+        if checkpoint is None:
+            return None
+        return {
+            "rangeIndex": checkpoint.range_index,
+            "nextOffset": checkpoint.next_offset,
+            "diskSize": checkpoint.disk_size,
+            "bytesPerSector": checkpoint.bytes_per_sector,
+        }
+
+    @staticmethod
+    def _deserialize_checkpoint(data):
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            return None
+        try:
+            values = (
+                int(data["rangeIndex"]), int(data["nextOffset"]),
+                int(data["diskSize"]), int(data["bytesPerSector"]),
+            )
+            if any(value < 0 for value in values) or values[3] <= 0:
+                return None
+            return ScanCheckpoint(*values)
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def _entries(self):
         if self.path is None:

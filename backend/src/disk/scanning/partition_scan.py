@@ -26,6 +26,14 @@ class DiskRange:
 
 
 @dataclass(frozen=True)
+class ScanCheckpoint:
+    range_index: int
+    next_offset: int
+    disk_size: int
+    bytes_per_sector: int
+
+
+@dataclass(frozen=True)
 class NTFSBootGeometry:
     bytes_per_sector: int
     cluster_size: int
@@ -46,12 +54,39 @@ class DiskChunkSource:
         self,
         ranges: Iterable[DiskRange],
         progress_callback: Callable[[int, int, str], None] | None = None,
+        checkpoint: ScanCheckpoint | None = None,
+        checkpoint_callback: Callable[[ScanCheckpoint], None] | None = None,
+        resume_overlap: int = 0,
     ) -> Iterator[DiskChunk]:
         ranges = tuple(region for region in ranges if region.size > 0)
         total = sum(region.size for region in ranges)
-        completed = 0
-        for region in ranges:
-            cursor = region.start
+        sector_size = int(self.disk.bytes_per_sector)
+        range_index = 0
+        resume_offset = None
+        if checkpoint is not None:
+            if (checkpoint.disk_size != int(self.disk.size)
+                    or checkpoint.bytes_per_sector != sector_size
+                    or not 0 <= checkpoint.range_index < len(ranges)):
+                raise ValueError("Scan checkpoint does not match this disk or scan")
+            region = ranges[checkpoint.range_index]
+            if not region.start <= checkpoint.next_offset <= region.end:
+                raise ValueError("Scan checkpoint offset is outside its scan range")
+            range_index = checkpoint.range_index
+            resume_offset = max(region.start, checkpoint.next_offset - max(0, resume_overlap))
+            resume_offset -= resume_offset % sector_size
+
+        completed_before = sum(region.size for region in ranges[:range_index])
+        if checkpoint_callback:
+            checkpoint_callback(ScanCheckpoint(
+                range_index=range_index,
+                next_offset=resume_offset if resume_offset is not None else ranges[range_index].start,
+                disk_size=int(self.disk.size),
+                bytes_per_sector=sector_size,
+            ))
+        for current_index in range(range_index, len(ranges)):
+            region = ranges[current_index]
+            cursor = resume_offset if current_index == range_index and resume_offset is not None else region.start
+            completed = completed_before + cursor - region.start
             while cursor < region.end:
                 request = min(self.chunk_size, region.end - cursor)
                 data = self.disk.read_at(cursor, request)
@@ -62,10 +97,24 @@ class DiskChunkSource:
                     progress_callback(
                         completed,
                         total,
-                        f"{region.name} · {completed:,}/{total:,} bytes",
+                        f"{region.name} | {completed:,}/{total:,} bytes",
                     )
                 yield DiskChunk(cursor, data, completed, total, region.name)
                 cursor += len(data)
+                if checkpoint_callback:
+                    if cursor >= region.end and current_index + 1 < len(ranges):
+                        next_index = current_index + 1
+                        next_offset = ranges[next_index].start
+                    else:
+                        next_index = current_index
+                        next_offset = min(cursor, region.end)
+                    checkpoint_callback(ScanCheckpoint(
+                        range_index=next_index,
+                        next_offset=next_offset,
+                        disk_size=int(self.disk.size),
+                        bytes_per_sector=sector_size,
+                    ))
+            completed_before += region.size
 
 
 class AlignedSignaturePipe:

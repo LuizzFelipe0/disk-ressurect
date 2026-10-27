@@ -39,6 +39,7 @@ class RecoveryCommandHandler:
                 request.disk_number,
                 request.deep_scan,
                 self._inventory_progress(emit),
+                resume=request.resume,
             )
             return [
                 DiskDiscoveryMapper.partition(

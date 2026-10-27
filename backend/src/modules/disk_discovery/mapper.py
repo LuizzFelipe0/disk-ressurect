@@ -21,6 +21,7 @@ class DiskDiscoveryMapper:
             serial_number=disk.serial_number,
             display_name=disk.display_name,
             cached_partitions=partitions,
+            deep_scan_resume_available=bool(scan and getattr(scan, "checkpoint", None)),
         )
 
     @staticmethod
