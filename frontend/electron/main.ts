@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage } from "electron";
 import { spawn, spawnSync, ChildProcessWithoutNullStreams, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -11,46 +11,95 @@ type PendingRequest = {
 };
 
 class PythonBackend {
-  private child: ChildProcessWithoutNullStreams;
+  private child!: ChildProcessWithoutNullStreams;
   private pending = new Map<string, PendingRequest>();
+  private projectRoot: string;
+  private pythonScript: string;
+  private executable: string;
+  private dataDirectory: string;
+  private elevated = false;
+  private expectsElevated = false;
+  private privilegeResolver: ((authorized: boolean) => void) | null = null;
   private status: { state: "starting" | "ready" | "error"; message: string } = {
     state: "starting", message: "Starting the Python recovery service",
   };
   private stopping = false;
 
   constructor() {
-    const projectRoot = app.isPackaged
+    this.projectRoot = app.isPackaged
       ? process.resourcesPath
       : path.resolve(__dirname, "../../..");
-    const pythonScript = path.join(projectRoot, "backend", "src", "electron_backend.py");
+    this.pythonScript = path.join(this.projectRoot, "backend", "src", "backend_orchestrator.py");
     const configuredPython = process.env.DISK_RESURRECT_PYTHON
       || process.argv.find((argument) => argument.startsWith("--disk-resurrect-python="))?.split("=").slice(1).join("=");
     const venvPython = process.platform === "win32"
-      ? path.join(projectRoot, "venv", "Scripts", "python.exe")
-      : path.join(projectRoot, "venv", "bin", "python");
-    const executable = configuredPython || (existsSync(venvPython) ? venvPython : "python");
+      ? path.join(this.projectRoot, "venv", "Scripts", "python.exe")
+      : path.join(this.projectRoot, "venv", "bin", "python");
+    this.executable = configuredPython || (existsSync(venvPython)
+      ? venvPython
+      : process.platform === "win32" ? "python" : "python3");
+    this.dataDirectory = app.getPath("userData");
+    this.elevated = process.platform === "linux" && process.getuid?.() === 0;
+    this.start(this.executable, [this.pythonScript], this.elevated);
+  }
 
-    this.child = spawn(executable, [pythonScript], {
-      cwd: projectRoot,
+  private start(command: string, args: string[], elevated: boolean) {
+    const isPolkitLaunch = command === "pkexec";
+    this.expectsElevated = elevated;
+    this.elevated = process.platform === "linux" && process.getuid?.() === 0;
+    this.stopping = false;
+    this.updateStatus("starting", "Starting the Python recovery service");
+    const child = spawn(command, args, {
+      cwd: this.projectRoot,
+      env: { ...process.env, DISK_RESURRECT_DATA_DIR: this.dataDirectory },
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    const lines = readline.createInterface({ input: this.child.stdout });
-    lines.on("line", (line) => this.handleLine(line));
-    this.child.stderr.on("data", (data: Buffer) => console.error(`[python] ${data.toString().trimEnd()}`));
-    this.child.on("error", (error) => {
+    this.child = child;
+    const lines = readline.createInterface({ input: child.stdout });
+    lines.on("line", (line) => this.handleLine(line, child));
+    child.stderr.on("data", (data: Buffer) => console.error(`[python] ${data.toString().trimEnd()}`));
+    child.on("error", (error) => {
+      if (this.child !== child) return;
       this.rejectAll(error);
       this.updateStatus("error", error.message);
+      this.resolvePrivilege(false);
+      if (isPolkitLaunch && !this.stopping) this.start(this.executable, [this.pythonScript], false);
     });
-    this.child.on("exit", (code, signal) => {
+    child.on("exit", (code, signal) => {
+      if (this.child !== child) return;
       const message = `Python backend stopped (${signal || code})`;
       this.rejectAll(new Error(message));
+      this.resolvePrivilege(false);
+      if (isPolkitLaunch && code !== 0 && !this.stopping) {
+        this.start(this.executable, [this.pythonScript], false);
+        return;
+      }
       if (!this.stopping) this.updateStatus("error", message);
     });
   }
 
   getStatus() {
     return this.status;
+  }
+
+  hasElevatedAccess() {
+    return this.elevated;
+  }
+
+  requestLinuxDiskAccess(): Promise<boolean> {
+    if (process.platform !== "linux" || this.elevated) return Promise.resolve(this.elevated);
+    this.rejectAll(new Error("Restarting the Python service with disk access permissions"));
+    const previousChild = this.child;
+    const args = ["env", `DISK_RESURRECT_DATA_DIR=${this.dataDirectory}`, this.executable, this.pythonScript];
+    const authorization = new Promise<boolean>((resolve) => {
+      this.privilegeResolver = resolve;
+      this.start("pkexec", args, true);
+      const timeout = setTimeout(() => this.resolvePrivilege(false), 120_000);
+      timeout.unref();
+    });
+    previousChild.kill();
+    return authorization;
   }
 
   request<T>(operation: string, payload: unknown): Promise<T> {
@@ -71,7 +120,8 @@ class PythonBackend {
     this.child.kill();
   }
 
-  private handleLine(line: string) {
+  private handleLine(line: string, source: ChildProcessWithoutNullStreams) {
+    if (this.child !== source) return;
     let message: { id?: string; type?: string; payload?: unknown; error?: string };
     try {
       message = JSON.parse(line);
@@ -86,7 +136,9 @@ class PythonBackend {
       return;
     }
     if (message.type === "ready") {
+      if (this.expectsElevated) this.elevated = true;
       this.updateStatus("ready", "Python recovery service is ready");
+      this.resolvePrivilege(true);
       return;
     }
     if (!message.id) return;
@@ -95,6 +147,13 @@ class PythonBackend {
     this.pending.delete(message.id);
     if (message.type === "error") pending.reject(new Error(message.error || "Backend operation failed"));
     else pending.resolve(message.payload);
+  }
+
+  private resolvePrivilege(authorized: boolean) {
+    const resolve = this.privilegeResolver;
+    if (!resolve) return;
+    this.privilegeResolver = null;
+    resolve(authorized);
   }
 
   private rejectAll(error: Error) {
@@ -113,6 +172,16 @@ class PythonBackend {
 let mainWindow: BrowserWindow | null = null;
 let backend: PythonBackend;
 
+function getAppIconPath() {
+  return process.platform === "win32"
+    ? path.join(app.getAppPath(), "disk-ressurect.ico")
+    : path.join(app.getAppPath(), "src", "assets", "disk-ressurect-logo.png");
+}
+
+function getAppIcon() {
+  return nativeImage.createFromPath(getAppIconPath());
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1180,
@@ -120,6 +189,7 @@ function createWindow() {
     minWidth: 850,
     minHeight: 620,
     title: "Disk Ressurect",
+    icon: getAppIconPath(),
     backgroundColor: "#f3f6fb",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -187,10 +257,11 @@ async function requestAdministratorAtStartup() {
   if (process.platform !== "win32" || isWindowsAdministrator()) return true;
   const choice = await dialog.showMessageBox({
     type: "question",
-    title: "Permissão para ler discos físicos",
-    message: "O Disk Ressurect precisa de permissão de administrador para ler discos físicos.",
-    detail: "A leitura da origem é somente leitura. Os arquivos recuperados serão gravados apenas na pasta de destino escolhida. O Windows exibirá o pedido de Controle de Conta de Usuário (UAC).",
-    buttons: ["Solicitar permissão ao Windows", "Continuar sem acesso a discos"],
+    icon: getAppIcon(),
+    title: "Permission to read physical disks",
+    message: "Disk Ressurect needs administrator permission to read physical disks.",
+    detail: "The source is accessed in read-only mode. Recovered files will only be written to the selected destination folder. Windows will display a User Account Control (UAC) prompt.",
+    buttons: ["Request permission from Windows", "Continue without disk access"],
     defaultId: 0,
     cancelId: 1,
   });
@@ -198,23 +269,48 @@ async function requestAdministratorAtStartup() {
   return true;
 }
 
+async function requestLinuxDiskAccess() {
+  if (process.platform !== "linux" || backend.hasElevatedAccess()) return true;
+  const choice = await dialog.showMessageBox({
+    type: "question",
+    icon: getAppIcon(),
+    title: "Authorize physical disk access",
+    message: "Disk Ressurect needs permission to read physical disks.",
+    detail: "Only the Python recovery service will run with elevated permissions. Source disks are opened read-only. Your desktop session will request authorization.",
+    buttons: ["Authorize disk access", "Continue without disk access"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (choice.response !== 0) return false;
+  return backend.requestLinuxDiskAccess();
+}
+
 app.whenReady().then(async () => {
   if (!await requestAdministratorAtStartup()) return;
   backend = new PythonBackend();
   ipcMain.handle("backend:get-status", () => backend.getStatus());
   ipcMain.handle("backend:get-privileges", () => ({
-    isAdministrator: process.platform !== "win32" || isWindowsAdministrator(),
+    isAdministrator: process.platform === "win32"
+      ? isWindowsAdministrator()
+      : process.platform === "linux"
+        ? backend.hasElevatedAccess()
+        : true,
   }));
   ipcMain.handle("backend:request-administrator", async () => {
+    if (process.platform === "linux") {
+      const authorized = await requestLinuxDiskAccess();
+      return { relaunched: false, cancelled: !authorized, accessGranted: authorized };
+    }
     if (process.platform === "win32" && isWindowsAdministrator()) {
       return { relaunched: false, cancelled: false };
     }
     const options: Electron.MessageBoxOptions = {
       type: "question",
-      title: "Solicitar permissão de administrador",
-      message: "Para varrer partições, o aplicativo precisa ler o disco físico.",
-      detail: "A leitura da origem não altera seus dados. O Windows abrirá o UAC para você permitir ou cancelar essa elevação.",
-      buttons: ["Continuar para o pedido do Windows", "Cancelar"],
+      icon: getAppIcon(),
+      title: "Request administrator permission",
+      message: "The application needs to read the physical disk to scan partitions.",
+      detail: "Reading the source does not modify its data. Windows will open a UAC prompt so you can allow or cancel elevation.",
+      buttons: ["Continue to the Windows prompt", "Cancel"],
       defaultId: 0,
       cancelId: 1,
     };

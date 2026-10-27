@@ -39,15 +39,37 @@ describe("useRecoveryController backend lifecycle", () => {
 
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     expect(result.current.disks).toHaveLength(1);
-    expect(result.current.status).toContain("Escolha o disco");
+    expect(result.current.status).toContain("Choose a source disk");
     expect(listDisks).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores saved deep-scan candidates when switching back to a disk", async () => {
+    const savedCandidate = {
+      id: "1:4096", diskNumber: 1, partitionNumber: 0, offset: 4096,
+      sizeBytes: 8192, estimatedSize: true, name: "Lost NTFS candidate",
+      scanSavedAt: "2026-10-27T12:00:00+00:00",
+    };
+    listDisks.mockResolvedValueOnce([{
+      number: 1, model: "Test disk", sizeBytes: 1024, serialNumber: "test",
+      displayName: "Disk 1", cachedPartitions: [savedCandidate],
+    }]);
+    const { result } = renderHook(() => useRecoveryController());
+
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectDisk("1"));
+    act(() => result.current.selectDisk(""));
+    act(() => result.current.selectDisk("1"));
+
+    expect(result.current.volumes).toEqual([savedCandidate]);
+    expect(result.current.status).toContain("saved deep-scan candidate");
+    expect(listPartitions).not.toHaveBeenCalled();
   });
 
   it("shows a useful error when disk discovery fails while the bridge is active", async () => {
     listDisks.mockRejectedValueOnce(new Error("Python executable was not found"));
     const { result } = renderHook(() => useRecoveryController());
 
-    await waitFor(() => expect(result.current.status).toContain("consulta de discos falhou"));
+    await waitFor(() => expect(result.current.status).toContain("Disk discovery failed"));
     expect(result.current.backendStatus).toBe("ready");
     expect(result.current.error).toBe("Python executable was not found");
   });
@@ -59,7 +81,7 @@ describe("useRecoveryController backend lifecycle", () => {
 
     await waitFor(() => expect(result.current.backendStatus).toBe("error"));
     expect(result.current.error).toBe("Python process exited");
-    expect(result.current.status).toContain("processo Python");
+    expect(result.current.status).toContain("Python recovery process");
   });
 
   it("does not issue duplicate startup requests when React replays effects", async () => {
@@ -80,6 +102,6 @@ describe("useRecoveryController backend lifecycle", () => {
 
     expect(requestAdministrator).toHaveBeenCalledTimes(1);
     expect(listPartitions).not.toHaveBeenCalled();
-    expect(result.current.status).toContain("cancelada");
+    expect(result.current.status).toContain("canceled");
   });
 });

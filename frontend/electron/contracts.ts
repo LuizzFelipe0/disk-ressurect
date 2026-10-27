@@ -4,6 +4,7 @@ export interface DiskInfo {
   sizeBytes: number;
   serialNumber: string;
   displayName: string;
+  cachedPartitions?: VolumeInfo[];
 }
 
 export interface VolumeInfo {
@@ -14,6 +15,7 @@ export interface VolumeInfo {
   sizeBytes: number;
   estimatedSize: boolean;
   name: string;
+  scanSavedAt?: string;
 }
 
 export interface CatalogNode {
@@ -41,7 +43,6 @@ export interface ProgressInfo {
 export interface RecoveryResult {
   recoveredCount: number;
   candidateCount: number;
-  reportPath: string;
 }
 
 export interface BackendRuntimeStatus {
@@ -70,7 +71,7 @@ export interface DesktopApi {
   getBackendStatus(): Promise<BackendRuntimeStatus>;
   onBackendStatus(callback: (status: BackendRuntimeStatus) => void): () => void;
   getPrivilegeStatus(): Promise<PrivilegeStatus>;
-  requestAdministrator(): Promise<{ relaunched: boolean; cancelled: boolean }>;
+  requestAdministrator(): Promise<{ relaunched: boolean; cancelled: boolean; accessGranted?: boolean }>;
 }
 
 declare global {

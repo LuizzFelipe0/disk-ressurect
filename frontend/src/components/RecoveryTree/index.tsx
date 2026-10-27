@@ -1,6 +1,7 @@
 import React from "react";
-import type { CatalogNode } from "../types/recovery";
-import { EmptyState, ExpandButton, TreeContainer, TreeMeta, TreeName, TreeRow } from "./ui";
+import type { CatalogNode } from "../../types/recovery";
+import { EmptyState } from "../EmptyState";
+import { ExpandButton, TreeContainer, TreeIndent, TreeMeta, TreeName, TreeRow } from "./style";
 
 interface RecoveryTreeProps {
   roots: CatalogNode[];
@@ -16,21 +17,21 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
   roots, childrenById, expandedFolderIds, loadingFolderIds, isSelected,
   onToggleFolder, onToggleSelection,
 }) => {
-  if (!roots.length) return <EmptyState>Nenhuma pasta ou arquivo para exibir.</EmptyState>;
+  if (!roots.length) return <EmptyState>No folders or files to display.</EmptyState>;
 
   const renderNode = (node: CatalogNode, depth: number): React.ReactNode => (
     <React.Fragment key={node.id}>
       <TreeRow $depth={depth}>
         {node.isDirectory && node.hasChildren ? (
-          <ExpandButton type="button" aria-label={expandedFolderIds.has(node.id) ? "Recolher pasta" : "Expandir pasta"}
+          <ExpandButton type="button" aria-label={expandedFolderIds.has(node.id) ? "Collapse folder" : "Expand folder"}
             onClick={() => onToggleFolder(node)}>
             {loadingFolderIds.has(node.id) ? "…" : expandedFolderIds.has(node.id) ? "⌄" : "›"}
           </ExpandButton>
-        ) : <span style={{ width: 20 }} />}
+        ) : <TreeIndent />}
         <input type="checkbox" checked={isSelected(node.id)} disabled={loadingFolderIds.has(node.id)}
           aria-label={`Selecionar ${node.name}`} onChange={(event) => onToggleSelection(node.id, event.target.checked)} />
         <TreeName title={node.path}>{node.isDirectory ? "📁" : "📄"} {node.name}</TreeName>
-        <TreeMeta>{node.isDirectory ? "Pasta" : formatSize(node.sizeBytes)}</TreeMeta>
+        <TreeMeta>{node.isDirectory ? "Folder" : formatSize(node.sizeBytes)}</TreeMeta>
       </TreeRow>
       {expandedFolderIds.has(node.id) && (childrenById[node.id] ?? []).map((child) => renderNode(child, depth + 1))}
     </React.Fragment>

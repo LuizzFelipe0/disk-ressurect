@@ -15,7 +15,7 @@ export function useRecoveryController() {
   const [isAdministrator, setIsAdministrator] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [status, setStatus] = useState("Iniciando o serviço Python de recuperação…");
+  const [status, setStatus] = useState("Starting the Python recovery service…");
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
   const [disks, setDisks] = useState<DiskInfo[]>([]);
   const [selectedDiskNumber, setSelectedDiskNumber] = useState("");
@@ -28,6 +28,7 @@ export function useRecoveryController() {
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const [availableExtensions, setAvailableExtensions] = useState<string[]>([]);
   const [extensions, setExtensions] = useState<string[]>([]);
   const [minimumSizeKb, setMinimumSizeKb] = useState(0);
   const [outputDirectory, setOutputDirectory] = useState("");
@@ -41,13 +42,14 @@ export function useRecoveryController() {
     setLoadingFolderIds(new Set());
     setSelectedIds(new Set());
     setExcludedIds(new Set());
+    setAvailableExtensions([]);
     setExtensions([]);
   }, []);
 
   const refreshDisks = useCallback(async () => {
     setBusy(true);
     setError("");
-    setStatus("Consultando discos pelo serviço Python…");
+    setStatus("Checking disks through the Python service…");
     try {
       const foundDisks = await recoveryService.listDisks();
       setDisks(foundDisks);
@@ -56,17 +58,17 @@ export function useRecoveryController() {
       setSelectedVolumeId("");
       clearCatalog();
       setBackendStatus("ready");
-      setStatus(`${foundDisks.length} disco(s) encontrado(s). Escolha o disco de origem.`);
+      setStatus(`${foundDisks.length} disk(s) found. Choose a source disk.`);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const runtime = await recoveryService.getBackendStatus().catch(() => null);
       if (runtime?.state === "error") {
         setBackendStatus("error");
         setError(runtime.message);
-        setStatus("O processo Python de recuperação foi encerrado.");
+        setStatus("The Python recovery process has exited.");
       } else {
         setError(message);
-        setStatus("A consulta de discos falhou. Consulte os detalhes abaixo.");
+        setStatus("Disk discovery failed. See the details below.");
       }
     } finally { setBusy(false); }
   }, [clearCatalog]);
@@ -80,19 +82,19 @@ export function useRecoveryController() {
       setBackendStatus(runtime.state);
       if (runtime.state === "error") {
         setError(runtime.message);
-        setStatus("O processo Python de recuperação foi encerrado.");
+        setStatus("The Python recovery process has exited.");
       }
     });
     void recoveryService.getBackendStatus().then((runtime) => {
       setBackendStatus(runtime.state);
       if (runtime.state === "error") {
         setError(runtime.message);
-        setStatus("O processo Python de recuperação foi encerrado.");
+        setStatus("The Python recovery process has exited.");
       }
     }).catch((cause: unknown) => {
       setBackendStatus("error");
       setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("Não foi possível consultar o estado do serviço Python.");
+      setStatus("Unable to check the Python service status.");
     });
     void recoveryService.getPrivilegeStatus().then((privileges) => {
       setIsAdministrator(privileges.isAdministrator);
@@ -112,65 +114,88 @@ export function useRecoveryController() {
       const privilege = await recoveryService.getPrivilegeStatus();
       setIsAdministrator(privilege.isAdministrator);
       if (privilege.isAdministrator) return true;
-      setStatus("A leitura de discos físicos exige permissão de administrador.");
+      setStatus("Reading physical disks requires elevated permission.");
       setError("");
       const result = await recoveryService.requestAdministrator();
+      if (result.accessGranted) {
+        setIsAdministrator(true);
+        setStatus("Disk access permission was granted.");
+        return true;
+      }
       if (result.relaunched) {
-        setStatus("O aplicativo será reaberto com permissão de administrador.");
+        setStatus("The application is restarting with elevated permissions.");
       } else {
-        setStatus("A varredura foi cancelada porque não há permissão de administrador.");
-        setError("Permita a elevação no pedido do Windows para ler discos físicos.");
+        setStatus("The scan was canceled because disk access permission was not granted.");
+        setError("Authorize the system permission request to read physical disks.");
       }
       return false;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("Não foi possível solicitar permissão de administrador.");
+      setStatus("Unable to request elevated disk access.");
       return false;
     }
   }, []);
 
   const selectDisk = useCallback((diskNumber: string) => {
+    const savedPartitions = disks.find((disk) => String(disk.number) === diskNumber)?.cachedPartitions ?? [];
     setSelectedDiskNumber(diskNumber);
-    setVolumes([]);
+    setVolumes(savedPartitions);
     setSelectedVolumeId("");
     clearCatalog();
     setError("");
-    setStatus(diskNumber ? "Busque as partições NTFS deste disco." : "Escolha o disco de origem.");
-  }, [clearCatalog]);
+    if (savedPartitions.length) {
+      const savedAt = savedPartitions.find((volume) => volume.scanSavedAt)?.scanSavedAt;
+      const timestamp = savedAt ? ` (${new Date(savedAt).toLocaleString()})` : "";
+      setStatus(`${savedPartitions.length} saved deep-scan candidate(s) loaded${timestamp}. Select one or run Deep scan to refresh.`);
+    } else {
+      setStatus(diskNumber ? "Search this disk for NTFS partitions." : "Choose a source disk.");
+    }
+  }, [clearCatalog, disks]);
 
   const findPartitions = useCallback(async (deepScan: boolean) => {
     if (!selectedDiskNumber) return;
     if (!await ensureAdministrator()) return;
     setBusy(true); setError(""); setProgress(null);
-    setStatus(deepScan ? "Procurando partições NTFS perdidas…" : "Verificando partições…");
+    setStatus(deepScan ? "Searching for lost NTFS partitions…" : "Scanning partitions…");
     try {
       const foundVolumes = await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan);
-      setVolumes(foundVolumes); setSelectedVolumeId(""); clearCatalog();
-      setStatus(foundVolumes.length
-        ? `${foundVolumes.length} partição(ões) NTFS encontrada(s). Selecione uma para montar o catálogo.`
-        : "Nenhuma partição NTFS legível foi encontrada.");
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("A busca por partições falhou."); }
+      const diskNumber = Number(selectedDiskNumber);
+      const disk = disks.find((item) => item.number === diskNumber);
+      const savedDeepScan = disk?.cachedPartitions ?? [];
+      const displayedVolumes = deepScan
+        ? foundVolumes
+        : [...new Map([...savedDeepScan, ...foundVolumes].map((volume) => [volume.id, volume])).values()];
+      setVolumes(displayedVolumes);
+      setDisks((current) => current.map((item) => item.number === diskNumber
+        ? { ...item, cachedPartitions: deepScan ? foundVolumes : savedDeepScan }
+        : item));
+      setSelectedVolumeId(""); clearCatalog();
+      setStatus(displayedVolumes.length
+        ? `${displayedVolumes.length} NTFS partition(s) found. Select one to build the catalog.`
+        : "No readable NTFS partitions were found.");
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Partition search failed."); }
     finally { setBusy(false); }
-  }, [selectedDiskNumber, clearCatalog, ensureAdministrator]);
+  }, [selectedDiskNumber, disks, clearCatalog, ensureAdministrator]);
 
   const selectVolume = useCallback((volumeId: string) => {
     setSelectedVolumeId(volumeId); clearCatalog();
-    setStatus(volumeId ? "Monte o catálogo para navegar pelos arquivos encontrados." : "Selecione uma partição NTFS.");
+    setStatus(volumeId ? "Build the catalog to browse the discovered files." : "Select an NTFS partition.");
   }, [clearCatalog]);
 
   const buildCatalog = useCallback(async () => {
     if (!selectedVolumeId) return;
     if (!await ensureAdministrator()) return;
     setBusy(true); setError(""); setProgress(null);
-    setStatus("Lendo metadados e montando catálogo…");
+    setStatus("Reading metadata and building the catalog…");
     try {
       const result = await recoveryService.scanCatalog(selectedVolumeId);
       const parents = new Map<string, string | null>();
       result.roots.forEach((node) => parents.set(node.id, null));
       setCatalog(result); setParentById(parents);
+      setAvailableExtensions(result.availableExtensions);
       setExtensions(result.availableExtensions);
-      setStatus(`Catálogo pronto: ${result.recordCount.toLocaleString()} registros MFT.`);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Não foi possível montar o catálogo."); }
+      setStatus(`Catalog ready: ${result.recordCount.toLocaleString()} MFT records.`);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Unable to build the catalog."); }
     finally { setBusy(false); }
   }, [selectedVolumeId, ensureAdministrator]);
 
@@ -229,19 +254,19 @@ export function useRecoveryController() {
 
   const recover = useCallback(async () => {
     if (!selectedIds.size || !extensions.length || !outputDirectory.trim()) {
-      setError(!outputDirectory.trim() ? "Escolha uma pasta de destino para continuar." : "Marque arquivos e pelo menos um tipo de arquivo.");
+      setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
       return;
     }
     if (!await ensureAdministrator()) return;
-    setBusy(true); setError(""); setProgress(null); setStatus("Recuperando os itens selecionados…");
+    setBusy(true); setError(""); setProgress(null); setStatus("Recovering the selected items…");
     try {
       const result = await recoveryService.recover({
         selectedNodeIds: [...selectedIds], excludedNodeIds: [...excludedIds],
         outputDirectory, extensions, minimumSizeKb,
       });
-      setStatus(`Concluído: ${result.recoveredCount}/${result.candidateCount} arquivos recuperados. Relatório: ${result.reportPath}`);
-      setProgress({ stage: "extract", completed: 1, total: 1, message: "Recuperação concluída." });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("A recuperação falhou."); }
+      setStatus(`Completed: ${result.recoveredCount}/${result.candidateCount} files recovered.`);
+      setProgress({ stage: "extract", completed: 1, total: 1, message: "Recovery completed." });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Recovery failed."); }
     finally { setBusy(false); }
   }, [selectedIds, excludedIds, outputDirectory, extensions, minimumSizeKb, ensureAdministrator]);
 
@@ -254,7 +279,7 @@ export function useRecoveryController() {
   return {
     backendStatus, isAdministrator, busy, error, status, progress, disks, selectedDiskNumber, volumes,
     selectedVolumeId, catalog, childrenById, loadingFolderIds, expandedFolderIds,
-    selectedIds, extensions, minimumSizeKb, outputDirectory,
+    selectedIds, availableExtensions, extensions, minimumSizeKb, outputDirectory,
     refreshDisks, selectDisk, findPartitions, selectVolume, buildCatalog, toggleFolder,
     toggleSelection, isSelected, selectAll, clearSelection, chooseOutputDirectory,
     recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory,
