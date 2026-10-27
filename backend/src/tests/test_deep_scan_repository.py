@@ -7,9 +7,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from disk.models import NTFSVolume, PhysicalDisk
+from disk.scanning.partition_scan import ScanCheckpoint
 
 
 class DeepScanRepositoryTests(unittest.TestCase):
+    def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        checkpoint = ScanCheckpoint(1, 7 * 1024**3, disk.size_bytes, 512)
+
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            repository = JsonDeepScanRepository(os.path.join(directory, "deep_scan_cache.json"))
+            repository.save(disk, [], checkpoint)
+            restored = repository.load(disk)
+
+        self.assertEqual(restored.checkpoint, checkpoint)
+
     def test_saved_volume_is_restored_for_same_physical_disk_after_device_number_changes(self):
         volume = NTFSVolume(
             1, 0, 4096, 1024 * 1024, 512, 4096, 1024,

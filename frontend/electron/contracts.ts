@@ -5,6 +5,7 @@ export interface DiskInfo {
   serialNumber: string;
   displayName: string;
   cachedPartitions?: VolumeInfo[];
+  deepScanResumeAvailable?: boolean;
 }
 
 export interface VolumeInfo {
@@ -56,7 +57,7 @@ export interface PrivilegeStatus {
 
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
-  listPartitions(diskNumber: number, deepScan: boolean): Promise<VolumeInfo[]>;
+  listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
   scanCatalog(volumeId: string): Promise<CatalogInfo>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;
   recover(options: {

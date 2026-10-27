@@ -8,6 +8,7 @@ from disk.scanning.partition_scan import (
     DiskChunk,
     DiskChunkSource,
     DiskRange,
+    ScanCheckpoint,
     NTFSBootSectorParser,
 )
 
@@ -58,6 +59,33 @@ class PartitionScanPipeTests(unittest.TestCase):
                           (2048, 1024), (3072, 1024)])
         self.assertEqual(events[-1][0:2], (6144, 6144))
         self.assertTrue(events[0][2].startswith("tail"))
+        self.assertIn("tail | 1,024/6,144 bytes", events[0][2])
+        self.assertNotIn("�", events[0][2])
+
+    def test_chunk_source_resumes_from_checkpoint_with_signature_overlap(self):
+        disk = MemoryDisk(bytes(range(256)) * 32)
+        source = DiskChunkSource(disk, chunk_size=1024)
+        ranges = (DiskRange("full", 0, 8192),)
+        checkpoint = ScanCheckpoint(0, 2048, disk.size, disk.bytes_per_sector)
+        chunks = list(source(ranges, checkpoint=checkpoint, resume_overlap=512))
+
+        self.assertEqual(chunks[0].offset, 1536)
+        self.assertEqual(chunks[0].data, disk.data[1536:2560])
+        self.assertEqual(chunks[-1].offset + len(chunks[-1].data), 8192)
+
+    def test_chunk_source_emits_checkpoint_only_after_chunk_is_consumed(self):
+        disk = MemoryDisk(bytes(4096))
+        source = DiskChunkSource(disk, chunk_size=1024)
+        checkpoints = []
+        chunks = iter(source(
+            (DiskRange("full", 0, 4096),),
+            checkpoint_callback=checkpoints.append,
+        ))
+
+        next(chunks)
+        self.assertEqual(checkpoints[-1].next_offset, 0)
+        next(chunks)
+        self.assertEqual(checkpoints[-1].next_offset, 1024)
 
     def test_ntfs_boot_parser_extracts_geometry_and_rejects_invalid_sector(self):
         boot = bytearray(512)
