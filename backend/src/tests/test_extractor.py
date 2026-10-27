@@ -7,7 +7,7 @@ import zipfile
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from ntfs.extractor import Extractor
+from modules.recovery.extractor import Extractor
 
 
 class FakeDisk:
@@ -81,13 +81,17 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
             'photo.pdf', b'%PDF-data',
             full_path='user-selected-folder\\photo.pdf',
         )
-        extractor = self.make_extractor({}, {})
+        nodes = {str(index): node for index, node in enumerate([*included, nested])}
+        contents = {node.record.name: b'%PDF-data' for node in [*included, nested]}
+        contents.update({node.record.name: bytes([index]) * 16 for index, node in enumerate(included)})
+        extractor = self.make_extractor(nodes, contents)
 
-        self.assertTrue(all(extractor._should_extract(node) for node in included))
-        self.assertTrue(extractor._should_extract(nested))
+        self.assertEqual(len(extractor.candidate_nodes()), len(included) + 1)
         extractor.set_filters(exts=['.pdf'], min_kb=0)
-        self.assertTrue(extractor._should_extract(nested))
-        self.assertFalse(extractor._should_extract(included[1]))
+        self.assertEqual(
+            {node.record.name for node in extractor.candidate_nodes()},
+            {"report.pdf", "photo.pdf"},
+        )
 
     def test_extracts_supported_signatures_and_rejects_mismatch(self):
         contents = {
@@ -122,7 +126,7 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         content = b"%PDF-complete"
         node = make_node('report.pdf', content)
         extractor = self.make_extractor({'report': node}, {'report.pdf': content})
-        extractor.disk = FakeDisk(b"%PDF")
+        extractor.content_reader.disk = FakeDisk(b"%PDF")
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
         with tempfile.TemporaryDirectory(dir=root) as output_dir:

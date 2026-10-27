@@ -5,16 +5,14 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.inventory import (
-    DiskInventory,
-    LostPartitionScanner,
-    MFTAnchorVolumeResolver,
-    NTFSVolumeScanner,
-    PartitionTableScanner,
-    PhysicalDisk,
-    WindowsDiskEnumerator,
-)
-from disk.mft_anchor_scan import MFTAnchor, MFTAnchorScanner
+from disk.inventory import DiskInventory
+from disk.deep_scan.lost_partition_scanner import LostPartitionScanner
+from disk.ntfs_discovery.anchor_resolver import MFTAnchorVolumeResolver
+from disk.ntfs_discovery.volume_scanner import NTFSVolumeScanner
+from disk.partition_table.scanner import PartitionTableScanner
+from disk.models import PhysicalDisk
+from disk.enumeration.windows import WindowsDiskEnumerator
+from disk.scanning.mft_anchor_scan import MFTAnchor, MFTAnchorScanner
 from ntfs.mft_parser import MFTRecord
 
 
@@ -128,7 +126,7 @@ class DiskInventoryTests(unittest.TestCase):
             stdout = '[{"number":2,"model":"Archive","size":2000},{"number":0,"model":"Boot","size":1000}]'
 
         enumerator = WindowsDiskEnumerator(runner=lambda *args, **kwargs: Result())
-        with patch("disk.inventory.os.name", "nt"):
+        with patch("disk.enumeration.windows.os.name", "nt"):
             disks = enumerator.list_disks()
         self.assertEqual([disk.number for disk in disks], [0, 2])
         self.assertEqual(disks[0].model, "Boot")
@@ -194,12 +192,16 @@ class DiskInventoryTests(unittest.TestCase):
         disk = ntfs_disk(2)
         disk.data[446:510] = bytes(64)
 
-        volumes = LostPartitionScanner(disk, 2, chunk_size=1024 * 1024).scan()
+        checkpoints = []
+        volumes = LostPartitionScanner(disk, 2, chunk_size=1024 * 1024).scan(
+            candidate_callback=checkpoints.append,
+        )
 
         self.assertEqual(len(volumes), 1)
         self.assertEqual(volumes[0].partition_number, 0)
         self.assertEqual(volumes[0].partition_offset, 4 * 512)
         self.assertEqual(volumes[0].disk_number, 2)
+        self.assertEqual(checkpoints, [(volumes[0],)])
 
     def test_deep_scan_prioritizes_disk_tail_then_covers_the_rest_once(self):
         disk = ntfs_disk(2)
@@ -227,11 +229,15 @@ class DiskInventoryTests(unittest.TestCase):
         backup_offset = partition_offset + 2800 * 512 - 512
         disk.data[backup_offset:backup_offset + 512] = boot
 
-        volumes = LostPartitionScanner(disk, 2, chunk_size=1024 * 1024).scan()
+        checkpoints = []
+        volumes = LostPartitionScanner(disk, 2, chunk_size=1024 * 1024).scan(
+            candidate_callback=checkpoints.append,
+        )
 
         self.assertEqual(len(volumes), 1)
         self.assertEqual(volumes[0].partition_offset, partition_offset)
         self.assertEqual(volumes[0].mft_offset, partition_offset + 4 * 4096)
+        self.assertEqual(checkpoints, [(volumes[0],)])
 
     def test_mft_anchor_scan_finds_root_record_and_resolves_estimated_volume(self):
         partition_offset = 4096
@@ -274,12 +280,14 @@ class DiskInventoryTests(unittest.TestCase):
         data[mft_offset:mft_offset + 1024] = mft_root_record()
         disk = MemoryDisk(data, disk_number=5)
         inventory = DiskInventory(disk_factory=lambda _number: disk)
+        checkpoints = []
 
-        volumes = inventory.deep_scan_ntfs_volumes(5)
+        volumes = inventory.deep_scan_ntfs_volumes(5, candidate_callback=checkpoints.append)
 
         self.assertEqual(len(volumes), 1)
         self.assertEqual(volumes[0].partition_offset, partition_offset)
         self.assertTrue(volumes[0].partition_size_is_estimated)
+        self.assertEqual(checkpoints, [(volumes[0],)])
         self.assertTrue(disk.closed)
 
 

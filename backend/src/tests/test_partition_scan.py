@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.partition_scan import (
+from disk.scanning.partition_scan import (
     AlignedSignaturePipe,
     DiskChunk,
     DiskChunkSource,

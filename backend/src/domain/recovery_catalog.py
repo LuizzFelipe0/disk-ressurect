@@ -1,5 +1,3 @@
-"""Framework-independent recovery catalog and hierarchical selection rules."""
-
 import os
 
 
@@ -20,7 +18,6 @@ class RecoveryCatalog:
 
     @staticmethod
     def node_key(node):
-        """Return a stable key for selections across UI model refreshes."""
         record = node.record
         return (
             getattr(record, "index", None),
@@ -70,10 +67,3 @@ class RecoveryCatalog:
                 selected_keys.add(key)
             pending.extend(reversed(tuple(getattr(node, "children", ()))))
         return [node for key, node in eligible_by_key.items() if key in selected_keys]
-
-    def files_in(self, directory, eligible_keys):
-        children = self.root_nodes if directory is None else directory.children
-        return [
-            node for node in children
-            if not node.record.is_dir and self.node_key(node) in eligible_keys
-        ]

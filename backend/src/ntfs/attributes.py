@@ -37,7 +37,6 @@ class AttributeParser:
 
     @staticmethod
     def get_file_name(content):
-        """Decode a bounded $FILE_NAME value into its name and parent record."""
         if len(content) < 66:
             raise ValueError("Truncated $FILE_NAME value")
         name_len = content[64]

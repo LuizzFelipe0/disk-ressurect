@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.output_safety import OutputSafetyGuard
+from disk.safety.output_safety import OutputSafetyGuard
 
 
 class OutputSafetyTests(unittest.TestCase):

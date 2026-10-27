@@ -78,7 +78,6 @@ class TreeBuilder:
         return self.nodes
 
     def inject_ghosts(self, ghost_dict):
-        """Injects orphaned records found by Deep Scan into a 'Lost Files' folder."""
         if not ghost_dict: return
         for idx, rec in ghost_dict.items():
             node = FileNode(rec)

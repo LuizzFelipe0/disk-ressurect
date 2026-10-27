@@ -5,8 +5,9 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from application.recovery_workflow import RecoveryCatalogSnapshot, RecoveryWorkflow
-from disk.inventory import NTFSVolume
+from modules.catalog.models import RecoveryCatalogSnapshot
+from modules.recovery.service import RecoveryWorkflow
+from disk.models import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 
 
@@ -92,6 +93,7 @@ class RecoveryWorkflowTests(unittest.TestCase):
             recovered_path = os.path.join(output_directory, "selected folder", "notes.pdf")
             with open(recovered_path, "rb") as recovered_file:
                 self.assertEqual(recovered_file.read(), content)
+            self.assertFalse(os.path.exists(os.path.join(output_directory, "Recovery_Report.txt")))
 
         self.assertEqual(summary.recovered_count, 1)
         self.assertEqual(summary.results[0].status, "recovered")

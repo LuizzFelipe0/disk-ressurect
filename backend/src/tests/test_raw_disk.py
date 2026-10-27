@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.raw_disk import RawDisk
+from disk.access.raw_disk import RawDisk
 
 
 class RawDiskReadValidationTests(unittest.TestCase):

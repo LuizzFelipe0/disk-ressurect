@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from domain.recovery_catalog import RecoveryCatalog
-from domain.recovery_selection import RecoverySelection
 
 
 def make_node(index, name, size, is_dir=False, path=None):
@@ -54,12 +53,9 @@ class RecoveryCatalogTests(unittest.TestCase):
         self.assertEqual(selected, [self.photo, self.document])
 
     def test_explicitly_empty_extension_selection_recovers_no_files(self):
-        selection = RecoverySelection(self.catalog, {".jpg", ".pdf"}, extensions=set())
+        self.assertEqual(self.catalog.eligible_files({".jpg", ".pdf"}, extensions=set()), [])
 
-        self.assertEqual(selection.eligible_count, 0)
-        self.assertEqual(selection.selected_nodes(), [])
-
-    def test_selection_expands_deep_folder_trees_iteratively(self):
+    def test_catalog_plan_expands_deep_folder_trees_iteratively(self):
         root = make_node(100, "root", 0, is_dir=True)
         parent = root
         nodes = [root]
@@ -76,12 +72,8 @@ class RecoveryCatalogTests(unittest.TestCase):
         catalog = RecoveryCatalog({node.record.index: node for node in nodes}, [root])
 
         selected = catalog.plan_selection([root], catalog.eligible_files({".jpg"}))
-        selection = RecoverySelection(catalog, {".jpg"})
-        selection.set_checked(root, True)
 
         self.assertEqual(selected, [photo])
-        self.assertEqual(selection.selected_nodes(), [photo])
-        self.assertEqual(selection.selected_count, 1)
 
 
 if __name__ == "__main__":
