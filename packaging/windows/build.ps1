@@ -1,42 +1,47 @@
-$ErrorActionPreference = "Stop"
+param(
+    [string]$PythonExecutable = ""
+)
 
+$ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$python = Join-Path $repoRoot "venv\Scripts\python.exe"
-$requirements = Join-Path $PSScriptRoot "requirements.txt"
 $spec = Join-Path $PSScriptRoot "DiskRessurect.spec"
-$innoScript = Join-Path $PSScriptRoot "DiskRessurect.iss"
-$dist = Join-Path $repoRoot "dist"
+$backendDist = Join-Path $repoRoot "dist\backend"
 $work = Join-Path $repoRoot "build\pyinstaller"
 
-if (-not (Test-Path -LiteralPath $python)) {
-    throw "Project virtualenv not found: $python. Create venv and install the project Python first."
+if (-not $PythonExecutable) {
+    $venvPython = Join-Path $repoRoot "venv\Scripts\python.exe"
+    $PythonExecutable = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { "python" }
 }
 
-& $python -m pip install -r $requirements
+& $PythonExecutable -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Could not install the PyInstaller build dependency." }
 
-& $python -m PyInstaller --noconfirm --clean --distpath $dist --workpath $work $spec
-if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to build the one-folder application." }
+& $PythonExecutable -m PyInstaller --noconfirm --clean --distpath $backendDist --workpath $work $spec
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed to build the Python recovery service." }
 
-$localIscc = Join-Path $repoRoot "build\InnoSetup6\ISCC.exe"
-$iscc = Get-Command "ISCC.exe" -ErrorAction SilentlyContinue
-if (Test-Path -LiteralPath $localIscc) {
-    $isccPath = $localIscc
-} elseif ($iscc) {
-    $isccPath = $iscc.Source
-} else {
-    $candidatePaths = @(
-        "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
-        "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
-    )
-    $isccPath = $candidatePaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+Push-Location (Join-Path $repoRoot "frontend")
+try {
+    npm test
+    if ($LASTEXITCODE -ne 0) { throw "Frontend tests failed." }
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed." }
+    npm run package:win
+    if ($LASTEXITCODE -ne 0) { throw "Windows desktop packaging failed." }
+
+    $version = (npm pkg get version | ConvertFrom-Json)
+    $portableArchive = Join-Path $repoRoot "dist\DiskRessurect-$version-win-x64-portable.zip"
+    $unpackedApp = Join-Path $repoRoot "dist\win-unpacked"
+    if (Test-Path -LiteralPath $portableArchive) { Remove-Item -LiteralPath $portableArchive -Force }
+    Compress-Archive -Path (Join-Path $unpackedApp "*") -DestinationPath $portableArchive
+    $installer = Join-Path $repoRoot "dist\DiskRessurect-$version-win-x64-Setup.exe"
+    $checksums = @($installer, $portableArchive) | ForEach-Object {
+        $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
+        "$($hash.Hash)  $([System.IO.Path]::GetFileName($_))"
+    }
+    Set-Content -LiteralPath (Join-Path $repoRoot "dist\SHA256SUMS.txt") -Value $checksums -Encoding ascii
+} finally {
+    Pop-Location
 }
-if (-not $isccPath) {
-    throw "Inno Setup 6 was not found. Install Inno Setup 6, then rerun this script to compile the installer."
-}
 
-& $isccPath $innoScript
-if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed to compile the installer." }
-
-Write-Host "One-folder build: $(Join-Path $dist 'DiskRessurect')"
-Write-Host "Installer: $(Join-Path $dist 'installer\DiskRessurect-Setup-0.1.0-test.exe')"
+Write-Host "Backend executable: $(Join-Path $backendDist 'backend_orchestrator.exe')"
+Write-Host "Windows installer and portable ZIP: $(Join-Path $repoRoot 'dist')"

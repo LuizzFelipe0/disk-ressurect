@@ -15,6 +15,7 @@ class PythonBackend {
   private pending = new Map<string, PendingRequest>();
   private projectRoot: string;
   private pythonScript: string;
+  private backendArguments: string[];
   private executable: string;
   private dataDirectory: string;
   private elevated = false;
@@ -30,17 +31,20 @@ class PythonBackend {
       ? process.resourcesPath
       : path.resolve(__dirname, "../../..");
     this.pythonScript = path.join(this.projectRoot, "backend", "src", "backend_orchestrator.py");
+    this.backendArguments = app.isPackaged ? [] : [this.pythonScript];
     const configuredPython = process.env.DISK_RESURRECT_PYTHON
       || process.argv.find((argument) => argument.startsWith("--disk-resurrect-python="))?.split("=").slice(1).join("=");
     const venvPython = process.platform === "win32"
       ? path.join(this.projectRoot, "venv", "Scripts", "python.exe")
       : path.join(this.projectRoot, "venv", "bin", "python");
-    this.executable = configuredPython || (existsSync(venvPython)
-      ? venvPython
-      : process.platform === "win32" ? "python" : "python3");
+    this.executable = app.isPackaged
+      ? path.join(process.resourcesPath, "backend", "backend_orchestrator.exe")
+      : configuredPython || (existsSync(venvPython)
+        ? venvPython
+        : process.platform === "win32" ? "python" : "python3");
     this.dataDirectory = app.getPath("userData");
     this.elevated = process.platform === "linux" && process.getuid?.() === 0;
-    this.start(this.executable, [this.pythonScript], this.elevated);
+    this.start(this.executable, this.backendArguments, this.elevated);
   }
 
   private start(command: string, args: string[], elevated: boolean) {
@@ -91,7 +95,7 @@ class PythonBackend {
     if (process.platform !== "linux" || this.elevated) return Promise.resolve(this.elevated);
     this.rejectAll(new Error("Restarting the Python service with disk access permissions"));
     const previousChild = this.child;
-    const args = ["env", `DISK_RESURRECT_DATA_DIR=${this.dataDirectory}`, this.executable, this.pythonScript];
+    const args = ["env", `DISK_RESURRECT_DATA_DIR=${this.dataDirectory}`, this.executable, ...this.backendArguments];
     const authorization = new Promise<boolean>((resolve) => {
       this.privilegeResolver = resolve;
       this.start("pkexec", args, true);
@@ -174,7 +178,7 @@ let backend: PythonBackend;
 
 function getAppIconPath() {
   return process.platform === "win32"
-    ? path.join(app.getAppPath(), "disk-ressurect.ico")
+    ? path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "disk-ressurect.ico")
     : path.join(app.getAppPath(), "src", "assets", "disk-ressurect-logo.png");
 }
 
