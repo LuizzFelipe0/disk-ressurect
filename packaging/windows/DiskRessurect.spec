@@ -1,16 +1,19 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
+import sys
+
 from PyInstaller.utils.hooks import collect_submodules
 
-from pathlib import Path
 
 project_root = Path(SPECPATH).resolve().parents[1]
-source_root = project_root / "src"
+source_root = project_root / "backend" / "src"
+sys.path.insert(0, str(source_root))
 hidden_imports = []
-for package in ("application", "disk", "domain", "gui", "ntfs", "reports"):
-    hidden_imports += collect_submodules(package)
+for package in ("disk", "domain", "infrastructure", "modules", "ntfs"):
+    hidden_imports.extend(collect_submodules(package))
 
 analysis = Analysis(
-    [str(source_root / "main.py")],
+    [str(source_root / "backend_orchestrator.py")],
     pathex=[str(source_root)],
     binaries=[],
     datas=[],
@@ -23,30 +26,21 @@ analysis = Analysis(
     optimize=1,
 )
 pyz = PYZ(analysis.pure)
-exe = EXE(
+executable = EXE(
     pyz,
     analysis.scripts,
+    analysis.binaries,
+    analysis.datas,
     [],
-    exclude_binaries=True,
-    name="DiskRessurect",
+    name="backend_orchestrator",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False,
+    upx=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    uac_admin=True,
-)
-bundle = COLLECT(
-    exe,
-    analysis.binaries,
-    analysis.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="DiskRessurect",
 )
