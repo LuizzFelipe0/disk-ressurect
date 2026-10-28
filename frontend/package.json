@@ -1,6 +1,6 @@
 {
   "name": "disk-ressurect-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "commonjs",
   "description": "Electron desktop interface for the Disk Ressurect Python recovery engine",
