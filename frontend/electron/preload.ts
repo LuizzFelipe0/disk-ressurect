@@ -6,6 +6,8 @@ const api: DesktopApi = {
   listPartitions: (diskNumber, deepScan, resume = false) =>
     ipcRenderer.invoke("recovery:list-partitions", { diskNumber, deepScan, resume }),
   scanCatalog: (volumeId) => ipcRenderer.invoke("recovery:scan-catalog", { volumeId }),
+  searchCatalog: (query) => ipcRenderer.invoke("recovery:search-catalog", { query }),
+  listSupportedFileTypes: () => ipcRenderer.invoke("recovery:list-file-types"),
   getChildren: (nodeId) => ipcRenderer.invoke("recovery:catalog-children", { nodeId }),
   recover: (options) => ipcRenderer.invoke("recovery:extract", options),
   chooseOutputDirectory: () => ipcRenderer.invoke("recovery:choose-output"),

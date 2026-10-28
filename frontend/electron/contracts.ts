@@ -26,12 +26,19 @@ export interface CatalogNode {
   isDirectory: boolean;
   sizeBytes: number;
   hasChildren: boolean;
+  parentId?: string | null;
+  ancestorIds?: string[];
 }
 
 export interface CatalogInfo {
   recordCount: number;
   availableExtensions: string[];
   roots: CatalogNode[];
+}
+
+export interface CatalogSearchResult {
+  totalMatches: number;
+  results: CatalogNode[];
 }
 
 export interface ProgressInfo {
@@ -59,6 +66,8 @@ export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
   listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
   scanCatalog(volumeId: string): Promise<CatalogInfo>;
+  searchCatalog(query: string): Promise<CatalogSearchResult>;
+  listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;
   recover(options: {
     selectedNodeIds: string[];

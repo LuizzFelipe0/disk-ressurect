@@ -4,7 +4,7 @@ export const MultiSelectContainer = styled.div`
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
   min-width: 220px;
   max-width: 380px;
 `;
@@ -21,8 +21,9 @@ export const MultiSelectTrigger = styled.button`
   justify-content: space-between;
   gap: 10px;
   width: 100%;
+  height: 38px;
   min-height: 38px;
-  padding: 8px 11px;
+  padding: 0 11px;
   border: 1px solid #d9e0ea;
   border-radius: 8px;
   color: #23324a;
