@@ -75,7 +75,17 @@ npm install
 npm run dev
 ```
 
-`npm run dev` starts the Vite development server and Electron. Electron's main process launches the Python adapter automatically, using the repository virtual environment when available or the platform Python executable otherwise. Set `DISK_RESURRECT_PYTHON` to override that executable. On Windows, the app can request UAC elevation. On Linux, it can request PolicyKit authorization for the Python service through `pkexec`; the Electron UI remains at the user's normal privilege level. Source disks are opened read-only; recovered files are written only to the chosen destination. If authorization is declined, physical-disk operations stay unavailable. This development build is not yet a distributable installer; packaging must bundle the Python runtime and recovery modules with Electron for each target platform.
+`npm run dev` starts the Vite development server and Electron. Electron's main process launches the Python adapter automatically, using the repository virtual environment when available or the platform Python executable otherwise. Set `DISK_RESURRECT_PYTHON` to override that executable. On Windows, the app can request UAC elevation. On Linux, it can request PolicyKit authorization for the Python service through `pkexec`; the Electron UI remains at the user's normal privilege level. Source disks are opened read-only; recovered files are written only to the chosen destination. If authorization is declined, physical-disk operations stay unavailable.
+
+## Windows downloads
+
+Pushing a version tag such as `v0.1.0` runs the Windows release workflow. It runs backend and frontend tests, builds the Electron UI, bundles the Python recovery service, and publishes these files in the GitHub Release:
+
+* `DiskRessurect-<version>-win-x64-Setup.exe` installs the app.
+* `DiskRessurect-<version>-win-x64-portable.zip` contains the one-folder app for users who prefer not to install it.
+* `SHA256SUMS.txt` contains checksums for both downloads.
+
+Download the installer or portable package from the [GitHub Releases page](https://github.com/LuizzFelipe0/disk-ressurect/releases). Tags containing a prerelease suffix, such as `v0.1.0-test`, are published as prereleases. To build the same files locally on Windows, run `packaging/windows/build.ps1` from PowerShell; the script uses the project virtual environment when available or Python from `PATH`. The release executables are currently unsigned, so Windows may show a SmartScreen publisher warning.
 
 ## How to Use
 

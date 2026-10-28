@@ -12,7 +12,8 @@
     "dev": "concurrently -k \"vite --config vite.config.ts\" \"npm run desktop:dev\"",
     "desktop:dev": "npm run build:electron && node scripts/dev-electron.cjs",
     "start": "npm run build && electron .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package:win": "electron-builder --win nsis --x64"
   },
   "dependencies": {
     "react": "^19.2.4",
@@ -21,12 +22,13 @@
   },
   "devDependencies": {
     "@testing-library/react": "^16.1.0",
+    "@types/node": "^22.10.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/styled-components": "^5.1.36",
-    "@types/node": "^22.10.0",
     "concurrently": "^9.1.0",
     "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
     "jsdom": "^25.0.1",
     "typescript": "^5.7.2",
     "vite": "^6.4.5",
@@ -34,5 +36,43 @@
   },
   "allowScripts": {
     "electron@45.0.0": true
+  },
+  "build": {
+    "appId": "com.diskressurect.desktop",
+    "productName": "Disk Ressurect",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "dist/**/*",
+      "disk-ressurect.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/backend/backend_orchestrator.exe",
+        "to": "backend/backend_orchestrator.exe"
+      },
+      {
+        "from": "disk-ressurect.ico",
+        "to": "disk-ressurect.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "disk-ressurect.ico",
+      "signExecutable": false,
+      "artifactName": "DiskRessurect-${version}-win-${arch}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Disk Ressurect"
+    }
   }
 }
