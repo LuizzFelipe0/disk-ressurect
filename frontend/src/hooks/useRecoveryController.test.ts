@@ -3,9 +3,12 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useRecoveryController } from "./useRecoveryController";
 
-const { listDisks, listPartitions, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
+const { listDisks, listPartitions, scanCatalog, searchCatalog, listSupportedFileTypes, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
   listDisks: vi.fn(),
   listPartitions: vi.fn(),
+  scanCatalog: vi.fn(),
+  searchCatalog: vi.fn(),
+  listSupportedFileTypes: vi.fn(),
   onProgress: vi.fn(() => vi.fn()),
   getBackendStatus: vi.fn(),
   onBackendStatus: vi.fn(() => vi.fn()),
@@ -17,6 +20,9 @@ vi.mock("../services/recoveryService", () => ({
   recoveryService: {
     listDisks,
     listPartitions,
+    scanCatalog,
+    searchCatalog,
+    listSupportedFileTypes,
     onProgress,
     getBackendStatus,
     onBackendStatus,
@@ -28,7 +34,9 @@ vi.mock("../services/recoveryService", () => ({
 describe("useRecoveryController backend lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     listDisks.mockResolvedValue([{ number: 1, model: "Test disk", sizeBytes: 1024, serialNumber: "", displayName: "Disk 1" }]);
+    listSupportedFileTypes.mockResolvedValue([".jpg", ".pdf"]);
     getBackendStatus.mockResolvedValue({ state: "ready", message: "Python service is ready" });
     getPrivilegeStatus.mockResolvedValue({ isAdministrator: true });
     requestAdministrator.mockResolvedValue({ relaunched: false, cancelled: true });
@@ -41,6 +49,25 @@ describe("useRecoveryController backend lifecycle", () => {
     expect(result.current.disks).toHaveLength(1);
     expect(result.current.status).toContain("Choose a source disk");
     expect(listDisks).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(result.current.availableExtensions).toEqual([".jpg", ".pdf"]));
+    expect(result.current.extensions).toEqual([".jpg", ".pdf"]);
+  });
+
+  it("searches a built catalog and stores parent ids for matching nodes", async () => {
+    const root = { id: "n0", name: "Photos", path: "Photos", isDirectory: true, sizeBytes: 0, hasChildren: true, parentId: null };
+    const match = { id: "n1", name: "Trip.jpg", path: "Photos/Trip.jpg", isDirectory: false, sizeBytes: 20, hasChildren: false, parentId: "n0", ancestorIds: ["n0"] };
+    scanCatalog.mockResolvedValue({ recordCount: 2, availableExtensions: [".jpg"], roots: [root] });
+    searchCatalog.mockResolvedValue({ totalMatches: 1, results: [match] });
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+    await act(async () => { await result.current.buildCatalog(); });
+
+    act(() => result.current.setSearchQuery("trip"));
+    await waitFor(() => expect(result.current.searchResult?.results).toEqual([match]));
+    expect(searchCatalog).toHaveBeenCalledWith("trip");
+    act(() => result.current.toggleSelection("n0", true));
+    expect(result.current.isSelected("n1")).toBe(true);
   });
 
   it("restores saved deep-scan candidates when switching back to a disk", async () => {
@@ -62,6 +89,25 @@ describe("useRecoveryController backend lifecycle", () => {
 
     expect(result.current.volumes).toEqual([savedCandidate]);
     expect(result.current.status).toContain("saved deep-scan candidate");
+    expect(listPartitions).not.toHaveBeenCalled();
+  });
+
+  it("restores the single cached source disk and its candidates after application startup", async () => {
+    const savedCandidate = {
+      id: "1:4096", diskNumber: 1, partitionNumber: 0, offset: 4096,
+      sizeBytes: 8192, estimatedSize: true, name: "Lost NTFS candidate",
+      scanSavedAt: "2026-10-27T12:00:00+00:00",
+    };
+    listDisks.mockResolvedValueOnce([{
+      number: 1, model: "Test disk", sizeBytes: 1024, serialNumber: "test",
+      displayName: "Disk 1", cachedPartitions: [savedCandidate],
+    }]);
+
+    const { result } = renderHook(() => useRecoveryController());
+
+    await waitFor(() => expect(result.current.volumes).toEqual([savedCandidate]));
+    expect(result.current.selectedDiskNumber).toBe("1");
+    expect(result.current.status).toContain("restored");
     expect(listPartitions).not.toHaveBeenCalled();
   });
 

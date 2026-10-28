@@ -2,6 +2,7 @@ export type {
   BackendRuntimeStatus,
   CatalogInfo,
   CatalogNode,
+  CatalogSearchResult,
   DiskInfo,
   ProgressInfo,
   PrivilegeStatus,

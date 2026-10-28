@@ -3,12 +3,12 @@ import { InfoCard } from "../../components/InfoCard";
 
 export const PageLayout = styled.main`
   width: min(1440px, 100%);
-  min-height: 100vh;
+  height: calc(100vh + 4cm);
   margin: 0 auto;
   padding: 28px 32px 24px;
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(240px, 1fr) auto;
-  gap: 14px;
+  grid-template-rows: auto auto auto auto minmax(200px, 1fr) auto;
+  gap: 12px;
   @media (max-width: 980px) { padding: 20px; }
 `;
 
@@ -57,16 +57,8 @@ export const Toolbar = styled(InfoCard)`
   display: flex;
   align-items: end;
   flex-wrap: wrap;
-  gap: 20px;
-`;
-
-export const FilterGroup = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  min-width: 170px;
-  label { color: #586984; font-size: 12px; font-weight: 650; }
-  select { min-height: 38px; padding: 8px 11px; border: 1px solid #d9e0ea; border-radius: 8px; background: #fff; color: #23324a; }
+  gap: 14px;
+  padding: 10px 16px;
 `;
 
 export const SelectionActions = styled.div`
@@ -93,6 +85,21 @@ export const BrowserHeading = styled.div`
   border-bottom: 1px solid #edf0f5;
   h2 { margin: 0; font-size: 15px; }
   p { margin: 5px 0 0; color: #7c8aa0; font-size: 11px; }
+`;
+
+export const SearchInput = styled.input`
+  width: 100%;
+  min-height: 38px;
+  margin: 12px 0 4px;
+  padding: 8px 12px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  color: #23324a;
+  background: #fff;
+  font-size: 12px;
+  outline: none;
+  &:focus { border-color: #5291e4; box-shadow: 0 0 0 3px rgba(72,139,225,.12); }
+  &:disabled { background: #f7f9fc; cursor: not-allowed; }
 `;
 
 export const SelectionSummary = styled.span`

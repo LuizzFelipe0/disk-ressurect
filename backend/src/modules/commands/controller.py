@@ -1,4 +1,4 @@
-from modules.catalog.dto import CatalogNodeRequestDto, VolumeSelectionRequestDto
+from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, VolumeSelectionRequestDto
 from modules.catalog.mapper import CatalogMapper
 from modules.commands.dto import CommandErrorDto, CommandRequestDto, CommandResultDto, ProgressEventDto
 from modules.commands.session import RecoverySession
@@ -55,10 +55,19 @@ class RecoveryCommandHandler:
             snapshot = self.catalog_service.build(volume, self._catalog_progress(emit))
             ids_by_identity = self.session.set_catalog(snapshot)
             return CatalogMapper.catalog(snapshot, ids_by_identity).to_dict()
+        if operation == "search_catalog":
+            request = CatalogSearchRequestDto.from_payload(payload)
+            snapshot = self.session.require_snapshot()
+            nodes, total_matches = self.catalog_service.search(snapshot, request.query)
+            return CatalogMapper.search(
+                snapshot, nodes, total_matches, self.session.node_ids_by_identity(),
+            ).to_dict()
+        if operation == "list_file_types":
+            return list(self.catalog_service.supported_extensions())
         if operation == "catalog_children":
             request = CatalogNodeRequestDto.from_payload(payload)
             node = self.session.get_node(request.node_id)
-            ids_by_identity = {id(item): node_id for node_id, item in self.session.nodes.items()}
+            ids_by_identity = self.session.node_ids_by_identity()
             return [
                 CatalogMapper.node(child, ids_by_identity).to_dict()
                 for child in node.children

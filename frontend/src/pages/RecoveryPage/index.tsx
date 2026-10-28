@@ -4,7 +4,7 @@ import { useRecoveryController } from "../../hooks/useRecoveryController";
 import { ActionButton } from "../../components/ActionButton";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorNotice } from "../../components/ErrorNotice";
-import { FileTypeMultiSelect } from "../../components/FileTypeMultiSelect";
+import { CheckboxMultiSelect } from "../../components/CheckboxMultiSelect";
 import { FormField } from "../../components/FormField";
 import { RecoveryTree } from "../../components/RecoveryTree";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
@@ -16,12 +16,12 @@ import {
   BrowserSection,
   DestinationRow,
   Eyebrow,
-  FilterGroup,
   Footer,
   FormGrid,
   PageHeader,
   PageLayout,
   ProgressRow,
+  SearchInput,
   SelectionActions,
   SelectionSummary,
   StatusLine,
@@ -33,6 +33,19 @@ export const RecoveryPage: React.FC = () => {
   const progressPercent = recovery.progress?.total
     ? Math.min(100, Math.round(recovery.progress.completed * 100 / recovery.progress.total))
     : 0;
+  const searchActive = Boolean(recovery.searchQuery.trim());
+  const visibleRoots = searchActive
+    ? recovery.searchResult?.results
+    : recovery.catalog?.roots;
+  const selectedDiskHasCachedScan = recovery.disks.some((disk) =>
+    String(disk.number) === recovery.selectedDiskNumber && Boolean(disk.cachedPartitions?.length));
+  const catalogSummary = !recovery.catalog
+    ? "Select a disk and build its catalog to browse folders."
+    : searchActive && recovery.searchResult
+      ? recovery.searchResult.totalMatches > recovery.searchResult.results.length
+        ? `Showing ${recovery.searchResult.results.length.toLocaleString()} of ${recovery.searchResult.totalMatches.toLocaleString()} matches`
+        : `${recovery.searchResult.totalMatches.toLocaleString()} matching item(s)`
+      : `${recovery.catalog.recordCount.toLocaleString()} MFT records · ${recovery.catalog.availableExtensions.length} file types`;
 
   return (
     <PageLayout>
@@ -57,7 +70,7 @@ export const RecoveryPage: React.FC = () => {
           <ActionButton type="button" disabled={recovery.busy || !recovery.selectedDiskNumber}
             onClick={() => void recovery.findPartitions(false)}>Find partitions</ActionButton>
           <ActionButton type="button" disabled={recovery.busy || !recovery.selectedDiskNumber}
-            onClick={() => void recovery.findPartitions(true)}>Deep scan</ActionButton>
+            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? "Deep scan again" : "Deep scan"}</ActionButton>
         </ActionRow>
         <FormField label="NTFS partition">
           <select value={recovery.selectedVolumeId} disabled={recovery.busy || !recovery.volumes.length}
@@ -81,19 +94,27 @@ export const RecoveryPage: React.FC = () => {
       </DestinationRow>
 
       <Toolbar>
-        <FileTypeMultiSelect
-          options={recovery.availableExtensions}
+        <CheckboxMultiSelect
+          label="File types"
+          selectAllLabel="All Types"
+          options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
           selected={recovery.extensions}
           disabled={recovery.busy}
           onSelectionChange={recovery.setExtensionSelected}
         />
-        <FilterGroup><label htmlFor="minimum-size">Minimum size</label>
-          <select id="minimum-size" value={recovery.minimumSizeKb} disabled={recovery.busy}
-            onChange={(event) => recovery.setMinimumSizeKb(Number(event.target.value))}>
-            <option value={0}>Any size</option><option value={5}>5 KB</option><option value={25}>25 KB</option>
-            <option value={100}>100 KB</option><option value={1024}>1 MB</option>
-          </select>
-        </FilterGroup>
+        <CheckboxMultiSelect
+          label="Minimum size"
+          options={[
+            { value: "0", label: "Any size" },
+            { value: "5", label: "5 KB" },
+            { value: "25", label: "25 KB" },
+            { value: "100", label: "100 KB" },
+            { value: "1024", label: "1 MB" },
+          ]}
+          selected={[String(recovery.minimumSizeKb)]}
+          disabled={recovery.busy}
+          onSelectionChange={(value, checked) => recovery.setMinimumSizeKb(checked ? Number(value) : 0)}
+        />
         <SelectionActions>
           <ActionButton type="button" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>Select all</ActionButton>
           <ActionButton type="button" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>Clear selection</ActionButton>
@@ -105,20 +126,28 @@ export const RecoveryPage: React.FC = () => {
       <BrowserSection>
         <BrowserHeading>
           <div><h2>Found files</h2>
-            <p>{recovery.catalog
-              ? `${recovery.catalog.recordCount.toLocaleString()} MFT records · ${recovery.catalog.availableExtensions.length} file types`
-              : "Select a disk and build its catalog to browse folders."}</p></div>
+            <p>{catalogSummary}</p></div>
           {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} item(s) selected</SelectionSummary>}
         </BrowserHeading>
-        {recovery.catalog ? <RecoveryTree
-          roots={recovery.catalog.roots}
+        {recovery.catalog && <SearchInput
+          type="search"
+          aria-label="Search files and folders"
+          placeholder="Search files and folders…"
+          disabled={recovery.busy}
+          value={recovery.searchQuery}
+          onChange={(event) => recovery.setSearchQuery(event.target.value)}
+        />}
+        {!recovery.catalog ? <EmptyState>The folder catalog will appear here.</EmptyState>
+          : searchActive && recovery.searchingCatalog ? <EmptyState>Searching the catalog…</EmptyState>
+            : visibleRoots?.length ? <RecoveryTree
+          roots={visibleRoots}
           childrenById={recovery.childrenById}
           expandedFolderIds={recovery.expandedFolderIds}
           loadingFolderIds={recovery.loadingFolderIds}
           isSelected={recovery.isSelected}
           onToggleFolder={(node) => void recovery.toggleFolder(node)}
           onToggleSelection={recovery.toggleSelection}
-        /> : <EmptyState>The folder catalog will appear here.</EmptyState>}
+        /> : <EmptyState>{searchActive ? "No matching files or folders." : "No folders or files to display."}</EmptyState>}
       </BrowserSection>
 
       <Footer>

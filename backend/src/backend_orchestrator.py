@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -15,11 +16,28 @@ from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.service import RecoveryWorkflow
 
 
+def cache_path_for_data_directory(data_directory=None):
+    directory = data_directory or default_data_directory()
+    return os.path.join(os.fspath(directory), "deep_scan_cache.json")
+
+
+def default_data_directory():
+    configured = os.environ.get("DISK_RESURRECT_DATA_DIR")
+    if configured:
+        return Path(configured)
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+        return Path(base) / "Disk Ressurect"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Disk Ressurect"
+    base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    return Path(base) / "disk-ressurect"
+
+
 def create_handler(cache_path=None, inventory=None, workflow=None, scan_repository=None):
     """Compose application services while keeping runtime dependencies replaceable."""
     if cache_path is None:
-        data_directory = os.environ.get("DISK_RESURRECT_DATA_DIR")
-        cache_path = os.path.join(data_directory, "deep_scan_cache.json") if data_directory else None
+        cache_path = cache_path_for_data_directory()
     elif os.path.isdir(cache_path):
         cache_path = os.path.join(cache_path, "deep_scan_cache.json")
     discovery = DiskDiscoveryService(

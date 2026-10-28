@@ -13,6 +13,7 @@ from disk.models import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.commands.controller import RecoveryCommandHandler
+from modules.catalog.service import CatalogService
 
 
 def make_node(index, name, is_directory, path, children=(), parent=None, size=0):
@@ -82,6 +83,14 @@ class FakeCatalogService:
             callback = lambda event: progress_callback(event.completed, event.total)
         return self.workflow.scan_catalog(volume, callback)
 
+    @staticmethod
+    def search(snapshot, query):
+        return CatalogService.search(snapshot, query)
+
+    @staticmethod
+    def supported_extensions():
+        return (".jpg", ".pdf")
+
 
 class FakeRepository:
     def __init__(self):
@@ -113,6 +122,13 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
         self.assertEqual(result[0]["number"], 1)
         self.assertEqual(result[0]["displayName"], "Disk 1 · Test disk")
+
+    def test_lists_supported_file_types_before_a_catalog_is_built(self):
+        handler = make_handler()
+
+        result = handler.dispatch("list_file_types", {}, lambda _message: None)
+
+        self.assertEqual(result, [".jpg", ".pdf"])
 
     def test_partition_scan_emits_progress_and_retains_volume_for_catalog(self):
         volume = make_volume()
@@ -164,11 +180,14 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         events = []
 
         catalog = session.dispatch("scan_catalog", {"volumeId": "1:4096"}, events.append)
+        matches = session.dispatch("search_catalog", {"query": "PHOTO.JPG"}, events.append)
         children = session.dispatch("catalog_children", {"nodeId": "n0"}, events.append)
 
         self.assertEqual(catalog["recordCount"], 2)
         self.assertEqual(catalog["roots"][0]["name"], "Photos")
         self.assertTrue(catalog["roots"][0]["hasChildren"])
+        self.assertEqual(matches["totalMatches"], 1)
+        self.assertEqual(matches["results"][0]["parentId"], "n0")
         self.assertEqual(children[0]["name"], "photo.jpg")
         self.assertTrue(any(event["type"] == "progress" for event in events))
 

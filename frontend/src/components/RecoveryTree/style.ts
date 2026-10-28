@@ -6,8 +6,10 @@ export const TreeIndent = styled.span`
 `;
 
 export const TreeContainer = styled.div`
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 9px 2px;
 `;
 

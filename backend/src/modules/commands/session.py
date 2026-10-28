@@ -21,6 +21,9 @@ class RecoverySession:
             f"n{index}": node
             for index, node in enumerate(snapshot.catalog.nodes.values())
         }
+        return self.node_ids_by_identity()
+
+    def node_ids_by_identity(self):
         return {id(node): node_id for node_id, node in self.nodes.items()}
 
     def get_node(self, node_id):

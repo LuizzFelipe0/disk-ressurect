@@ -25,3 +25,22 @@ class CatalogService:
             )
         finally:
             disk.close()
+
+    @staticmethod
+    def supported_extensions():
+        from modules.recovery.extractor import Extractor
+
+        return Extractor.supported_extensions()
+
+    @staticmethod
+    def search(snapshot, query, limit=500):
+        normalized = query.casefold()
+        if not normalized:
+            return (), 0
+        matches = [
+            node for node in snapshot.catalog.nodes.values()
+            if normalized in node.record.name.casefold()
+            or normalized in node.full_path.casefold()
+        ]
+        matches.sort(key=lambda node: (node.full_path.casefold(), node.full_path))
+        return tuple(matches[:limit]), len(matches)
