@@ -26,6 +26,18 @@ class CatalogNodeRequestDto:
 
 
 @dataclass(frozen=True)
+class CatalogSearchRequestDto:
+    query: str
+
+    @classmethod
+    def from_payload(cls, payload):
+        value = payload.get("query", "")
+        if not isinstance(value, str):
+            raise ValueError("query must be a string")
+        return cls(value.strip())
+
+
+@dataclass(frozen=True)
 class CatalogNodeDto:
     id: str
     name: str
@@ -33,16 +45,22 @@ class CatalogNodeDto:
     is_directory: bool
     size_bytes: int
     has_children: bool
+    parent_id: str | None = None
+    ancestor_ids: tuple[str, ...] | None = None
 
     def to_dict(self):
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "path": self.path,
             "isDirectory": self.is_directory,
             "sizeBytes": self.size_bytes,
             "hasChildren": self.has_children,
+            "parentId": self.parent_id,
         }
+        if self.ancestor_ids is not None:
+            result["ancestorIds"] = list(self.ancestor_ids)
+        return result
 
 
 @dataclass(frozen=True)
@@ -56,4 +74,16 @@ class CatalogDto:
             "recordCount": self.record_count,
             "availableExtensions": list(self.available_extensions),
             "roots": [node.to_dict() for node in self.roots],
+        }
+
+
+@dataclass(frozen=True)
+class CatalogSearchDto:
+    total_matches: int
+    results: tuple[CatalogNodeDto, ...]
+
+    def to_dict(self):
+        return {
+            "totalMatches": self.total_matches,
+            "results": [node.to_dict() for node in self.results],
         }

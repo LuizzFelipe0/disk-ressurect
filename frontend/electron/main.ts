@@ -18,6 +18,7 @@ class PythonBackend {
   private backendArguments: string[];
   private executable: string;
   private dataDirectory: string;
+  private operationQueue: Promise<void> = Promise.resolve();
   private elevated = false;
   private expectsElevated = false;
   private privilegeResolver: ((authorized: boolean) => void) | null = null;
@@ -42,7 +43,7 @@ class PythonBackend {
       : configuredPython || (existsSync(venvPython)
         ? venvPython
         : process.platform === "win32" ? "python" : "python3");
-    this.dataDirectory = app.getPath("userData");
+    this.dataDirectory = path.join(app.getPath("appData"), "Disk Ressurect");
     this.elevated = process.platform === "linux" && process.getuid?.() === 0;
     this.start(this.executable, this.backendArguments, this.elevated);
   }
@@ -107,16 +108,21 @@ class PythonBackend {
   }
 
   request<T>(operation: string, payload: unknown): Promise<T> {
-    const id = randomUUID();
-    return new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-      this.child.stdin.write(`${JSON.stringify({ id, operation, payload })}\n`, (error) => {
-        if (error) {
-          this.pending.delete(id);
-          reject(error);
-        }
+    const execute = () => {
+      const id = randomUUID();
+      return new Promise<T>((resolve, reject) => {
+        this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
+        this.child.stdin.write(`${JSON.stringify({ id, operation, payload })}\n`, (error) => {
+          if (error) {
+            this.pending.delete(id);
+            reject(error);
+          }
+        });
       });
-    });
+    };
+    const result = this.operationQueue.then(execute, execute);
+    this.operationQueue = result.then(() => undefined, () => undefined);
+    return result;
   }
 
   stop() {
@@ -328,6 +334,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("recovery:list-disks", () => backend.request("list_disks", {}));
   ipcMain.handle("recovery:list-partitions", (_event, payload) => backend.request("list_partitions", payload));
   ipcMain.handle("recovery:scan-catalog", (_event, payload) => backend.request("scan_catalog", payload));
+  ipcMain.handle("recovery:search-catalog", (_event, payload) => backend.request("search_catalog", payload));
+  ipcMain.handle("recovery:list-file-types", () => backend.request("list_file_types", {}));
   ipcMain.handle("recovery:catalog-children", (_event, payload) => backend.request("catalog_children", payload));
   ipcMain.handle("recovery:extract", (_event, payload) => backend.request("extract", payload));
   ipcMain.handle("recovery:choose-output", async () => {

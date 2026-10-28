@@ -22,6 +22,21 @@ class DeepScanRepositoryTests(unittest.TestCase):
 
         self.assertEqual(restored.checkpoint, checkpoint)
 
+    def test_scan_results_are_readable_from_a_new_repository_instance(self):
+        volume = NTFSVolume(
+            1, 0, 4096, 1024 * 1024, 512, 4096, 1024,
+            8192, 2048, ((8192, 2, 0),), "Lost NTFS", True,
+        )
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "deep_scan_cache.json")
+            JsonDeepScanRepository(path).save(disk, [volume])
+            restored = JsonDeepScanRepository(path).load(disk)
+
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.volumes, (volume,))
+
     def test_saved_volume_is_restored_for_same_physical_disk_after_device_number_changes(self):
         volume = NTFSVolume(
             1, 0, 4096, 1024 * 1024, 512, 4096, 1024,

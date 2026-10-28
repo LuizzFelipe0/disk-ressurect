@@ -4,11 +4,22 @@ import type {
   BackendStatus,
   CatalogInfo,
   CatalogNode,
+  CatalogSearchResult,
   DiskInfo,
   ProgressInfo,
   VolumeInfo,
 } from "../types/recovery";
 import { isTreeNodeSelected, updateTreeSelection } from "../utils/selection";
+
+const LAST_SELECTED_DISK_KEY = "disk-ressurect:last-selected-disk";
+
+function diskCacheIdentity(disk: DiskInfo) {
+  const serial = disk.serialNumber.trim().toLowerCase();
+  const model = disk.model.trim().toLowerCase();
+  return serial
+    ? `serial:${serial}|${model}|${disk.sizeBytes}`
+    : `device:${model}|${disk.sizeBytes}|${disk.number}`;
+}
 
 export function useRecoveryController() {
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("starting");
@@ -23,6 +34,9 @@ export function useRecoveryController() {
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
   const [catalog, setCatalog] = useState<CatalogInfo | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResult, setSearchResult] = useState<CatalogSearchResult | null>(null);
+  const [searchingCatalog, setSearchingCatalog] = useState(false);
   const [childrenById, setChildrenById] = useState<Record<string, CatalogNode[]>>({});
   const [parentById, setParentById] = useState<Map<string, string | null>>(new Map());
   const [loadingFolderIds, setLoadingFolderIds] = useState<Set<string>>(new Set());
@@ -37,14 +51,15 @@ export function useRecoveryController() {
 
   const clearCatalog = useCallback(() => {
     setCatalog(null);
+    setSearchQuery("");
+    setSearchResult(null);
+    setSearchingCatalog(false);
     setChildrenById({});
     setParentById(new Map());
     setExpandedFolderIds(new Set());
     setLoadingFolderIds(new Set());
     setSelectedIds(new Set());
     setExcludedIds(new Set());
-    setAvailableExtensions([]);
-    setExtensions([]);
   }, []);
 
   const refreshDisks = useCallback(async () => {
@@ -54,12 +69,27 @@ export function useRecoveryController() {
     try {
       const foundDisks = await recoveryService.listDisks();
       setDisks(foundDisks);
-      setSelectedDiskNumber("");
-      setVolumes([]);
+      const savedIdentity = window.localStorage.getItem(LAST_SELECTED_DISK_KEY);
+      const rememberedDisk = savedIdentity
+        ? foundDisks.find((disk) => diskCacheIdentity(disk) === savedIdentity)
+        : undefined;
+      const cachedDisks = foundDisks.filter((disk) => disk.cachedPartitions?.length);
+      const restoredDisk = rememberedDisk ?? (cachedDisks.length === 1 ? cachedDisks[0] : undefined);
+      if (restoredDisk) window.localStorage.setItem(LAST_SELECTED_DISK_KEY, diskCacheIdentity(restoredDisk));
+      setSelectedDiskNumber(restoredDisk ? String(restoredDisk.number) : "");
+      setVolumes(restoredDisk?.cachedPartitions ?? []);
       setSelectedVolumeId("");
       clearCatalog();
       setBackendStatus("ready");
-      setStatus(`${foundDisks.length} disk(s) found. Choose a source disk.`);
+      if (restoredDisk?.cachedPartitions?.length) {
+        const savedAt = restoredDisk.cachedPartitions.find((volume) => volume.scanSavedAt)?.scanSavedAt;
+        const timestamp = savedAt ? ` (${new Date(savedAt).toLocaleString()})` : "";
+        setStatus(`${restoredDisk.cachedPartitions.length} saved deep-scan candidate(s) restored${timestamp}. Select a partition to continue.`);
+      } else if (restoredDisk) {
+        setStatus("The previous source disk was restored. Search it for NTFS partitions.");
+      } else {
+        setStatus(`${foundDisks.length} disk(s) found. Choose a source disk.`);
+      }
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : String(cause);
       const runtime = await recoveryService.getBackendStatus().catch(() => null);
@@ -103,6 +133,12 @@ export function useRecoveryController() {
       setIsAdministrator(false);
       setError(cause instanceof Error ? cause.message : String(cause));
     });
+    void recoveryService.listSupportedFileTypes().then((fileTypes) => {
+      setAvailableExtensions(fileTypes);
+      setExtensions((current) => current.length ? current : fileTypes);
+    }).catch((cause: unknown) => {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    });
     if (!initialLoadStarted.current) {
       initialLoadStarted.current = true;
       void refreshDisks();
@@ -140,6 +176,8 @@ export function useRecoveryController() {
   const selectDisk = useCallback((diskNumber: string) => {
     const selectedDisk = disks.find((disk) => String(disk.number) === diskNumber);
     const savedPartitions = selectedDisk?.cachedPartitions ?? [];
+    if (selectedDisk) window.localStorage.setItem(LAST_SELECTED_DISK_KEY, diskCacheIdentity(selectedDisk));
+    else window.localStorage.removeItem(LAST_SELECTED_DISK_KEY);
     setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
     setSelectedDiskNumber(diskNumber);
     setVolumes(savedPartitions);
@@ -223,14 +261,54 @@ export function useRecoveryController() {
     try {
       const result = await recoveryService.scanCatalog(selectedVolumeId);
       const parents = new Map<string, string | null>();
-      result.roots.forEach((node) => parents.set(node.id, null));
+      result.roots.forEach((node) => parents.set(node.id, node.parentId ?? null));
       setCatalog(result); setParentById(parents);
-      setAvailableExtensions(result.availableExtensions);
-      setExtensions(result.availableExtensions);
+      setSearchQuery("");
+      setSearchResult(null);
       setStatus(`Catalog ready: ${result.recordCount.toLocaleString()} MFT records.`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Unable to build the catalog."); }
     finally { setBusy(false); }
   }, [selectedVolumeId, ensureAdministrator]);
+
+  const searchRequestId = useRef(0);
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!catalog || !query) {
+      searchRequestId.current += 1;
+      setSearchResult(null);
+      setSearchingCatalog(false);
+      return undefined;
+    }
+
+    const requestId = ++searchRequestId.current;
+    setSearchingCatalog(true);
+    const timeout = window.setTimeout(() => {
+      void recoveryService.searchCatalog(query).then((result) => {
+        if (searchRequestId.current !== requestId) return;
+        setSearchResult(result);
+        setParentById((current) => {
+          const next = new Map(current);
+          result.results.forEach((node) => {
+            let parentId: string | null = null;
+            (node.ancestorIds ?? []).forEach((ancestorId) => {
+              next.set(ancestorId, parentId);
+              parentId = ancestorId;
+            });
+            next.set(node.id, node.parentId ?? parentId);
+          });
+          return next;
+        });
+      }).catch((cause: unknown) => {
+        if (searchRequestId.current === requestId) {
+          setSearchResult({ totalMatches: 0, results: [] });
+          setError(cause instanceof Error ? cause.message : String(cause));
+        }
+      }).finally(() => {
+        if (searchRequestId.current === requestId) setSearchingCatalog(false);
+      });
+    }, 220);
+    return () => window.clearTimeout(timeout);
+  }, [catalog, searchQuery]);
 
   const toggleFolder = useCallback(async (node: CatalogNode) => {
     if (expandedFolderIds.has(node.id)) {
@@ -314,9 +392,10 @@ export function useRecoveryController() {
     partitionScanCanResume,
     selectedVolumeId, catalog, childrenById, loadingFolderIds, expandedFolderIds,
     selectedIds, availableExtensions, extensions, minimumSizeKb, outputDirectory,
+    searchQuery, searchResult, searchingCatalog,
     refreshDisks, selectDisk, findPartitions, selectVolume, buildCatalog, toggleFolder,
     toggleSelection, isSelected, selectAll, clearSelection, chooseOutputDirectory,
-    recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory,
+    recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory, setSearchQuery,
     ensureAdministrator,
   };
 }

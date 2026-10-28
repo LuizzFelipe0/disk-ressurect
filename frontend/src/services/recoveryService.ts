@@ -1,6 +1,7 @@
 import type {
   CatalogInfo,
   CatalogNode,
+  CatalogSearchResult,
   BackendRuntimeStatus,
   DiskInfo,
   PrivilegeStatus,
@@ -21,6 +22,8 @@ export const recoveryService = {
   listPartitions: (diskNumber: number, deepScan = false, resume = false): Promise<VolumeInfo[]> =>
     getApi().listPartitions(diskNumber, deepScan, resume),
   scanCatalog: (volumeId: string): Promise<CatalogInfo> => getApi().scanCatalog(volumeId),
+  searchCatalog: (query: string): Promise<CatalogSearchResult> => getApi().searchCatalog(query),
+  listSupportedFileTypes: (): Promise<string[]> => getApi().listSupportedFileTypes(),
   getChildren: (nodeId: string): Promise<CatalogNode[]> => getApi().getChildren(nodeId),
   recover: (options: RecoveryOptions): Promise<RecoveryResult> => getApi().recover(options),
   chooseOutputDirectory: (): Promise<string | null> => getApi().chooseOutputDirectory(),
