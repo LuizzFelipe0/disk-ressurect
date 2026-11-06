@@ -1,39 +1,43 @@
 import React from "react";
+import { Button, Card, DropdownCheckbox, Footer as BelagioFooter, Header, Input, Select } from "belagio-styles-lib";
 import logo from "../../assets/disk-ressurect-logo.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
-import { ActionButton } from "../../components/ActionButton";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorNotice } from "../../components/ErrorNotice";
-import { CheckboxMultiSelect } from "../../components/CheckboxMultiSelect";
-import { FormField } from "../../components/FormField";
 import { RecoveryTree } from "../../components/RecoveryTree";
+import { RecoveryStatusPanel } from "../../components/RecoveryStatusPanel";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
 import {
+  areAllExtensionsSelected,
+  getExtensionSelectionUpdates,
+  getMinimumSizeKb,
+} from "../../utils/filterSelection";
+import {
   ActionRow,
-  AppTitle,
-  BackendRecoveryHint,
+  BrowserFrame,
   BrowserHeading,
   BrowserSection,
   DestinationRow,
   Eyebrow,
-  Footer,
   FormGrid,
   PageHeader,
+  PageContent,
   PageLayout,
-  ProgressRow,
-  SearchInput,
+  SearchBox,
   SelectionActions,
   SelectionSummary,
-  StatusLine,
   Toolbar,
+  DestinationInput,
+  FileTypesControls,
+  FormControl,
+  FormControlCaption,
+  MinimumSizeControl,
 } from "./style";
 
 export const RecoveryPage: React.FC = () => {
   const recovery = useRecoveryController();
-  const progressPercent = recovery.progress?.total
-    ? Math.min(100, Math.round(recovery.progress.completed * 100 / recovery.progress.total))
-    : 0;
   const searchActive = Boolean(recovery.searchQuery.trim());
+  const allExtensionsSelected = areAllExtensionsSelected(recovery.availableExtensions, recovery.extensions);
   const visibleRoots = searchActive
     ? recovery.searchResult?.results
     : recovery.catalog?.roots;
@@ -50,93 +54,82 @@ export const RecoveryPage: React.FC = () => {
   return (
     <PageLayout>
       <PageHeader>
-        <div>
-          <Eyebrow>DATA RECOVERY</Eyebrow>
-          <AppTitle><img src={logo} alt="" aria-hidden="true" />Disk Ressurect</AppTitle>
-          <p>Find partitions and choose the files you want to restore.</p>
-        </div>
+        <Header icon={logo} title="Disk Ressurect" backgroundColor="#FFFF" />
       </PageHeader>
 
-      <FormGrid>
-        <FormField label="Source disk">
-          <select value={recovery.selectedDiskNumber} disabled={recovery.busy}
-            onChange={(event) => recovery.selectDisk(event.target.value)}>
-            <option value="">{recovery.backendStatus === "error" ? "Backend unavailable" : "Select a disk"}</option>
-            {recovery.disks.map((disk) => <option key={disk.number} value={disk.number}>{sanitizeDisplayText(disk.displayName)}</option>)}
-          </select>
-        </FormField>
+      <PageContent>
+      <Card size="sm" variant="flat"><FormGrid>
+        <FormControl><FormControlCaption>Source disk</FormControlCaption><Select aria-label="Source disk" value={recovery.selectedDiskNumber} disabled={recovery.busy}
+          onChange={recovery.selectDisk} options={[
+            { value: "", label: recovery.backendStatus === "error" ? "Backend unavailable" : "Select a disk" },
+            ...recovery.disks.map((disk) => ({ value: String(disk.number), label: sanitizeDisplayText(disk.displayName) })),
+          ]} /></FormControl>
         <ActionRow>
-          <ActionButton type="button" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>Refresh</ActionButton>
-          <ActionButton type="button" disabled={recovery.busy || !recovery.selectedDiskNumber}
-            onClick={() => void recovery.findPartitions(false)}>Find partitions</ActionButton>
-          <ActionButton type="button" disabled={recovery.busy || !recovery.selectedDiskNumber}
-            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? "Deep scan again" : "Deep scan"}</ActionButton>
+          <Button variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>Refresh</Button>
+          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
+            onClick={() => void recovery.findPartitions(false)}>Find partitions</Button>
+          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
+            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? "Deep scan again" : "Deep scan"}</Button>
         </ActionRow>
-        <FormField label="NTFS partition">
-          <select value={recovery.selectedVolumeId} disabled={recovery.busy || !recovery.volumes.length}
-            onChange={(event) => recovery.selectVolume(event.target.value)}>
-            <option value="">{recovery.volumes.length ? "Select a partition" : "Search the disk for partitions"}</option>
-            {recovery.volumes.map((volume) => <option key={volume.id} value={volume.id}>{sanitizeDisplayText(volume.name)}</option>)}
-          </select>
-        </FormField>
+        <FormControl><FormControlCaption>NTFS partition</FormControlCaption><Select aria-label="NTFS partition" value={recovery.selectedVolumeId}
+          disabled={recovery.busy || !recovery.volumes.length} onChange={recovery.selectVolume} options={[
+            { value: "", label: recovery.volumes.length ? "Select a partition" : "Search the disk for partitions" },
+            ...recovery.volumes.map((volume) => ({ value: volume.id, label: sanitizeDisplayText(volume.name) })),
+          ]} /></FormControl>
         <ActionRow>
-          <ActionButton variant="primary" type="button" disabled={recovery.busy || !recovery.selectedVolumeId}
-            onClick={() => void recovery.buildCatalog()}>Build catalog</ActionButton>
+          <Button variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
+            onClick={() => void recovery.buildCatalog()}>Build catalog</Button>
         </ActionRow>
-      </FormGrid>
+      </FormGrid></Card>
 
-      <DestinationRow>
-        <FormField label="Save recovered files to" grow>
-          <input value={recovery.outputDirectory} disabled={recovery.busy} placeholder="Choose a folder on another drive"
-            onChange={(event) => recovery.setOutputDirectory(event.target.value)} />
-        </FormField>
-        <ActionButton type="button" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>Choose folder…</ActionButton>
-      </DestinationRow>
+      <Card size="sm" variant="flat"><DestinationRow>
+        <DestinationInput><FormControl><FormControlCaption>Save recovered files to</FormControlCaption><Input type="text" aria-label="Save recovered files to" value={recovery.outputDirectory}
+          disabled={recovery.busy} placeholder="Choose a folder on another drive"
+          onChange={recovery.setOutputDirectory} /></FormControl></DestinationInput>
+        <Button variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>Choose folder…</Button>
+      </DestinationRow></Card>
 
-      <Toolbar>
-        <CheckboxMultiSelect
-          label="File types"
-          selectAllLabel="All Types"
-          options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
-          selected={recovery.extensions}
-          disabled={recovery.busy}
-          onSelectionChange={recovery.setExtensionSelected}
-        />
-        <CheckboxMultiSelect
-          label="Minimum size"
-          options={[
+      <Card size="sm" variant="flat"><Toolbar>
+        <FileTypesControls>
+          <DropdownCheckbox label="File types" placeholder="All file types"
+            options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
+            value={recovery.extensions} disabled={recovery.busy}
+            onChange={(values) => getExtensionSelectionUpdates(recovery.availableExtensions, values).forEach(({ extension, checked }) =>
+              recovery.setExtensionSelected(extension, checked))} />
+          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.availableExtensions.length}
+            onClick={() => recovery.availableExtensions.forEach((extension) =>
+              recovery.setExtensionSelected(extension, !allExtensionsSelected))}>All Types</Button>
+        </FileTypesControls>
+        <MinimumSizeControl><DropdownCheckbox label="Minimum size" placeholder="Any size" value={[String(recovery.minimumSizeKb)]}
+          disabled={recovery.busy} options={[
             { value: "0", label: "Any size" },
             { value: "5", label: "5 KB" },
             { value: "25", label: "25 KB" },
             { value: "100", label: "100 KB" },
             { value: "1024", label: "1 MB" },
-          ]}
-          selected={[String(recovery.minimumSizeKb)]}
-          disabled={recovery.busy}
-          onSelectionChange={(value, checked) => recovery.setMinimumSizeKb(checked ? Number(value) : 0)}
-        />
+          ]} onChange={(values) => recovery.setMinimumSizeKb(getMinimumSizeKb(values))} /></MinimumSizeControl>
         <SelectionActions>
-          <ActionButton type="button" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>Select all</ActionButton>
-          <ActionButton type="button" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>Clear selection</ActionButton>
-          <ActionButton variant="success" type="button" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
-            onClick={() => void recovery.recover()}>Recover selected</ActionButton>
+          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>Select all</Button>
+          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>Clear selection</Button>
+          <Button variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
+            onClick={() => void recovery.recover()}>Recover selected</Button>
         </SelectionActions>
-      </Toolbar>
+      </Toolbar></Card>
 
-      <BrowserSection>
+      <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
         <BrowserHeading>
           <div><h2>Found files</h2>
             <p>{catalogSummary}</p></div>
           {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} item(s) selected</SelectionSummary>}
         </BrowserHeading>
-        {recovery.catalog && <SearchInput
+        {recovery.catalog && <SearchBox><Input
           type="search"
           aria-label="Search files and folders"
           placeholder="Search files and folders…"
           disabled={recovery.busy}
           value={recovery.searchQuery}
-          onChange={(event) => recovery.setSearchQuery(event.target.value)}
-        />}
+          onChange={recovery.setSearchQuery}
+        /></SearchBox>}
         {!recovery.catalog ? <EmptyState>The folder catalog will appear here.</EmptyState>
           : searchActive && recovery.searchingCatalog ? <EmptyState>Searching the catalog…</EmptyState>
             : visibleRoots?.length ? <RecoveryTree
@@ -148,31 +141,27 @@ export const RecoveryPage: React.FC = () => {
           onToggleFolder={(node) => void recovery.toggleFolder(node)}
           onToggleSelection={recovery.toggleSelection}
         /> : <EmptyState>{searchActive ? "No matching files or folders." : "No folders or files to display."}</EmptyState>}
-      </BrowserSection>
+      </BrowserSection></Card></BrowserFrame>
 
-      <Footer>
-        <StatusLine><span>{recovery.status}</span><span>{recovery.progress?.total ? `${recovery.progress.completed.toLocaleString()}/${recovery.progress.total.toLocaleString()} · ${progressPercent}%` : ""}</span></StatusLine>
-        <ProgressRow>
-          <progress max={100} value={progressPercent} />
-          {recovery.partitionScanCanResume && recovery.selectedDiskNumber && (
-            <ActionButton
-              type="button"
-              disabled={recovery.busy}
-              onClick={() => void recovery.findPartitions(true, true)}
-            >Retry scan</ActionButton>
-          )}
-        </ProgressRow>
-        {recovery.error && <ErrorNotice spaced>Details: {recovery.error}</ErrorNotice>}
-        {!recovery.isAdministrator && <>
-          <ErrorNotice spaced>Physical disk access requires elevated permission. The source will be opened in read-only mode.</ErrorNotice>
-          <ActionRow $topSpacing>
-            <ActionButton type="button" disabled={recovery.busy} onClick={() => void recovery.ensureAdministrator()}>
-              Request disk access permission
-            </ActionButton>
-          </ActionRow>
-        </>}
-          {recovery.backendStatus === "error" && <ActionRow $topSpacing><BackendRecoveryHint>Close and reopen the application to start another Python process.</BackendRecoveryHint></ActionRow>}
-      </Footer>
+      <RecoveryStatusPanel
+        status={recovery.status}
+        progress={recovery.progress}
+        error={recovery.error}
+        busy={recovery.busy}
+        isAdministrator={recovery.isAdministrator}
+        partitionScanCanResume={recovery.partitionScanCanResume}
+        selectedDiskNumber={recovery.selectedDiskNumber}
+        backendStatus={recovery.backendStatus}
+        onRetryScan={() => void recovery.findPartitions(true, true)}
+        onRequestDiskAccess={() => void recovery.ensureAdministrator()}
+      />
+      </PageContent>
+      <BelagioFooter
+        backgroundColor="#FFFFFF"
+        left={["Disk Ressurect", "Version 0.1.1"]}
+        center={["NTFS data recovery"]}
+        right={["Desktop application"]}
+      />
     </PageLayout>
   );
 };
