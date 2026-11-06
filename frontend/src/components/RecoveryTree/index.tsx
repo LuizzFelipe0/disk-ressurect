@@ -1,9 +1,18 @@
 import React from "react";
 import type { CatalogNode } from "../../types/recovery";
 import { EmptyState } from "../EmptyState";
-import { ExpandButton, TreeContainer, TreeIndent, TreeMeta, TreeName, TreeRow } from "./style";
+import {
+  ExpandButton,
+  TreeChildren,
+  TreeContainer,
+  TreeIndent,
+  TreeLoading,
+  TreeMeta,
+  TreeName,
+  TreeRow,
+} from "./style";
 
-interface RecoveryTreeProps {
+export interface RecoveryTreeProps {
   roots: CatalogNode[];
   childrenById: Record<string, CatalogNode[]>;
   expandedFolderIds: Set<string>;
@@ -17,27 +26,41 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
   roots, childrenById, expandedFolderIds, loadingFolderIds, isSelected,
   onToggleFolder, onToggleSelection,
 }) => {
-  if (!roots.length) return <EmptyState>No folders or files to display.</EmptyState>;
+  if (!roots.length) return <EmptyState title="No folders or files to display." icon="▱" />;
 
-  const renderNode = (node: CatalogNode, depth: number): React.ReactNode => (
-    <React.Fragment key={node.id}>
-      <TreeRow $depth={depth}>
+  const renderNode = (node: CatalogNode): React.ReactNode => (
+    <li key={node.id}>
+      <TreeRow>
         {node.isDirectory && node.hasChildren ? (
-          <ExpandButton type="button" aria-label={expandedFolderIds.has(node.id) ? "Collapse folder" : "Expand folder"}
-            onClick={() => onToggleFolder(node)}>
+          <ExpandButton
+            type="button"
+            aria-label={`${expandedFolderIds.has(node.id) ? "Collapse" : "Expand"} ${node.name}`}
+            aria-expanded={expandedFolderIds.has(node.id)}
+            aria-busy={loadingFolderIds.has(node.id)}
+            disabled={loadingFolderIds.has(node.id)}
+            onClick={() => onToggleFolder(node)}
+          >
             {loadingFolderIds.has(node.id) ? "…" : expandedFolderIds.has(node.id) ? "⌄" : "›"}
           </ExpandButton>
         ) : <TreeIndent />}
         <input type="checkbox" checked={isSelected(node.id)} disabled={loadingFolderIds.has(node.id)}
-          aria-label={`Selecionar ${node.name}`} onChange={(event) => onToggleSelection(node.id, event.target.checked)} />
-        <TreeName title={node.path}>{node.isDirectory ? "📁" : "📄"} {node.name}</TreeName>
+          aria-label={`Select ${node.name}`} onChange={(event) => onToggleSelection(node.id, event.target.checked)} />
+        <TreeName title={node.path}>
+          <span aria-hidden="true">{node.isDirectory ? "▰" : "▱"}</span>
+          {node.name}
+        </TreeName>
         <TreeMeta>{node.isDirectory ? "Folder" : formatSize(node.sizeBytes)}</TreeMeta>
       </TreeRow>
-      {expandedFolderIds.has(node.id) && (childrenById[node.id] ?? []).map((child) => renderNode(child, depth + 1))}
-    </React.Fragment>
+      {loadingFolderIds.has(node.id) && <TreeLoading role="status">Loading contents of {node.name}…</TreeLoading>}
+      {expandedFolderIds.has(node.id) && (childrenById[node.id] ?? []).length > 0 && (
+        <TreeChildren aria-label={`Contents of ${node.name}`}>
+          {(childrenById[node.id] ?? []).map((child) => renderNode(child))}
+        </TreeChildren>
+      )}
+    </li>
   );
 
-  return <TreeContainer role="tree">{roots.map((node) => renderNode(node, 0))}</TreeContainer>;
+  return <TreeContainer aria-label="Recovery catalog">{roots.map((node) => renderNode(node))}</TreeContainer>;
 };
 
 function formatSize(bytes: number) {
