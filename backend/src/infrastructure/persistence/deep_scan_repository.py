@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,7 +12,11 @@ from pathlib import Path
 from modules.disk_discovery.models import CachedDeepScan
 from disk.models import NTFSVolume
 from disk.scanning.partition_scan import ScanCheckpoint
-from infrastructure.filesystem.user_ownership import set_pkexec_user_ownership
+from infrastructure.filesystem.user_ownership import (
+    ensure_pkexec_user_owned_directory,
+    open_pkexec_safe_directory,
+    set_pkexec_user_ownership_fd,
+)
 
 
 class JsonDeepScanRepository:
@@ -118,10 +124,8 @@ class JsonDeepScanRepository:
         return document
 
     def _write_document(self, document):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        set_pkexec_user_ownership(self.path.parent)
-        temporary_path = None
-        try:
+        ensure_pkexec_user_owned_directory(self.path.parent)
+        if not (sys.platform.startswith("linux") and os.open in os.supports_dir_fd):
             with tempfile.NamedTemporaryFile(
                 "w", encoding="utf-8", dir=self.path.parent,
                 prefix=f"{self.path.name}.", suffix=".tmp", delete=False,
@@ -130,11 +134,48 @@ class JsonDeepScanRepository:
                 json.dump(document, cache_file, ensure_ascii=False, separators=(",", ":"))
                 cache_file.flush()
                 os.fsync(cache_file.fileno())
-            set_pkexec_user_ownership(temporary_path)
-            os.replace(temporary_path, self.path)
+                set_pkexec_user_ownership_fd(cache_file.fileno())
+            try:
+                os.replace(temporary_path, self.path)
+            finally:
+                if temporary_path.exists():
+                    temporary_path.unlink()
+            return
+
+        temporary_name = None
+        directory_fd = None
+        try:
+            directory_fd = open_pkexec_safe_directory(self.path.parent)
+            for _ in range(32):
+                temporary_name = f"{self.path.name}.{secrets.token_hex(12)}.tmp"
+                try:
+                    descriptor = os.open(
+                        temporary_name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                        | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                        dir_fd=directory_fd,
+                    )
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise FileExistsError("Could not allocate a unique scan-cache temporary file")
+
+            with os.fdopen(descriptor, "w", encoding="utf-8") as cache_file:
+                json.dump(document, cache_file, ensure_ascii=False, separators=(",", ":"))
+                cache_file.flush()
+                os.fsync(cache_file.fileno())
+                set_pkexec_user_ownership_fd(cache_file.fileno())
+            os.replace(temporary_name, self.path.name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
         finally:
-            if temporary_path and temporary_path.exists():
-                temporary_path.unlink()
+            if directory_fd is not None:
+                if temporary_name:
+                    try:
+                        os.unlink(temporary_name, dir_fd=directory_fd)
+                    except FileNotFoundError:
+                        pass
+                os.close(directory_fd)
 
     @staticmethod
     def _serialize_volume(volume):

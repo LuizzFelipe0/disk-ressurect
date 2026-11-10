@@ -102,7 +102,6 @@ class Extractor:
             if container_error:
                 return ExtractionResult(node, "invalid_container", container_error, bytes_written)
 
-            self.output_writer.prepare_file_for_publish(temporary_path)
             self.output_writer.publish(temporary_path, destination)
             return ExtractionResult(
                 node,
