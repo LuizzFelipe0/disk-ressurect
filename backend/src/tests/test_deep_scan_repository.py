@@ -18,10 +18,9 @@ class DeepScanRepositoryTests(unittest.TestCase):
             path = os.path.join(directory, "nested", "deep_scan_cache.json")
             with patch("infrastructure.persistence.deep_scan_repository.set_pkexec_user_ownership_fd") as set_owner_fd:
                 JsonDeepScanRepository(path).save(disk, [])
-
-        self.assertTrue(os.path.isdir(os.path.dirname(path)))
-        set_owner_fd.assert_called_once()
-        self.assertGreaterEqual(set_owner_fd.call_args.args[0], 0)
+                self.assertTrue(os.path.isdir(os.path.dirname(path)))
+                set_owner_fd.assert_called_once()
+                self.assertGreaterEqual(set_owner_fd.call_args.args[0], 0)
 
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
