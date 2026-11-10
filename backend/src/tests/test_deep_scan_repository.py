@@ -22,6 +22,19 @@ class DeepScanRepositoryTests(unittest.TestCase):
                 set_owner_fd.assert_called_once()
                 self.assertGreaterEqual(set_owner_fd.call_args.args[0], 0)
 
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux no-follow file opens")
+    def test_cache_reader_rejects_symlinks_instead_of_reading_their_targets(self):
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            target = os.path.join(directory, "external.json")
+            cache = os.path.join(directory, "deep_scan_cache.json")
+            with open(target, "w", encoding="utf-8") as target_file:
+                target_file.write('{"version":1,"disks":{"external":{"volumes":[]}}}')
+            os.symlink(target, cache)
+
+            document = JsonDeepScanRepository(cache)._read_document()
+
+        self.assertEqual(document, {"version": 1, "disks": {}})
+
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
         checkpoint = ScanCheckpoint(1, 7 * 1024**3, disk.size_bytes, 512)

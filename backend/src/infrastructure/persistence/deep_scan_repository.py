@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import secrets
+import stat
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -111,13 +112,36 @@ class JsonDeepScanRepository:
         return self._read_document()["disks"]
 
     def _read_document(self):
-        if self.path is None or not self.path.exists():
+        if self.path is None:
             return {"version": self.VERSION, "disks": {}}
+        descriptor = None
         try:
-            with self.path.open("r", encoding="utf-8") as cache_file:
-                document = json.load(cache_file)
+            if sys.platform.startswith("linux") and os.open in os.supports_dir_fd:
+                directory_fd = open_pkexec_safe_directory(self.path.parent)
+                try:
+                    descriptor = os.open(
+                        self.path.name,
+                        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                finally:
+                    os.close(directory_fd)
+                if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                    return {"version": self.VERSION, "disks": {}}
+                with os.fdopen(descriptor, "r", encoding="utf-8") as cache_file:
+                    descriptor = None
+                    document = json.load(cache_file)
+            else:
+                if not self.path.exists():
+                    return {"version": self.VERSION, "disks": {}}
+                with self.path.open("r", encoding="utf-8") as cache_file:
+                    document = json.load(cache_file)
         except (OSError, json.JSONDecodeError):
             return {"version": self.VERSION, "disks": {}}
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         if (not isinstance(document, dict) or document.get("version") != self.VERSION
                 or not isinstance(document.get("disks"), dict)):
             return {"version": self.VERSION, "disks": {}}
