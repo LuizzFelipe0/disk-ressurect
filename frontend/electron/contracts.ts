@@ -28,10 +28,14 @@ export interface CatalogNode {
   hasChildren: boolean;
   parentId?: string | null;
   ancestorIds?: string[];
+  isDeleted?: boolean;
+  isOrphaned?: boolean;
 }
 
 export interface CatalogInfo {
   recordCount: number;
+  orphanedRecordCount?: number;
+  orphanScanPerformed?: boolean;
   availableExtensions: string[];
   roots: CatalogNode[];
 }
@@ -65,7 +69,7 @@ export interface PrivilegeStatus {
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
   listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
-  scanCatalog(volumeId: string): Promise<CatalogInfo>;
+  scanCatalog(volumeId: string, includeOrphaned?: boolean): Promise<CatalogInfo>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;

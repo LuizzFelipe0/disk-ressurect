@@ -76,8 +76,10 @@ class FakeWorkflow:
 class FakeCatalogService:
     def __init__(self, workflow):
         self.workflow = workflow
+        self.include_orphaned = False
 
-    def build(self, volume, progress_callback=None):
+    def build(self, volume, progress_callback=None, include_orphaned=False):
+        self.include_orphaned = include_orphaned
         callback = None
         if progress_callback is not None:
             callback = lambda event: progress_callback(event.completed, event.total)
@@ -190,6 +192,23 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         self.assertEqual(matches["results"][0]["parentId"], "n0")
         self.assertEqual(children[0]["name"], "photo.jpg")
         self.assertTrue(any(event["type"] == "progress" for event in events))
+
+    def test_orphan_scan_flag_is_forwarded_and_reported_in_catalog_progress(self):
+        workflow = FakeWorkflow()
+        catalog_service = FakeCatalogService(workflow)
+        handler = RecoveryCommandHandler(
+            DiskDiscoveryService(FakeInventory(), FakeRepository()), catalog_service, workflow,
+        )
+        handler.session.volumes["1:4096"] = make_volume()
+        events = []
+
+        handler.dispatch("scan_catalog", {"volumeId": "1:4096", "includeOrphaned": True}, events.append)
+
+        self.assertTrue(catalog_service.include_orphaned)
+        self.assertTrue(any(
+            event.get("payload", {}).get("message") == "Reading MFT metadata and searching for orphaned entries…"
+            for event in events
+        ))
 
     def test_extraction_contract_preserves_exclusions_inside_checked_folders(self):
         first = make_node(2, "one.jpg", False, "Photos/one.jpg", size=2048)

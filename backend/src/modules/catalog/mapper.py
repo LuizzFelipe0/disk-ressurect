@@ -17,6 +17,11 @@ class CatalogMapper:
                 snapshot.catalog.available_extensions(Extractor.supported_extensions())
             ),
             roots=roots,
+            orphaned_record_count=sum(
+                bool(getattr(node, "is_orphaned", False))
+                for node in snapshot.catalog.nodes.values()
+            ),
+            orphan_scan_performed=bool(getattr(snapshot, "orphan_scan_performed", False)),
         )
 
     @staticmethod
@@ -29,6 +34,8 @@ class CatalogMapper:
             size_bytes=int(node.record.file_size),
             has_children=bool(node.record.is_dir and node.children),
             parent_id=node_ids_by_identity.get(id(getattr(node, "parent", None))),
+            is_deleted=not bool(getattr(node.record, "is_allocated", True)),
+            is_orphaned=bool(getattr(node, "is_orphaned", False)),
         )
 
     @staticmethod

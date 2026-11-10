@@ -61,6 +61,22 @@ class ModuleMapperTests(unittest.TestCase):
         self.assertEqual(result["recordCount"], 2)
         self.assertEqual(result["availableExtensions"], [".jpg"])
         self.assertTrue(result["roots"][0]["hasChildren"])
+        self.assertFalse(result["roots"][0]["isDeleted"])
+        self.assertFalse(result["roots"][0]["isOrphaned"])
+
+    def test_catalog_node_mapper_exposes_deleted_orphaned_state(self):
+        node = SimpleNamespace(
+            record=SimpleNamespace(name="orphan.jpg", file_size=4, is_dir=False, is_allocated=False),
+            full_path="Lost_Files_DeepScan/orphan.jpg",
+            children=[],
+            parent=None,
+            is_orphaned=True,
+        )
+
+        result = CatalogMapper.node(node, {id(node): "n0"}).to_dict()
+
+        self.assertTrue(result["isDeleted"])
+        self.assertTrue(result["isOrphaned"])
 
 
 if __name__ == "__main__":

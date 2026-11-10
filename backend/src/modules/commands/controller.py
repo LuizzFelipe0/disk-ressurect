@@ -52,7 +52,12 @@ class RecoveryCommandHandler:
         if operation == "scan_catalog":
             request = VolumeSelectionRequestDto.from_payload(payload)
             volume = self.session.get_volume(request.volume_id)
-            snapshot = self.catalog_service.build(volume, self._catalog_progress(emit))
+            progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)
+            snapshot = (
+                self.catalog_service.build(volume, progress_callback, include_orphaned=True)
+                if request.include_orphaned
+                else self.catalog_service.build(volume, progress_callback)
+            )
             ids_by_identity = self.session.set_catalog(snapshot)
             return CatalogMapper.catalog(snapshot, ids_by_identity).to_dict()
         if operation == "search_catalog":
@@ -105,7 +110,12 @@ class RecoveryCommandHandler:
         return report
 
     @staticmethod
-    def _catalog_progress(emit):
+    def _catalog_progress(emit, include_orphaned=False):
+        message = (
+            "Reading MFT metadata and searching for orphaned entries…"
+            if include_orphaned else "Reading MFT records"
+        )
+
         def report(completed, total):
-            emit(ProgressEventDto("catalog", completed, total, "Reading MFT records").to_dict())
+            emit(ProgressEventDto("catalog", completed, total, message).to_dict())
         return report

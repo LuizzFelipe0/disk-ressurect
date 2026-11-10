@@ -4,11 +4,12 @@ from typing import Callable
 from ntfs.mft_parser import MFTRecord
 
 class FileNode:
-    def __init__(self, record):
+    def __init__(self, record, *, is_orphaned=False):
         self.record = record
         self.children = []
         self.parent = None
         self.full_path = ""
+        self.is_orphaned = bool(is_orphaned)
         
     def sanitize(self, name):
         return re.sub(r'[\\/*?:"<>|]', "_", name).strip()
@@ -78,11 +79,20 @@ class TreeBuilder:
         return self.nodes
 
     def inject_ghosts(self, ghost_dict):
-        if not ghost_dict: return
-        for idx, rec in ghost_dict.items():
-            node = FileNode(rec)
-            node.full_path = os.path.join("Lost_Files_DeepScan", node.sanitize(rec.name))
-            self.nodes[idx] = node
+        """Add carved entries as isolated roots with unique, safe output paths."""
+        for synthetic_id, record in ghost_dict.items():
+            if synthetic_id in self.nodes:
+                raise ValueError(f"Carved MFT record ID collides with catalog ID {synthetic_id}")
+            node = FileNode(record, is_orphaned=True)
+            source_offset = int(record.mft_offset)
+            safe_name = node.sanitize(record.name) or "unnamed"
+            node.full_path = os.path.join(
+                "Lost_Files_DeepScan",
+                f"{source_offset:016X}",
+                f"[DELETED]_{safe_name}",
+            )
+            self.nodes[synthetic_id] = node
+            self.root_nodes.append(node)
 
     def _resolve_paths(self):
         visited = set()

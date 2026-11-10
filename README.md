@@ -9,7 +9,7 @@ A NTFS data recovery and forensic engine written in pure Python. This software i
 Unlike basic file carvers that recover files without names, this engine reconstructs the original directory tree whenever possible.
 
 * Virtual File System (VFS): Reads the $MFT and mounts the original folder structure in memory before extraction.
-* Ghost MFT Carving: The orphan-record carver remains available as a later catalog enhancement; the desktop workflow builds the catalog from the selected volume's MFT fragments.
+* Deleted and orphaned MFT entries: The catalog includes deleted records in the mapped MFT. An opt-in scan searches outside those mapped fragments for deleted records with complete, supported file data.
 * Smart Header Validation: Reads physical file signatures (magic numbers) during extraction to skip corrupted or overwritten files.
 * Lost-partition discovery: Searches physical media for validated NTFS structures when the partition table is missing.
 * User-controlled selection: The recovery catalog exposes the original folder tree, and users choose both folders and supported file types. No folder names are excluded by default.
@@ -33,7 +33,7 @@ backend/src/
 │   ├── partition_table/# MBR, EBR and GPT parsing
 │   ├── ntfs_discovery/ # NTFS volume scanning and MFT-anchor resolution
 │   ├── scanning/       # Chunk sources, signatures and MFT-anchor scanning
-│   ├── deep_scan/      # Lost-partition search and future orphan-MFT recovery
+│   ├── deep_scan/      # Lost-partition search and deleted orphan-MFT carving
 │   ├── safety/         # Keep recovery output off the source disk
 │   ├── models.py       # PhysicalDisk, PartitionEntry and NTFSVolume
 │   └── inventory.py    # DiskInventory composition facade
@@ -44,7 +44,7 @@ backend/src/
 
 Each feature module owns its use-case service and the contracts/models specific to that feature. `RecoveryCommandHandler` maps validated command DTOs to those services and returns stable response DTOs. Repository interfaces are used for persistence; physical sector access is represented by replaceable disk-reader ports, not by a CRUD repository abstraction. The entry point only composes production dependencies and adapts JSON lines to commands.
 
-The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. Orphaned MFT record discovery remains available for a future catalog enhancement.
+The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. The catalog can opt in to carving deleted orphan records outside the currently mapped MFT fragments.
 
 * frontend/src/ (React client): Contains typed domain contracts, services, hooks, reusable styled-components and page composition.
 * frontend/electron/ (Desktop shell): Owns Electron main/preload processes and the context-isolated IPC contract.
@@ -55,6 +55,8 @@ Frontend pages and components each live in a folder named after the unit. Keep t
 ## Recovery catalog and selection
 
 `TreeBuilder` creates the in-memory folder/file catalog and keeps parent/child links on each `FileNode`. `RecoveryCatalog` applies file type and minimum-size rules, while the React client lazily loads folder children and sends hierarchical selections to the Python adapter. `CatalogService` builds the catalog and `RecoveryWorkflow` extracts selected files; JSON-line progress events keep the interface responsive while disk operations run in the Python child process.
+
+Deleted records inside the mapped MFT fragments already appear in the normal catalog. The optional **Search for deleted MFT entries outside the catalog** setting carves the gaps between those fragments across the selected partition. It retains only USA-validated deleted file records with a supported extension and complete resident data or a complete non-resident runlist contained within the selected volume. Exact record copies are deduplicated. Orphans appear with an explicit status under `Lost_Files_DeepScan`; their original parent paths are not reconstructed from untrusted references. This scan reads areas outside the mapped MFT fragments and can take a long time. The source stays read-only, but overwritten records and records with incomplete data cannot be recovered.
 
 The output directory is checked against the source physical disk before recovery starts. Extraction results carry a status and reason per file. Incomplete disk reads and MFT data extents are not counted as successful recoveries.
 
@@ -102,7 +104,7 @@ The script builds the shared PyInstaller backend, runs backend and frontend test
 
 ## How to Use
 
-Users select a physical source disk, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks.
+Users select a physical source disk, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. Enable **Search for deleted files missing from the list** before building the catalog to search areas outside the normal file list; this can take a long time. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks.
 
 Validated candidates found during deep scans are checkpointed to `deep_scan_cache.json` under Electron's per-user `userData` directory. Cache entries are keyed by disk model, capacity and serial number (or disk number when no serial is available), so candidates are restored only for the matching source disk. A scan interruption keeps already discovered candidates; completed scans replace the old candidate set. Selecting the same disk after reopening the app restores those candidates without rerunning the scan.
 
