@@ -86,7 +86,7 @@ jobs:
           if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME -notmatch $expectedTag) { throw "Release tag must match package version $version (for example v$version or v$version-test)." }
           $portablePath = "projects/disk-ressurect/dist/DiskRessurect-$version-win-x64-portable.zip"
           $installerPath = "projects/disk-ressurect/dist/DiskRessurect-$version-win-x64-Setup.exe"
-          $appExecutable = "projects/disk-ressurect/dist/win-unpacked/Disk Ressurect.exe"
+          $appExecutable = "projects/disk-ressurect/dist/win-unpacked/Disk-Ressurect.exe"
           if (-not (Test-Path $installerPath)) { throw "Installer was not generated: $installerPath" }
           if (-not (Test-Path $appExecutable)) { throw "Portable application was not generated: $appExecutable" }
           Compress-Archive -Path "projects/disk-ressurect/dist/win-unpacked/*" -DestinationPath $portablePath -CompressionLevel Optimal
@@ -129,7 +129,7 @@ jobs:
             Windows x64 test build.
 
             - **Setup EXE** installs Disk Ressurect.
-            - **Portable ZIP** contains the one-folder app; extract it and run `Disk Ressurect.exe`.
+            - **Portable ZIP** contains the one-folder app; extract it and run `Disk-Ressurect.exe`.
             - **SHA256SUMS.txt** verifies the downloaded files.
 
             Disk access requires Windows administrator permission. These executables are unsigned, so Windows may show a SmartScreen publisher warning.

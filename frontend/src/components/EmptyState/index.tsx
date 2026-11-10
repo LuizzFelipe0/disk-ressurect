@@ -19,7 +19,14 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   ...props
 }) => (
   <EmptyStateContainer role={role} aria-live={ariaLive} {...props}>
-    <EmptyVisual aria-hidden="true">{icon ?? "⌕"}</EmptyVisual>
+    <EmptyVisual aria-hidden="true">
+      {icon ?? (
+        <svg viewBox="0 0 24 24" focusable="false">
+          <circle cx="10.8" cy="10.8" r="6.3" />
+          <path d="m15.5 15.5 4.2 4.2" />
+        </svg>
+      )}
+    </EmptyVisual>
     <EmptyCopy>
       <EmptyTitle>{title ?? children}</EmptyTitle>
       {description && <p>{description}</p>}

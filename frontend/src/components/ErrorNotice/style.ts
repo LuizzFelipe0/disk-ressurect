@@ -1,15 +1,16 @@
 import styled from "styled-components";
-import { colors, spacing, typography } from "belagio-styles-lib";
+import { spacing, typography } from "belagio-styles-lib";
+import { brandColors } from "../../brandColors";
 
 export const Notice = styled.div<{ $spaced: boolean; $tone: "error" | "warning" | "info" }>`
   display: grid;
   gap: ${spacing[1]};
   margin-top: ${({ $spaced }) => $spaced ? "10px" : "0"};
   padding: ${spacing[3]} ${spacing[4]};
-  border: 1px solid ${({ $tone }) => $tone === "error" ? colors.red.trim() : $tone === "warning" ? colors.orange : colors.blue};
+  border: 1px solid ${({ $tone }) => $tone === "error" ? brandColors.error : $tone === "warning" ? brandColors.warning : brandColors.revive};
   border-radius: ${spacing.radiusLg};
-  background: ${({ $tone }) => $tone === "error" ? "#fff2f3" : $tone === "warning" ? "#fff8eb" : "#f1f5ff"};
-  color: ${({ $tone }) => $tone === "error" ? colors.red.trim() : $tone === "warning" ? "#805200" : colors.blue};
+  background: ${({ $tone }) => $tone === "error" ? brandColors.errorSurface : $tone === "warning" ? brandColors.warningSurface : brandColors.infoSurface};
+  color: ${({ $tone }) => $tone === "error" ? brandColors.error : $tone === "warning" ? brandColors.warning : brandColors.ink};
   font-family: ${typography.fontFamily};
   font-size: ${typography.sizeSm};
   line-height: ${typography.lineHeightNormal};

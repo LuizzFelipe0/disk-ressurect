@@ -62,7 +62,7 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
         />
 
         {partitionScanCanResume && selectedDiskNumber && (
-          <Button variant="ghost" size="md" disabled={busy} onClick={onRetryScan}>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRetryScan}>
             Retry scan
           </Button>
         )}
@@ -76,7 +76,7 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
         )}
 
         {!isAdministrator && (
-          <Button variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
             Request disk access permission
           </Button>
         )}

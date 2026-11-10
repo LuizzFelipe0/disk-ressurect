@@ -1,4 +1,5 @@
 import styled from "styled-components";
+import { brandColors } from "../../brandColors";
 
 export const FieldLabel = styled.label<{ $grow: boolean }>`
   display: flex;
@@ -6,7 +7,7 @@ export const FieldLabel = styled.label<{ $grow: boolean }>`
   flex-direction: column;
   gap: 7px;
   min-width: 0;
-  color: #586984;
+  color: ${brandColors.textSecondary};
   font-size: 12px;
   font-weight: 650;
 
@@ -14,12 +15,12 @@ export const FieldLabel = styled.label<{ $grow: boolean }>`
     width: 100%;
     min-height: 39px;
     padding: 8px 11px;
-    color: #23324a;
-    background: #fff;
-    border: 1px solid #d9e0ea;
+    color: ${brandColors.ink};
+    background: ${brandColors.surface};
+    border: 1px solid ${brandColors.border};
     border-radius: 8px;
     outline: none;
   }
 
-  select:focus, input:focus { border-color: #5291e4; box-shadow: 0 0 0 3px rgba(72,139,225,.13); }
+  select:focus, input:focus { border-color: ${brandColors.revive}; box-shadow: 0 0 0 3px rgba(182,242,60,.24); }
 `;

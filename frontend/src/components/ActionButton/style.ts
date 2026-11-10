@@ -1,4 +1,5 @@
 import styled, { css } from "styled-components";
+import { brandColors } from "../../brandColors";
 
 export const StyledButton = styled.button<{ $variant: "primary" | "success" | "secondary" }>`
   min-height: 38px;
@@ -11,11 +12,11 @@ export const StyledButton = styled.button<{ $variant: "primary" | "success" | "s
   cursor: pointer;
 
   ${({ $variant }) => $variant === "primary"
-    ? css`color: #fff; background: #2879d5;`
+    ? css`color: ${brandColors.ink}; background: ${brandColors.revive};`
     : $variant === "success"
-      ? css`color: #fff; background: #19a777;`
-      : css`color: #35597f; background: #f7f9fc; border-color: #dce4ee;`}
+      ? css`color: ${brandColors.ink}; background: ${brandColors.revive};`
+      : css`color: ${brandColors.ink}; background: ${brandColors.surface}; border-color: ${brandColors.border};`}
 
-  &:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 11px rgba(33,70,120,.14); }
+  &:not(:disabled):hover { transform: translateY(-1px); box-shadow: 0 4px 11px rgba(11,11,12,.12); }
   &:disabled { cursor: not-allowed; opacity: .45; }
 `;
