@@ -1,4 +1,5 @@
 import styled from "styled-components";
+import { brandColors } from "../../brandColors";
 
 export const PageLayout = styled.main`
   width: 100%;
@@ -30,7 +31,7 @@ export const PageHeader = styled.div`
 
 export const Eyebrow = styled.div`
   margin-bottom: 7px;
-  color: #2875d2;
+  color: ${brandColors.ink};
   font-size: 11px;
   font-weight: 750;
   letter-spacing: .13em;
@@ -49,7 +50,7 @@ export const FormControl = styled.div`
   min-width: 0;
   flex-direction: column;
   gap: 7px;
-  color: #586984;
+  color: ${brandColors.textSecondary};
   font-size: 12px;
   font-weight: 650;
 `;
@@ -128,14 +129,14 @@ export const BrowserHeading = styled.div`
   justify-content: space-between;
   align-items: center;
   padding-bottom: 8px;
-  border-bottom: 1px solid #edf0f5;
+  border-bottom: 1px solid ${brandColors.border};
   h2 { margin: 0; font-size: 15px; }
-  p { margin: 5px 0 0; color: #7c8aa0; font-size: 11px; }
+  p { margin: 5px 0 0; color: ${brandColors.textTertiary}; font-size: 11px; }
 `;
 
 export const SelectionSummary = styled.span`
   margin-left: auto;
-  color: #6c7b92;
+  color: ${brandColors.textSecondary};
   font-size: 11px;
 `;
 

@@ -1,5 +1,6 @@
 import styled from "styled-components";
-import { colors, spacing, typography } from "belagio-styles-lib";
+import { spacing, typography } from "belagio-styles-lib";
+import { brandColors } from "../../brandColors";
 
 export const TreeIndent = styled.span`
   width: 20px;
@@ -12,7 +13,7 @@ export const TreeContainer = styled.ul`
   overflow-y: auto;
   overflow-x: hidden;
   padding: ${spacing[2]} 0;
-  color: ${colors.textPrimary};
+  color: ${brandColors.ink};
   font-family: ${typography.fontFamily};
   font-size: ${typography.sizeSm};
 
@@ -22,7 +23,7 @@ export const TreeContainer = styled.ul`
 export const TreeChildren = styled.ul`
   margin-left: ${spacing[5]};
   padding-left: ${spacing[2]};
-  border-left: 1px solid ${colors.separator};
+  border-left: 1px solid ${brandColors.border};
 `;
 
 export const TreeRow = styled.div`
@@ -33,9 +34,9 @@ export const TreeRow = styled.div`
   gap: ${spacing[2]};
   border-radius: ${spacing.radiusMd};
   transition: background-color .15s ease;
-  &:hover { background: #f1f5ff; }
-  input { width: 15px; height: 15px; margin: 0; accent-color: ${colors.blue}; }
-  input:focus-visible { outline: 2px solid ${colors.blue}; outline-offset: 2px; }
+  &:hover { background: ${brandColors.surfaceMuted}; }
+  input { width: 15px; height: 15px; margin: 0; accent-color: ${brandColors.revive}; }
+  input:focus-visible { outline: 2px solid ${brandColors.revive}; outline-offset: 2px; }
 `;
 
 export const TreeName = styled.span`
@@ -48,12 +49,12 @@ export const TreeName = styled.span`
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: ${typography.sizeSm};
-  span { color: ${colors.blue}; font-size: ${typography.sizeMd}; }
+  span { color: ${brandColors.ink}; font-size: ${typography.sizeMd}; }
 `;
 
 export const TreeMeta = styled.span`
   margin-left: auto;
-  color: ${colors.textTertiary};
+  color: ${brandColors.textTertiary};
   font-size: ${typography.sizeXs};
   white-space: nowrap;
 `;
@@ -67,17 +68,17 @@ export const ExpandButton = styled.button`
   padding: 0;
   border: 0;
   border-radius: ${spacing.radiusSm};
-  color: ${colors.textSecondary};
+  color: ${brandColors.textSecondary};
   background: transparent;
   cursor: pointer;
   font-size: ${typography.sizeLg};
-  &:hover:not(:disabled) { color: ${colors.blue}; background: ${colors.backgroundSecondary}; }
-  &:focus-visible { outline: 2px solid ${colors.blue}; outline-offset: 1px; }
+  &:hover:not(:disabled) { color: ${brandColors.ink}; background: ${brandColors.surfaceMuted}; }
+  &:focus-visible { outline: 2px solid ${brandColors.revive}; outline-offset: 1px; }
   &:disabled { cursor: progress; opacity: .55; }
 `;
 
 export const TreeLoading = styled.div`
   margin: 0 0 ${spacing[2]} 48px;
-  color: ${colors.textTertiary};
+  color: ${brandColors.textTertiary};
   font-size: ${typography.sizeXs};
 `;

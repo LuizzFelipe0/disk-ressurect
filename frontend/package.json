@@ -4,7 +4,7 @@
   "homepage": "https://github.com/LuizzFelipe0/disk-ressurect",
   "private": true,
   "type": "commonjs",
-  "description": "Electron desktop interface for the Disk Ressurect Python recovery engine",
+  "description": "Electron desktop interface for the Disk-Ressurect Python recovery engine",
   "main": "dist/electron/main.js",
   "scripts": {
     "build:electron": "tsc --project tsconfig.json",
@@ -43,7 +43,7 @@
   },
   "build": {
     "appId": "com.diskressurect.desktop",
-    "productName": "Disk Ressurect",
+    "productName": "Disk-Ressurect",
     "directories": {
       "output": "../dist"
     },
@@ -114,7 +114,7 @@
       "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "shortcutName": "Disk Ressurect"
+      "shortcutName": "Disk-Ressurect"
     }
   }
 }
