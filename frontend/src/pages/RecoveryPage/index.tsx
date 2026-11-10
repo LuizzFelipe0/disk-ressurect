@@ -157,7 +157,7 @@ export const RecoveryPage: React.FC = () => {
       />
       </PageContent>
       <BelagioFooter
-        left={["Disk-Ressurect", "Version 0.1.1"]}
+        left={["Disk-Ressurect", "Version 0.2.0"]}
         center={["NTFS data recovery"]}
         right={["Desktop application"]}
       />
