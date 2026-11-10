@@ -75,9 +75,9 @@ class LinuxUserOwnershipTests(unittest.TestCase):
             target = os.path.join(directory, "created", "nested")
             with self._mock_pkexec_root(), patch("infrastructure.filesystem.user_ownership.os.fchown") as fchown:
                 changed = ensure_pkexec_user_owned_directory(target)
+                self.assertTrue(os.path.isdir(target))
 
         self.assertTrue(changed)
-        self.assertTrue(os.path.isdir(target))
         self.assertEqual(fchown.call_count, 2)
         self.assertTrue(all(call.args[0] >= 0 for call in fchown.call_args_list))
 
