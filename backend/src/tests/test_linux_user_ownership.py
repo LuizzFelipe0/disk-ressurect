@@ -30,7 +30,7 @@ class LinuxUserOwnershipTests(unittest.TestCase):
     def test_chowns_an_open_descriptor_to_pkexec_authorizing_user(self):
         with (
             self._mock_pkexec_root(),
-            patch("infrastructure.filesystem.user_ownership.os.fchown") as fchown,
+            patch("infrastructure.filesystem.user_ownership.os.fchown", create=True) as fchown,
         ):
             changed = set_pkexec_user_ownership_fd(41)
 
@@ -98,7 +98,7 @@ class LinuxUserOwnershipTests(unittest.TestCase):
             patch("infrastructure.filesystem.user_ownership.sys.platform", "linux"),
             patch("infrastructure.filesystem.user_ownership.os.geteuid", return_value=1001, create=True),
             patch.dict(os.environ, {"PKEXEC_UID": "1001"}),
-            patch("infrastructure.filesystem.user_ownership.os.fchown") as fchown,
+            patch("infrastructure.filesystem.user_ownership.os.fchown", create=True) as fchown,
         ):
             changed = set_pkexec_user_ownership_fd(43)
 
@@ -110,7 +110,7 @@ class LinuxUserOwnershipTests(unittest.TestCase):
             patch("infrastructure.filesystem.user_ownership.sys.platform", "linux"),
             patch("infrastructure.filesystem.user_ownership.os.geteuid", return_value=0, create=True),
             patch.dict(os.environ, {"PKEXEC_UID": "not-a-uid"}),
-            patch("infrastructure.filesystem.user_ownership.os.fchown") as fchown,
+            patch("infrastructure.filesystem.user_ownership.os.fchown", create=True) as fchown,
         ):
             changed = set_pkexec_user_ownership_fd(44)
 
