@@ -1,5 +1,7 @@
 import React from "react";
 import { Button, Card } from "belagio-styles-lib";
+import type { SiteLanguage } from "belagio-styles-lib";
+import { translate } from "../../i18n/translations";
 import type { BackendStatus, ProgressInfo } from "../../types/recovery";
 import { ErrorNotice } from "../ErrorNotice";
 import {
@@ -20,6 +22,7 @@ export interface RecoveryStatusPanelProps {
   backendStatus: BackendStatus;
   onRetryScan: () => void;
   onRequestDiskAccess: () => void;
+  language?: SiteLanguage;
 }
 
 export const getProgressPercent = (progress: ProgressInfo | null) => {
@@ -38,52 +41,54 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
   backendStatus,
   onRetryScan,
   onRequestDiskAccess,
+  language = "en-US",
 }) => {
+  const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
   const percent = getProgressPercent(progress);
   const hasProgress = Boolean(progress?.total);
 
   return (
-    <Card size="sm" variant="flat" aria-label="Recovery status">
+    <Card size="sm" variant="flat" aria-label={t("recoveryStatus")}>
       <PanelContent>
         <StatusMessage role="status" aria-live="polite">
           <span>{status}</span>
           {hasProgress && (
             <ProgressDetails>
-              {progress!.completed.toLocaleString()}/{progress!.total.toLocaleString()} · {percent}%
+              {progress!.completed.toLocaleString(language)}/{progress!.total.toLocaleString(language)} · {percent}%
             </ProgressDetails>
           )}
         </StatusMessage>
 
         <ProgressTrack
-          aria-label="Recovery progress"
-          aria-valuetext={hasProgress ? `${percent}% complete` : "No active progress"}
+          aria-label={t("progress")}
+          aria-valuetext={hasProgress ? t("complete", { percent }) : t("noProgress")}
           max={100}
           value={percent}
         />
 
         {partitionScanCanResume && selectedDiskNumber && (
           <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRetryScan}>
-            Retry scan
+            {t("retryScan")}
           </Button>
         )}
 
-        {error && <ErrorNotice spaced title="Recovery problem">{error}</ErrorNotice>}
+        {error && <ErrorNotice spaced title={t("recoveryProblem")}>{error}</ErrorNotice>}
 
         {!isAdministrator && (
-          <ErrorNotice tone="warning" spaced title="Administrator permission required">
-            Physical disk access requires elevated permission. The source will be opened in read-only mode.
+          <ErrorNotice tone="warning" spaced title={t("adminRequired")}>
+            {t("elevatedAccess")}
           </ErrorNotice>
         )}
 
         {!isAdministrator && (
           <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
-            Request disk access permission
+            {t("requestAccess")}
           </Button>
         )}
 
         {backendStatus === "error" && (
           <ErrorNotice tone="info" spaced>
-            Close and reopen the application to start another Python process.
+            {t("restartApp")}
           </ErrorNotice>
         )}
       </PanelContent>
