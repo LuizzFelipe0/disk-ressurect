@@ -45,6 +45,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Belagio dependencies
+        run: npm ci
+        working-directory: projects/belagio-solutions/belagio-styles-lib
+
+      - name: Build Belagio library
+        run: npm run build
+        working-directory: projects/belagio-solutions/belagio-styles-lib
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: projects/disk-ressurect/frontend
