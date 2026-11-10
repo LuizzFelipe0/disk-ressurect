@@ -1,0 +1,16 @@
+export const brandColors = {
+  ink: "#0B0B0C",
+  bone: "#F1EDE7",
+  revive: "#B6F23C",
+  surface: "#FFFFFF",
+  surfaceMuted: "#EAE5DC",
+  border: "#D7D1C8",
+  textSecondary: "#625F59",
+  textTertiary: "#807A72",
+  disabled: "#A49E95",
+  error: "#B42318",
+  errorSurface: "#FDECEC",
+  warning: "#805200",
+  warningSurface: "#FFF4D8",
+  infoSurface: "#F1F7DF",
+} as const;

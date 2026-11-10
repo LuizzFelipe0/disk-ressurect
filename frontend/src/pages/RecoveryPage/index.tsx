@@ -54,10 +54,10 @@ export const RecoveryPage: React.FC = () => {
   return (
     <PageLayout>
       <PageHeader>
-        <Header icon={logo} title="Disk Ressurect" />
+        <Header icon={logo} title="Disk-Ressurect" />
       </PageHeader>
 
-      <PageContent>
+      <PageContent id="recovery-page-content">
       <Card size="sm" variant="flat"><FormGrid>
         <FormControl><FormControlCaption>Source disk</FormControlCaption><Select aria-label="Source disk" value={recovery.selectedDiskNumber} disabled={recovery.busy}
           onChange={recovery.selectDisk} options={[
@@ -65,10 +65,10 @@ export const RecoveryPage: React.FC = () => {
             ...recovery.disks.map((disk) => ({ value: String(disk.number), label: sanitizeDisplayText(disk.displayName) })),
           ]} /></FormControl>
         <ActionRow>
-          <Button variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>Refresh</Button>
-          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>Refresh</Button>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
             onClick={() => void recovery.findPartitions(false)}>Find partitions</Button>
-          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
             onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? "Deep scan again" : "Deep scan"}</Button>
         </ActionRow>
         <FormControl><FormControlCaption>NTFS partition</FormControlCaption><Select aria-label="NTFS partition" value={recovery.selectedVolumeId}
@@ -77,7 +77,7 @@ export const RecoveryPage: React.FC = () => {
             ...recovery.volumes.map((volume) => ({ value: volume.id, label: sanitizeDisplayText(volume.name) })),
           ]} /></FormControl>
         <ActionRow>
-          <Button variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
+          <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
             onClick={() => void recovery.buildCatalog()}>Build catalog</Button>
         </ActionRow>
       </FormGrid></Card>
@@ -86,7 +86,7 @@ export const RecoveryPage: React.FC = () => {
         <DestinationInput><FormControl><FormControlCaption>Save recovered files to</FormControlCaption><Input type="text" aria-label="Save recovered files to" value={recovery.outputDirectory}
           disabled={recovery.busy} placeholder="Choose a folder on another drive"
           onChange={recovery.setOutputDirectory} /></FormControl></DestinationInput>
-        <Button variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>Choose folder…</Button>
+        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>Choose folder…</Button>
       </DestinationRow></Card>
 
       <Card size="sm" variant="flat"><Toolbar>
@@ -96,7 +96,7 @@ export const RecoveryPage: React.FC = () => {
             value={recovery.extensions} disabled={recovery.busy}
             onChange={(values) => getExtensionSelectionUpdates(recovery.availableExtensions, values).forEach(({ extension, checked }) =>
               recovery.setExtensionSelected(extension, checked))} />
-          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.availableExtensions.length}
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.availableExtensions.length}
             onClick={() => recovery.availableExtensions.forEach((extension) =>
               recovery.setExtensionSelected(extension, !allExtensionsSelected))}>All Types</Button>
         </FileTypesControls>
@@ -109,9 +109,9 @@ export const RecoveryPage: React.FC = () => {
             { value: "1024", label: "1 MB" },
           ]} onChange={(values) => recovery.setMinimumSizeKb(getMinimumSizeKb(values))} /></MinimumSizeControl>
         <SelectionActions>
-          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>Select all</Button>
-          <Button variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>Clear selection</Button>
-          <Button variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>Select all</Button>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>Clear selection</Button>
+          <Button className="brand-button--success" variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
             onClick={() => void recovery.recover()}>Recover selected</Button>
         </SelectionActions>
       </Toolbar></Card>
@@ -157,7 +157,7 @@ export const RecoveryPage: React.FC = () => {
       />
       </PageContent>
       <BelagioFooter
-        left={["Disk Ressurect", "Version 0.1.1"]}
+        left={["Disk-Ressurect", "Version 0.1.1"]}
         center={["NTFS data recovery"]}
         right={["Desktop application"]}
       />
