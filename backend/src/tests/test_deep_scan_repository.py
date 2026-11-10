@@ -8,9 +8,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from disk.models import NTFSVolume, PhysicalDisk
 from disk.scanning.partition_scan import ScanCheckpoint
+from unittest.mock import patch
 
 
 class DeepScanRepositoryTests(unittest.TestCase):
+    def test_cache_files_and_data_directory_keep_the_pkexec_users_ownership(self):
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "nested", "deep_scan_cache.json")
+            with patch("infrastructure.persistence.deep_scan_repository.set_pkexec_user_ownership") as set_owner:
+                JsonDeepScanRepository(path).save(disk, [])
+
+        self.assertEqual(os.fspath(set_owner.call_args_list[0].args[0]), os.path.dirname(path))
+        self.assertTrue(set_owner.call_args_list[1].args[0].name.startswith("deep_scan_cache.json."))
+
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
         checkpoint = ScanCheckpoint(1, 7 * 1024**3, disk.size_bytes, 512)

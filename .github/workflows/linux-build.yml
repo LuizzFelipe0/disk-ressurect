@@ -1,0 +1,60 @@
+name: Linux Build
+
+on:
+  push:
+    branches:
+      - development
+  pull_request:
+    branches:
+      - development
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out disk-ressurect
+        uses: actions/checkout@v6
+        with:
+          path: projects/disk-ressurect
+
+      - name: Check out belagio-styles-lib
+        uses: actions/checkout@v6
+        with:
+          repository: LuizzFelipe0/belagio-styles-lib
+          ref: development
+          path: projects/belagio-solutions/belagio-styles-lib
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: projects/disk-ressurect/frontend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build and validate Linux packages
+        run: bash packaging/linux/build.sh
+        working-directory: projects/disk-ressurect
+
+      - name: Upload Linux package artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: disk-ressurect-linux-x64
+          path: |
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-x64.AppImage
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-x64.deb
+            projects/disk-ressurect/dist/SHA256SUMS-linux-x64.txt
+          if-no-files-found: error
+          retention-days: 7

@@ -1,4 +1,4 @@
-# disk-ressurect
+# Disk-Ressurect
 
 ![Disk-Ressurect Data Recovery](frontend/src/assets/disk-ressurect-github-banner.png)
 
@@ -61,10 +61,10 @@ The output directory is checked against the source physical disk before recovery
 ## Prerequisites
 
 * Windows or Linux for physical-disk discovery and raw reads.
-* Python 3.10 or higher.
+* Python 3.10 or higher for backend development and package generation. The Windows and Linux desktop packages bundle the backend runtime.
 * Administrator/root authorization for raw physical-disk reads. On Linux, a PolicyKit authentication agent and `pkexec` are used to authorize only the Python recovery service.
 * Node.js/npm for the Electron, React and TypeScript interface.
-The NTFS recovery pipeline is shared across platforms. Linux support currently uses sysfs for disk inventory and read-only positional I/O on `/dev` block devices. Linux packaging and validation on physical Linux systems are still required before a distributable release.
+The NTFS recovery pipeline is shared across platforms. Linux support uses sysfs for disk inventory and read-only positional I/O on `/dev` block devices. Initial Linux packaging for x64 is being prepared; validation on physical Linux systems is still required before a distributable release.
 
 ## Electron development UI
 
@@ -86,6 +86,16 @@ Pushing a version tag such as `v0.1.0` runs the Windows release workflow. It run
 * `SHA256SUMS.txt` contains checksums for both downloads.
 
 Download the installer or portable package from the [GitHub Releases page](https://github.com/LuizzFelipe0/disk-ressurect/releases). Tags containing a prerelease suffix, such as `v0.1.0-test`, are published as prereleases. To build the same files locally on Windows, run `packaging/windows/build.ps1` from PowerShell; the script uses the project virtual environment when available or Python from `PATH`. The release executables are currently unsigned, so Windows may show a SmartScreen publisher warning.
+
+## Linux packages (experimental)
+
+Linux builds currently target x64 AppImage and Debian packages. On a Linux x64 machine, place the `disk-ressurect` and `belagio-styles-lib` checkouts in the sibling layout expected by `frontend/package.json`, then run:
+
+```bash
+bash packaging/linux/build.sh
+```
+
+The script builds the shared PyInstaller backend, runs backend and frontend tests, builds the Electron app, creates both packages and writes `SHA256SUMS-linux-x64.txt` under `dist/`. The Linux GitHub Actions workflow checks out `belagio-styles-lib` from its `development` branch, builds the same packages and uploads them as temporary workflow artifacts; it does not publish a Release. Keep that library branch current with the UI API used here before expecting the workflow to pass. The AppImage is configured with electron-builder's static runtime toolset `1.0.3`; its launcher can add `--no-sandbox` only when user namespaces are unavailable. Debian packages declare `policykit-1`; AppImage users need `pkexec` and an active PolicyKit authentication agent for physical-disk access. Launch the desktop app as the normal user; only the Python recovery service requests elevated access, and recovered files and scan-cache files are returned to the authorizing user. These packages are not release-ready until they are tested on physical Linux systems and disposable recovery media.
 
 ## How to Use
 

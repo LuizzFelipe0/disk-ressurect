@@ -83,10 +83,11 @@ class Extractor:
         bytes_written = 0
         extension = os.path.splitext(node.record.name.lower())[1]
         try:
-            destination, temporary_path = self.output_writer.prepare_target(out_dir, node.full_path)
+            destination, temporary_path_template = self.output_writer.prepare_target(out_dir, node.full_path)
             header = bytearray()
             header_limit = self.signature_validator.header_window(extension)
-            with open(temporary_path, "wb") as output:
+            output, temporary_path = self.output_writer.open_temporary(temporary_path_template)
+            with output:
                 for chunk in self.content_reader.iter_chunks(node):
                     if len(header) < header_limit:
                         header.extend(chunk[:header_limit - len(header)])
@@ -101,6 +102,7 @@ class Extractor:
             if container_error:
                 return ExtractionResult(node, "invalid_container", container_error, bytes_written)
 
+            self.output_writer.prepare_file_for_publish(temporary_path)
             self.output_writer.publish(temporary_path, destination)
             return ExtractionResult(
                 node,

@@ -10,6 +10,7 @@ from pathlib import Path
 from modules.disk_discovery.models import CachedDeepScan
 from disk.models import NTFSVolume
 from disk.scanning.partition_scan import ScanCheckpoint
+from infrastructure.filesystem.user_ownership import set_pkexec_user_ownership
 
 
 class JsonDeepScanRepository:
@@ -118,6 +119,7 @@ class JsonDeepScanRepository:
 
     def _write_document(self, document):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        set_pkexec_user_ownership(self.path.parent)
         temporary_path = None
         try:
             with tempfile.NamedTemporaryFile(
@@ -128,6 +130,7 @@ class JsonDeepScanRepository:
                 json.dump(document, cache_file, ensure_ascii=False, separators=(",", ":"))
                 cache_file.flush()
                 os.fsync(cache_file.fileno())
+            set_pkexec_user_ownership(temporary_path)
             os.replace(temporary_path, self.path)
         finally:
             if temporary_path and temporary_path.exists():
