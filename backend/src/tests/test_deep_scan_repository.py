@@ -8,9 +8,33 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from disk.models import NTFSVolume, PhysicalDisk
 from disk.scanning.partition_scan import ScanCheckpoint
+from unittest.mock import patch
 
 
 class DeepScanRepositoryTests(unittest.TestCase):
+    def test_cache_files_and_data_directory_keep_the_pkexec_users_ownership(self):
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "nested", "deep_scan_cache.json")
+            with patch("infrastructure.persistence.deep_scan_repository.set_pkexec_user_ownership_fd") as set_owner_fd:
+                JsonDeepScanRepository(path).save(disk, [])
+                self.assertTrue(os.path.isdir(os.path.dirname(path)))
+                set_owner_fd.assert_called_once()
+                self.assertGreaterEqual(set_owner_fd.call_args.args[0], 0)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "requires Linux no-follow file opens")
+    def test_cache_reader_rejects_symlinks_instead_of_reading_their_targets(self):
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            target = os.path.join(directory, "external.json")
+            cache = os.path.join(directory, "deep_scan_cache.json")
+            with open(target, "w", encoding="utf-8") as target_file:
+                target_file.write('{"version":1,"disks":{"external":{"volumes":[]}}}')
+            os.symlink(target, cache)
+
+            document = JsonDeepScanRepository(cache)._read_document()
+
+        self.assertEqual(document, {"version": 1, "disks": {}})
+
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
         checkpoint = ScanCheckpoint(1, 7 * 1024**3, disk.size_bytes, 512)

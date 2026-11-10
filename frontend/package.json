@@ -1,6 +1,7 @@
 {
   "name": "disk-ressurect-desktop",
   "version": "0.1.1",
+  "homepage": "https://github.com/LuizzFelipe0/disk-ressurect",
   "private": true,
   "type": "commonjs",
   "description": "Electron desktop interface for the Disk Ressurect Python recovery engine",
@@ -13,14 +14,17 @@
     "desktop:dev": "npm run build:electron && node scripts/dev-electron.cjs",
     "start": "npm run build && electron .",
     "test": "vitest run",
-    "package:win": "electron-builder --win nsis --x64"
+    "package:win": "electron-builder --win nsis --x64",
+    "package:linux": "electron-builder --linux --x64"
   },
   "dependencies": {
+    "belagio-styles-lib": "file:../../belagio-solutions/belagio-styles-lib",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "styled-components": "^6.3.9"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.1.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.14",
@@ -43,20 +47,13 @@
     "directories": {
       "output": "../dist"
     },
+    "toolsets": {
+      "appimage": "1.0.3"
+    },
     "files": [
       "dist/**/*",
       "disk-ressurect.ico",
       "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "../dist/backend/backend_orchestrator.exe",
-        "to": "backend/backend_orchestrator.exe"
-      },
-      {
-        "from": "disk-ressurect.ico",
-        "to": "disk-ressurect.ico"
-      }
     ],
     "win": {
       "target": [
@@ -64,7 +61,52 @@
       ],
       "icon": "disk-ressurect.ico",
       "signExecutable": false,
-      "artifactName": "DiskRessurect-${version}-win-${arch}-Setup.${ext}"
+      "artifactName": "DiskRessurect-${version}-win-${arch}-Setup.${ext}",
+      "extraResources": [
+        {
+          "from": "../dist/backend/backend_orchestrator.exe",
+          "to": "backend/backend_orchestrator.exe"
+        },
+        {
+          "from": "disk-ressurect.ico",
+          "to": "disk-ressurect.ico"
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "icon": "packaging/linux/icons",
+      "maintainer": "LuizzFelipe0 <102326788+LuizzFelipe0@users.noreply.github.com>",
+      "executableName": "disk-ressurect",
+      "artifactName": "DiskRessurect-${version}-linux-${arch}.${ext}",
+      "extraResources": [
+        {
+          "from": "../dist/backend/backend_orchestrator",
+          "to": "backend/backend_orchestrator"
+        },
+        {
+          "from": "packaging/linux/icons/512x512.png",
+          "to": "disk-ressurect-logo.png"
+        }
+      ]
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "policykit-1"
+      ]
     },
     "nsis": {
       "oneClick": false,

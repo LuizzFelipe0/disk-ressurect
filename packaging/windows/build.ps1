@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$spec = Join-Path $PSScriptRoot "DiskRessurect.spec"
+$spec = Join-Path $repoRoot "packaging\backend\DiskRessurect.spec"
 $backendDist = Join-Path $repoRoot "dist\backend"
 $work = Join-Path $repoRoot "build\pyinstaller"
 
@@ -13,7 +13,7 @@ if (-not $PythonExecutable) {
     $PythonExecutable = if (Test-Path -LiteralPath $venvPython) { $venvPython } else { "python" }
 }
 
-& $PythonExecutable -m pip install -r (Join-Path $PSScriptRoot "requirements.txt")
+& $PythonExecutable -m pip install -r (Join-Path $repoRoot "packaging\backend\requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Could not install the PyInstaller build dependency." }
 
 & $PythonExecutable -m PyInstaller --noconfirm --clean --distpath $backendDist --workpath $work $spec
