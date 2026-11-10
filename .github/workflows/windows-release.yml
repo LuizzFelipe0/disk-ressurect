@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - development
 
 permissions:
   contents: write
@@ -63,7 +66,7 @@ jobs:
         run: |
           $version = (Get-Content frontend/package.json -Raw | ConvertFrom-Json).version
           $expectedTag = "^v$([regex]::Escape($version))(-.+)?$"
-          if ($env:GITHUB_REF_NAME -notmatch $expectedTag) { throw "Release tag must match package version $version (for example v$version or v$version-test)." }
+          if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME -notmatch $expectedTag) { throw "Release tag must match package version $version (for example v$version or v$version-test)." }
           $portablePath = "dist/DiskRessurect-$version-win-x64-portable.zip"
           $installerPath = "dist/DiskRessurect-$version-win-x64-Setup.exe"
           $appExecutable = "dist/win-unpacked/Disk Ressurect.exe"
@@ -89,6 +92,7 @@ jobs:
           retention-days: 1
 
   publish:
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:
