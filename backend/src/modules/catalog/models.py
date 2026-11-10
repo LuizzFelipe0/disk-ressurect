@@ -8,6 +8,7 @@ from domain.recovery_catalog import RecoveryCatalog
 class RecoveryCatalogSnapshot:
     catalog: RecoveryCatalog
     volume: NTFSVolume
+    orphan_scan_performed: bool = False
 
     @property
     def volume_start(self):

@@ -62,12 +62,24 @@ describe("useRecoveryController backend lifecycle", () => {
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
     await act(async () => { await result.current.buildCatalog(); });
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096");
 
     act(() => result.current.setSearchQuery("trip"));
     await waitFor(() => expect(result.current.searchResult?.results).toEqual([match]));
     expect(searchCatalog).toHaveBeenCalledWith("trip");
     act(() => result.current.toggleSelection("n0", true));
     expect(result.current.isSelected("n1")).toBe(true);
+  });
+
+  it("passes the opt-in orphan scan flag to the catalog service", async () => {
+    scanCatalog.mockResolvedValue({ recordCount: 1, availableExtensions: [".jpg"], roots: [] });
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+
+    await act(async () => { await result.current.buildCatalog(true); });
+
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true);
   });
 
   it("restores saved deep-scan candidates when switching back to a disk", async () => {

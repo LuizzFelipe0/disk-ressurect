@@ -4,13 +4,17 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class VolumeSelectionRequestDto:
     volume_id: str
+    include_orphaned: bool = False
 
     @classmethod
     def from_payload(cls, payload):
         value = payload.get("volumeId")
         if not isinstance(value, str) or not value:
             raise ValueError("volumeId must be a non-empty string")
-        return cls(value)
+        include_orphaned = payload.get("includeOrphaned", False)
+        if not isinstance(include_orphaned, bool):
+            raise ValueError("includeOrphaned must be a boolean")
+        return cls(value, include_orphaned)
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,8 @@ class CatalogNodeDto:
     has_children: bool
     parent_id: str | None = None
     ancestor_ids: tuple[str, ...] | None = None
+    is_deleted: bool = False
+    is_orphaned: bool = False
 
     def to_dict(self):
         result = {
@@ -57,6 +63,8 @@ class CatalogNodeDto:
             "sizeBytes": self.size_bytes,
             "hasChildren": self.has_children,
             "parentId": self.parent_id,
+            "isDeleted": self.is_deleted,
+            "isOrphaned": self.is_orphaned,
         }
         if self.ancestor_ids is not None:
             result["ancestorIds"] = list(self.ancestor_ids)
@@ -68,10 +76,14 @@ class CatalogDto:
     record_count: int
     available_extensions: tuple[str, ...]
     roots: tuple[CatalogNodeDto, ...]
+    orphaned_record_count: int = 0
+    orphan_scan_performed: bool = False
 
     def to_dict(self):
         return {
             "recordCount": self.record_count,
+            "orphanedRecordCount": self.orphaned_record_count,
+            "orphanScanPerformed": self.orphan_scan_performed,
             "availableExtensions": list(self.available_extensions),
             "roots": [node.to_dict() for node in self.roots],
         }

@@ -6,6 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.commands.controller import RecoveryCommandHandler
 from modules.commands.dto import CommandRequestDto, ProgressEventDto
+from modules.catalog.dto import VolumeSelectionRequestDto
 from modules.disk_discovery.dto import PartitionScanRequestDto
 from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto
@@ -51,6 +52,14 @@ class CommandContractTests(unittest.TestCase):
             PartitionScanRequestDto.from_payload({"diskNumber": 1, "deepScan": "true"})
         with self.assertRaisesRegex(ValueError, "resume requires deepScan"):
             PartitionScanRequestDto.from_payload({"diskNumber": 1, "resume": True})
+
+    def test_catalog_request_keeps_legacy_default_and_validates_orphan_scan_flag(self):
+        self.assertFalse(VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096"}).include_orphaned)
+        self.assertTrue(VolumeSelectionRequestDto.from_payload({
+            "volumeId": "0:4096", "includeOrphaned": True,
+        }).include_orphaned)
+        with self.assertRaisesRegex(ValueError, "includeOrphaned must be a boolean"):
+            VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096", "includeOrphaned": "yes"})
 
     def test_recovery_request_rejects_invalid_filters_and_ids(self):
         with self.assertRaisesRegex(ValueError, "selectedNodeIds"):

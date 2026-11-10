@@ -253,13 +253,17 @@ export function useRecoveryController() {
     setStatus(volumeId ? "Build the catalog to browse the discovered files." : "Select an NTFS partition.");
   }, [clearCatalog]);
 
-  const buildCatalog = useCallback(async () => {
+  const buildCatalog = useCallback(async (includeOrphaned = false) => {
     if (!selectedVolumeId) return;
     if (!await ensureAdministrator()) return;
     setBusy(true); setError(""); setProgress(null);
-    setStatus("Reading metadata and building the catalog…");
+    setStatus(includeOrphaned
+      ? "Reading MFT metadata and searching for orphaned entries…"
+      : "Reading metadata and building the catalog…");
     try {
-      const result = await recoveryService.scanCatalog(selectedVolumeId);
+      const result = includeOrphaned
+        ? await recoveryService.scanCatalog(selectedVolumeId, true)
+        : await recoveryService.scanCatalog(selectedVolumeId);
       const parents = new Map<string, string | null>();
       result.roots.forEach((node) => parents.set(node.id, node.parentId ?? null));
       setCatalog(result); setParentById(parents);

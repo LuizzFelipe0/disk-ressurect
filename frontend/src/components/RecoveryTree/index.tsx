@@ -53,7 +53,7 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
           <span aria-hidden="true">{node.isDirectory ? "▰" : "▱"}</span>
           {node.name}
         </TreeName>
-        <TreeMeta>{node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}</TreeMeta>
+        <TreeMeta>{node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}</TreeMeta>
       </TreeRow>
       {loadingFolderIds.has(node.id) && <TreeLoading role="status">{t("loadingContents", { name: node.name })}</TreeLoading>}
       {expandedFolderIds.has(node.id) && (childrenById[node.id] ?? []).length > 0 && (

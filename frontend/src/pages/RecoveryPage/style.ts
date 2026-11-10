@@ -57,6 +57,15 @@ export const FormControl = styled.div`
 
 export const FormControlCaption = styled.span``;
 
+export const OrphanScanControls = styled.div`
+  margin-top: 12px;
+  color: ${brandColors.textSecondary};
+  font-size: 12px;
+  label { display: flex; align-items: center; gap: 8px; font-weight: 650; }
+  input { accent-color: ${brandColors.revive}; }
+  p { margin: 4px 0 0 24px; color: ${brandColors.textTertiary}; font-size: 11px; }
+`;
+
 export const DestinationRow = styled.div`
   display: flex;
   align-items: end;

@@ -33,6 +33,7 @@ import {
   FormControl,
   FormControlCaption,
   MinimumSizeControl,
+  OrphanScanControls,
 } from "./style";
 
 export const RecoveryPage: React.FC = () => {
@@ -41,6 +42,7 @@ export const RecoveryPage: React.FC = () => {
     const saved = window.localStorage.getItem("disk-ressurect:language");
     return saved === "en-US" || saved === "es-ES" || saved === "fr-FR" || saved === "zh-CN" ? saved : "pt-BR";
   });
+  const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
   const searchActive = Boolean(recovery.searchQuery.trim());
   const allExtensionsSelected = areAllExtensionsSelected(recovery.availableExtensions, recovery.extensions);
@@ -55,7 +57,7 @@ export const RecoveryPage: React.FC = () => {
       ? recovery.searchResult.totalMatches > recovery.searchResult.results.length
         ? t("showingMatches", { visible: recovery.searchResult.results.length.toLocaleString(language), total: recovery.searchResult.totalMatches.toLocaleString(language) })
         : `${recovery.searchResult.totalMatches.toLocaleString(language)} ${t("matchingItems")}`
-      : `${recovery.catalog.recordCount.toLocaleString(language)} ${t("mftRecords")} · ${recovery.catalog.availableExtensions.length.toLocaleString(language)} ${t("fileTypesCount")}`;
+      : `${recovery.catalog.recordCount.toLocaleString(language)} ${t("catalogItems")} · ${recovery.catalog.availableExtensions.length.toLocaleString(language)} ${t("fileTypesCount")}${recovery.catalog.orphanScanPerformed ? ` · ${t("orphanedEntriesCount", { count: recovery.catalog.orphanedRecordCount ?? 0 })}` : ""}`;
 
   return (
     <PageLayout lang={language}>
@@ -80,16 +82,21 @@ export const RecoveryPage: React.FC = () => {
           <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
             onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? t("deepScanAgain") : t("deepScan")}</Button>
         </ActionRow>
-        <FormControl><FormControlCaption>{t("ntfsPartition")}</FormControlCaption><Select aria-label={t("ntfsPartition")} value={recovery.selectedVolumeId}
+        <FormControl><FormControlCaption>{t("partitionLabel")}</FormControlCaption><Select aria-label={t("partitionLabel")} value={recovery.selectedVolumeId}
           disabled={recovery.busy || !recovery.volumes.length} onChange={recovery.selectVolume} options={[
             { value: "", label: recovery.volumes.length ? t("selectPartition") : t("searchPartitions") },
             ...recovery.volumes.map((volume) => ({ value: volume.id, label: sanitizeDisplayText(volume.name) })),
           ]} /></FormControl>
         <ActionRow>
           <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
-            onClick={() => void recovery.buildCatalog()}>{t("buildCatalog")}</Button>
+            onClick={() => void recovery.buildCatalog(includeOrphaned)}>{t("buildCatalog")}</Button>
         </ActionRow>
-      </FormGrid></Card>
+      </FormGrid>
+      <OrphanScanControls>
+        <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
+          onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
+        <p>{t("orphanScanWarning")}</p>
+      </OrphanScanControls></Card>
 
       <Card size="sm" variant="flat"><DestinationRow>
         <DestinationInput><FormControl><FormControlCaption>{t("saveFiles")}</FormControlCaption><Input type="text" aria-label={t("saveFiles")} value={recovery.outputDirectory}

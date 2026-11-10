@@ -57,4 +57,12 @@ describe("RecoveryTree", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "Select holiday.jpg" }));
     expect(onToggleSelection).toHaveBeenCalledWith(file.id, true);
   });
+
+  it("labels deleted orphan records explicitly", () => {
+    render(<RecoveryTree {...makeProps({
+      roots: [{ ...file, isDeleted: true, isOrphaned: true }],
+    })} />);
+
+    expect(screen.getByText("Found outside the list")).toBeTruthy();
+  });
 });
