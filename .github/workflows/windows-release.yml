@@ -1,4 +1,4 @@
-name: Windows Release
+name: Cross-platform Release
 
 on:
   push:
@@ -108,9 +108,54 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  build_linux:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+        with:
+          path: projects/disk-ressurect
+
+      - name: Check out belagio-styles-lib
+        uses: actions/checkout@v6
+        with:
+          repository: LuizzFelipe0/belagio-styles-lib
+          ref: development
+          path: projects/belagio-solutions/belagio-styles-lib
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: projects/disk-ressurect/frontend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Build Linux packages
+        run: bash packaging/linux/build.sh
+        working-directory: projects/disk-ressurect
+
+      - name: Upload Linux release files
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-files
+          path: |
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-x86_64.AppImage
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-amd64.deb
+            projects/disk-ressurect/dist/SHA256SUMS-linux-x64.txt
+          if-no-files-found: error
+          retention-days: 1
+
   publish:
     if: github.event_name == 'push'
-    needs: build
+    needs: [build, build_linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -121,20 +166,29 @@ jobs:
           name: windows-release-files
           path: release-files
 
+      - name: Download Linux release files
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-release-files
+          path: release-files
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           name: Disk Ressurect ${{ github.ref_name }}
           body: |
-            Disk-Ressurect ${{ github.ref_name }} for Windows x64.
+            Disk-Ressurect ${{ github.ref_name }} for Windows and Linux x64.
 
             - **Setup EXE** installs Disk Ressurect.
             - **Portable ZIP** contains the one-folder app; extract it and run `Disk-Ressurect.exe`.
-            - **SHA256SUMS.txt** verifies the downloaded files.
+            - **SHA256SUMS.txt** verifies the Windows downloads.
 
-            Linux packages remain experimental and are not included in this Windows release. Physical-disk validation on Linux is still pending.
+            Linux packages are experimental; physical-disk validation on Linux is still pending.
+            - **AppImage** runs as a portable Linux application.
+            - **Debian package (.deb)** installs the Linux application.
+            - **SHA256SUMS-linux-x64.txt** verifies the Linux downloads.
 
-            Disk access requires Windows administrator permission. These executables are unsigned, so Windows may show a SmartScreen publisher warning.
+            Disk access requires administrator permission on Windows or PolicyKit authorization on Linux. Windows executables are unsigned, so Windows may show a SmartScreen publisher warning.
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: true

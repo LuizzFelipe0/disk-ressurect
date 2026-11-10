@@ -77,25 +77,28 @@ npm run dev
 
 `npm run dev` starts the Vite development server and Electron. Electron's main process launches the Python adapter automatically, using the repository virtual environment when available or the platform Python executable otherwise. Set `DISK_RESURRECT_PYTHON` to override that executable. On Windows, the app can request UAC elevation. On Linux, it can request PolicyKit authorization for the Python service through `pkexec`; the Electron UI remains at the user's normal privilege level. Source disks are opened read-only; recovered files are written only to the chosen destination. If authorization is declined, physical-disk operations stay unavailable.
 
-## Windows downloads
+## Downloads
 
-Pushing a version tag such as `v0.1.0` runs the Windows release workflow. It runs backend and frontend tests, builds the Electron UI, bundles the Python recovery service, and publishes these files in the GitHub Release:
+Pushing a version tag such as `v0.2.0` runs the release workflow. It builds Windows and Linux x64 packages in parallel and publishes the resulting files together in one GitHub Release:
 
-* `DiskRessurect-<version>-win-x64-Setup.exe` installs the app.
-* `DiskRessurect-<version>-win-x64-portable.zip` contains the one-folder app for users who prefer not to install it.
-* `SHA256SUMS.txt` contains checksums for both downloads.
+* `DiskRessurect-<version>-win-x64-Setup.exe` installs the Windows app.
+* `DiskRessurect-<version>-win-x64-portable.zip` contains the one-folder Windows app for users who prefer not to install it.
+* `SHA256SUMS.txt` contains checksums for the Windows downloads.
+* `DiskRessurect-<version>-linux-x86_64.AppImage` is a portable Linux x64 package.
+* `DiskRessurect-<version>-linux-amd64.deb` installs the Linux x64 app on Debian-based distributions.
+* `SHA256SUMS-linux-x64.txt` contains checksums for the Linux downloads.
 
-Download the installer or portable package from the [GitHub Releases page](https://github.com/LuizzFelipe0/disk-ressurect/releases). Tags containing a prerelease suffix, such as `v0.1.0-test`, are published as prereleases. To build the same files locally on Windows, run `packaging/windows/build.ps1` from PowerShell; the script uses the project virtual environment when available or Python from `PATH`. The release executables are currently unsigned, so Windows may show a SmartScreen publisher warning.
+Download the packages from the [GitHub Releases page](https://github.com/LuizzFelipe0/disk-ressurect/releases). Tags containing a prerelease suffix, such as `v0.2.0-test`, are published as prereleases. To build the same files locally on Windows, run `packaging/windows/build.ps1` from PowerShell; to build Linux packages locally, run `bash packaging/linux/build.sh` on Linux x64. The release executables are unsigned, so Windows may show a SmartScreen publisher warning.
 
 ## Linux packages (experimental)
 
-Linux builds currently target x64 AppImage and Debian packages. On a Linux x64 machine, place the `disk-ressurect` and `belagio-styles-lib` checkouts in the sibling layout expected by `frontend/package.json`, then run:
+Linux builds currently target x64 AppImage and Debian packages. The version-tag release workflow builds these packages automatically and attaches them to the same GitHub Release as the Windows downloads. To build locally on a Linux x64 machine, place the `disk-ressurect` and `belagio-styles-lib` checkouts in the sibling layout expected by `frontend/package.json`, then run:
 
 ```bash
 bash packaging/linux/build.sh
 ```
 
-The script builds the shared PyInstaller backend, runs backend and frontend tests, builds the Electron app, creates both packages and writes `SHA256SUMS-linux-x64.txt` under `dist/`. The Linux GitHub Actions workflow checks out `belagio-styles-lib` from its `development` branch, builds the same packages and uploads them as temporary workflow artifacts; it does not publish a Release. Keep that library branch current with the UI API used here before expecting the workflow to pass. The AppImage is configured with electron-builder's static runtime toolset `1.0.3`; its launcher can add `--no-sandbox` only when user namespaces are unavailable. Debian packages declare `policykit-1`; AppImage users need `pkexec` and an active PolicyKit authentication agent for physical-disk access. Launch the desktop app as the normal user; only the Python recovery service requests elevated access, and recovered files and scan-cache files are returned to the authorizing user. These packages are not release-ready until they are tested on physical Linux systems and disposable recovery media.
+The script builds the shared PyInstaller backend, runs backend and frontend tests, builds the Electron app, creates both packages and writes `SHA256SUMS-linux-x64.txt` under `dist/`. The release workflow checks out `belagio-styles-lib` from its `development` branch and publishes the packages automatically. Keep that library branch current with the UI API used here before expecting the workflow to pass. The AppImage is configured with electron-builder's static runtime toolset `1.0.3`; its launcher can add `--no-sandbox` only when user namespaces are unavailable. Debian packages declare `policykit-1`; AppImage users need `pkexec` and an active PolicyKit authentication agent for physical-disk access. Launch the desktop app as the normal user; only the Python recovery service requests elevated access, and recovered files and scan-cache files are returned to the authorizing user. These Linux packages are experimental until they are tested on physical Linux systems and disposable recovery media.
 
 ## How to Use
 
