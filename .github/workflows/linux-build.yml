@@ -53,8 +53,8 @@ jobs:
         with:
           name: disk-ressurect-linux-x64
           path: |
-            projects/disk-ressurect/dist/DiskRessurect-*-linux-x64.AppImage
-            projects/disk-ressurect/dist/DiskRessurect-*-linux-x64.deb
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-x86_64.AppImage
+            projects/disk-ressurect/dist/DiskRessurect-*-linux-amd64.deb
             projects/disk-ressurect/dist/SHA256SUMS-linux-x64.txt
           if-no-files-found: error
           retention-days: 7

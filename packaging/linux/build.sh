@@ -43,9 +43,9 @@ cd "$frontend_dir"
 npm run package:linux
 
 shopt -s nullglob
-artifacts=("$repo_root"/dist/DiskRessurect-*-linux-x64.AppImage "$repo_root"/dist/DiskRessurect-*-linux-x64.deb)
+artifacts=("$repo_root"/dist/DiskRessurect-*-linux-x86_64.AppImage "$repo_root"/dist/DiskRessurect-*-linux-amd64.deb)
 if [[ ${#artifacts[@]} -ne 2 ]]; then
-  echo "Expected one x64 AppImage and one x64 deb package under $repo_root/dist." >&2
+  echo "Expected one x86_64 AppImage and one amd64 deb package under $repo_root/dist." >&2
   exit 1
 fi
 artifact_names=()
