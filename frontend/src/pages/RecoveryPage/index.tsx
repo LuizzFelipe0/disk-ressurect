@@ -54,7 +54,7 @@ export const RecoveryPage: React.FC = () => {
   return (
     <PageLayout>
       <PageHeader>
-        <Header icon={logo} title="Disk Ressurect" backgroundColor="#FFFF" />
+        <Header icon={logo} title="Disk Ressurect" />
       </PageHeader>
 
       <PageContent>
@@ -157,7 +157,6 @@ export const RecoveryPage: React.FC = () => {
       />
       </PageContent>
       <BelagioFooter
-        backgroundColor="#FFFFFF"
         left={["Disk Ressurect", "Version 0.1.1"]}
         center={["NTFS data recovery"]}
         right={["Desktop application"]}
