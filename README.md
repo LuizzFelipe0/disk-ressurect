@@ -64,7 +64,7 @@ The output directory is checked against the source physical disk before recovery
 * Python 3.10 or higher for backend development and package generation. The Windows and Linux desktop packages bundle the backend runtime.
 * Administrator/root authorization for raw physical-disk reads. On Linux, a PolicyKit authentication agent and `pkexec` are used to authorize only the Python recovery service.
 * Node.js/npm for the Electron, React and TypeScript interface.
-The NTFS recovery pipeline is shared across platforms. Linux support uses sysfs for disk inventory and read-only positional I/O on `/dev` block devices. Initial Linux packaging for x64 is being prepared; validation on physical Linux systems is still required before a distributable release.
+The NTFS recovery pipeline is shared across platforms. Linux support uses sysfs for disk inventory and read-only positional I/O on `/dev` block devices. Linux x64 AppImage and Debian packaging is experimental; the build pipeline validates packages, but testing on physical Linux systems is still required before a distributable Linux release.
 
 ## Electron development UI
 

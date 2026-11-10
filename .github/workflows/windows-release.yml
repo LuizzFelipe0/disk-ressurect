@@ -126,11 +126,13 @@ jobs:
         with:
           name: Disk Ressurect ${{ github.ref_name }}
           body: |
-            Windows x64 test build.
+            Disk-Ressurect ${{ github.ref_name }} for Windows x64.
 
             - **Setup EXE** installs Disk Ressurect.
             - **Portable ZIP** contains the one-folder app; extract it and run `Disk-Ressurect.exe`.
             - **SHA256SUMS.txt** verifies the downloaded files.
+
+            Linux packages remain experimental and are not included in this Windows release. Physical-disk validation on Linux is still pending.
 
             Disk access requires Windows administrator permission. These executables are unsigned, so Windows may show a SmartScreen publisher warning.
           generate_release_notes: true
