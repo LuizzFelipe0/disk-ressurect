@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    branches:
+      - development
 
 permissions:
   contents: write
@@ -20,75 +23,93 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+        with:
+          path: projects/disk-ressurect
+
+      - name: Check out belagio-styles-lib
+        uses: actions/checkout@v6
+        with:
+          repository: LuizzFelipe0/belagio-styles-lib
+          ref: development
+          path: projects/belagio-solutions/belagio-styles-lib
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: projects/disk-ressurect/frontend/package-lock.json
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
+      - name: Install Belagio dependencies
+        run: npm ci
+        working-directory: projects/belagio-solutions/belagio-styles-lib
+
+      - name: Build Belagio library
+        run: npm run build
+        working-directory: projects/belagio-solutions/belagio-styles-lib
+
       - name: Install frontend dependencies
         run: npm ci
-        working-directory: frontend
+        working-directory: projects/disk-ressurect/frontend
 
       - name: Install Python packager
-        run: python -m pip install -r packaging/windows/requirements.txt
+        run: python -m pip install -r projects/disk-ressurect/packaging/backend/requirements.txt
 
       - name: Run backend unit tests
-        run: python -m unittest discover -s backend/src/tests -v
+        run: python -m unittest discover -s projects/disk-ressurect/backend/src/tests -v
 
       - name: Run frontend tests
         run: npm test
-        working-directory: frontend
+        working-directory: projects/disk-ressurect/frontend
 
       - name: Build frontend and Electron main process
         run: npm run build
-        working-directory: frontend
+        working-directory: projects/disk-ressurect/frontend
 
       - name: Package Python recovery service
-        run: python -m PyInstaller --noconfirm --clean --distpath dist/backend --workpath build/pyinstaller packaging/windows/DiskRessurect.spec
+        run: python -m PyInstaller --noconfirm --clean --distpath projects/disk-ressurect/dist/backend --workpath projects/disk-ressurect/build/pyinstaller projects/disk-ressurect/packaging/backend/DiskRessurect.spec
 
       - name: Package Windows installer
         run: npm run package:win
-        working-directory: frontend
+        working-directory: projects/disk-ressurect/frontend
 
       - name: Create portable package and checksums
         shell: pwsh
         run: |
-          $version = (Get-Content frontend/package.json -Raw | ConvertFrom-Json).version
+          $version = (Get-Content projects/disk-ressurect/frontend/package.json -Raw | ConvertFrom-Json).version
           $expectedTag = "^v$([regex]::Escape($version))(-.+)?$"
-          if ($env:GITHUB_REF_NAME -notmatch $expectedTag) { throw "Release tag must match package version $version (for example v$version or v$version-test)." }
-          $portablePath = "dist/DiskRessurect-$version-win-x64-portable.zip"
-          $installerPath = "dist/DiskRessurect-$version-win-x64-Setup.exe"
-          $appExecutable = "dist/win-unpacked/Disk Ressurect.exe"
+          if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME -notmatch $expectedTag) { throw "Release tag must match package version $version (for example v$version or v$version-test)." }
+          $portablePath = "projects/disk-ressurect/dist/DiskRessurect-$version-win-x64-portable.zip"
+          $installerPath = "projects/disk-ressurect/dist/DiskRessurect-$version-win-x64-Setup.exe"
+          $appExecutable = "projects/disk-ressurect/dist/win-unpacked/Disk Ressurect.exe"
           if (-not (Test-Path $installerPath)) { throw "Installer was not generated: $installerPath" }
           if (-not (Test-Path $appExecutable)) { throw "Portable application was not generated: $appExecutable" }
-          Compress-Archive -Path "dist/win-unpacked/*" -DestinationPath $portablePath -CompressionLevel Optimal
+          Compress-Archive -Path "projects/disk-ressurect/dist/win-unpacked/*" -DestinationPath $portablePath -CompressionLevel Optimal
           $assets = @($installerPath, $portablePath)
           $hashes = $assets | ForEach-Object {
             $hash = Get-FileHash -Algorithm SHA256 -LiteralPath $_
             "$($hash.Hash)  $([System.IO.Path]::GetFileName($_))"
           }
-          Set-Content -LiteralPath dist/SHA256SUMS.txt -Value $hashes -Encoding ascii
+          Set-Content -LiteralPath projects/disk-ressurect/dist/SHA256SUMS.txt -Value $hashes -Encoding ascii
 
       - name: Upload release files
         uses: actions/upload-artifact@v7
         with:
           name: windows-release-files
           path: |
-            dist/DiskRessurect-*-win-x64-Setup.exe
-            dist/DiskRessurect-*-win-x64-portable.zip
-            dist/SHA256SUMS.txt
+            projects/disk-ressurect/dist/DiskRessurect-*-win-x64-Setup.exe
+            projects/disk-ressurect/dist/DiskRessurect-*-win-x64-portable.zip
+            projects/disk-ressurect/dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 1
 
   publish:
+    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:

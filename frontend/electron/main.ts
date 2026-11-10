@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage } from "electron";
 import { spawn, spawnSync, ChildProcessWithoutNullStreams, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
+import { getAppIconPath as resolveAppIconPath, getBundledBackendPath } from "../src/utils/platformResources";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -39,11 +40,14 @@ class PythonBackend {
       ? path.join(this.projectRoot, "venv", "Scripts", "python.exe")
       : path.join(this.projectRoot, "venv", "bin", "python");
     this.executable = app.isPackaged
-      ? path.join(process.resourcesPath, "backend", "backend_orchestrator.exe")
+      ? getBundledBackendPath(process.platform, process.resourcesPath)
       : configuredPython || (existsSync(venvPython)
         ? venvPython
         : process.platform === "win32" ? "python" : "python3");
     this.dataDirectory = path.join(app.getPath("appData"), "Disk Ressurect");
+    if (process.platform === "linux" && process.getuid?.() !== 0) {
+      mkdirSync(this.dataDirectory, { recursive: true });
+    }
     this.elevated = process.platform === "linux" && process.getuid?.() === 0;
     this.start(this.executable, this.backendArguments, this.elevated);
   }
@@ -183,9 +187,7 @@ let mainWindow: BrowserWindow | null = null;
 let backend: PythonBackend;
 
 function getAppIconPath() {
-  return process.platform === "win32"
-    ? path.join(app.isPackaged ? process.resourcesPath : app.getAppPath(), "disk-ressurect.ico")
-    : path.join(app.getAppPath(), "src", "assets", "disk-ressurect-logo.png");
+  return resolveAppIconPath(process.platform, app.isPackaged, app.getAppPath(), process.resourcesPath);
 }
 
 function getAppIcon() {
