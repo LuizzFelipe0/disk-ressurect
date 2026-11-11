@@ -5,6 +5,7 @@ import type {
   CatalogInfo,
   CatalogNode,
   CatalogSearchResult,
+  FilePreview,
   DiskInfo,
   ProgressInfo,
   VolumeInfo,
@@ -34,6 +35,9 @@ export function useRecoveryController() {
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
   const [catalog, setCatalog] = useState<CatalogInfo | null>(null);
+  const [preview, setPreview] = useState<FilePreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const previewRequestId = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResult, setSearchResult] = useState<CatalogSearchResult | null>(null);
   const [searchingCatalog, setSearchingCatalog] = useState(false);
@@ -50,6 +54,9 @@ export function useRecoveryController() {
   const initialLoadStarted = useRef(false);
 
   const clearCatalog = useCallback(() => {
+    previewRequestId.current += 1;
+    setPreview(null);
+    setPreviewLoading(false);
     setCatalog(null);
     setSearchQuery("");
     setSearchResult(null);
@@ -337,6 +344,24 @@ export function useRecoveryController() {
     finally { setLoadingFolderIds((current) => { const next = new Set(current); next.delete(node.id); return next; }); }
   }, [childrenById, expandedFolderIds]);
 
+  const previewFile = useCallback(async (node: CatalogNode) => {
+    if (node.isDirectory) return;
+    const requestId = ++previewRequestId.current;
+    setPreviewLoading(true);
+    setPreview(null);
+    try {
+      const result = await recoveryService.previewFile(node.id);
+      if (previewRequestId.current === requestId) setPreview(result);
+    } catch (cause) {
+      if (previewRequestId.current === requestId) {
+        setPreview({ available: false, reason: "invalid_content" });
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (previewRequestId.current === requestId) setPreviewLoading(false);
+    }
+  }, []);
+
   const descendantsById = useMemo(() => {
     const descendants = new Map<string, string[]>();
     Object.entries(childrenById).forEach(([id, children]) => descendants.set(id, children.map((child) => child.id)));
@@ -395,6 +420,7 @@ export function useRecoveryController() {
     backendStatus, isAdministrator, busy, error, status, progress, disks, selectedDiskNumber, volumes,
     partitionScanCanResume,
     selectedVolumeId, catalog, childrenById, loadingFolderIds, expandedFolderIds,
+    preview, previewLoading, previewFile,
     selectedIds, availableExtensions, extensions, minimumSizeKb, outputDirectory,
     searchQuery, searchResult, searchingCatalog,
     refreshDisks, selectDisk, findPartitions, selectVolume, buildCatalog, toggleFolder,

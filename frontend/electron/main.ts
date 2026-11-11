@@ -339,6 +339,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("recovery:search-catalog", (_event, payload) => backend.request("search_catalog", payload));
   ipcMain.handle("recovery:list-file-types", () => backend.request("list_file_types", {}));
   ipcMain.handle("recovery:catalog-children", (_event, payload) => backend.request("catalog_children", payload));
+  ipcMain.handle("recovery:preview-file", (_event, payload) => backend.request("preview_file", payload));
   ipcMain.handle("recovery:extract", (_event, payload) => backend.request("extract", payload));
   ipcMain.handle("recovery:choose-output", async () => {
     const result = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });

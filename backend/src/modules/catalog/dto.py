@@ -30,6 +30,18 @@ class CatalogNodeRequestDto:
 
 
 @dataclass(frozen=True)
+class FilePreviewRequestDto:
+    node_id: str
+
+    @classmethod
+    def from_payload(cls, payload):
+        value = payload.get("nodeId")
+        if not isinstance(value, str) or not value:
+            raise ValueError("nodeId must be a non-empty string")
+        return cls(value)
+
+
+@dataclass(frozen=True)
 class CatalogSearchRequestDto:
     query: str
 

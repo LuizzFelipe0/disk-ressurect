@@ -1,4 +1,5 @@
 import React from "react";
+import { Button } from "belagio-styles-lib";
 import type { CatalogNode } from "../../types/recovery";
 import type { SiteLanguage } from "belagio-styles-lib";
 import { translate } from "../../i18n/translations";
@@ -12,6 +13,7 @@ import {
   TreeMeta,
   TreeName,
   TreeRow,
+  PreviewAction,
 } from "./style";
 
 export interface RecoveryTreeProps {
@@ -22,18 +24,20 @@ export interface RecoveryTreeProps {
   isSelected: (nodeId: string) => boolean;
   onToggleFolder: (node: CatalogNode) => void;
   onToggleSelection: (nodeId: string, checked: boolean) => void;
+  onPreview: (node: CatalogNode) => void;
   language?: SiteLanguage;
 }
 
 export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
   roots, childrenById, expandedFolderIds, loadingFolderIds, isSelected,
-  onToggleFolder, onToggleSelection, language = "en-US",
+  onToggleFolder, onToggleSelection, onPreview, language = "en-US",
 }) => {
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
   if (!roots.length) return <EmptyState title={t("noFiles")} icon="▱" />;
 
   const renderNode = (node: CatalogNode): React.ReactNode => (
     <li key={node.id}>
+      {/** Reserve the action column for every row so buttons line up vertically. */}
       <TreeRow>
         {node.isDirectory && node.hasChildren ? (
           <ExpandButton
@@ -53,6 +57,11 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
           <span aria-hidden="true">{node.isDirectory ? "▰" : "▱"}</span>
           {node.name}
         </TreeName>
+        <PreviewAction>
+          {!node.isDirectory && [".jpg", ".jpeg", ".png", ".pdf"].includes(node.name.slice(node.name.lastIndexOf(".")).toLowerCase()) && (
+            <Button className="brand-button--ghost" variant="ghost" size="sm" onClick={() => onPreview(node)} aria-label={`${t("previewFile")} ${node.name}`}>{t("previewFile")}</Button>
+          )}
+        </PreviewAction>
         <TreeMeta>{node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}</TreeMeta>
       </TreeRow>
       {loadingFolderIds.has(node.id) && <TreeLoading role="status">{t("loadingContents", { name: node.name })}</TreeLoading>}

@@ -1,4 +1,4 @@
-from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, VolumeSelectionRequestDto
+from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
 from modules.catalog.mapper import CatalogMapper
 from modules.commands.dto import CommandErrorDto, CommandRequestDto, CommandResultDto, ProgressEventDto
 from modules.commands.session import RecoverySession
@@ -77,6 +77,10 @@ class RecoveryCommandHandler:
                 CatalogMapper.node(child, ids_by_identity).to_dict()
                 for child in node.children
             ]
+        if operation == "preview_file":
+            request = FilePreviewRequestDto.from_payload(payload)
+            snapshot = self.session.require_snapshot()
+            return self.recovery_service.preview_file(snapshot, self.session.get_node(request.node_id))
         if operation == "extract":
             request = RecoveryRequestDto.from_payload(payload)
             snapshot = self.session.require_snapshot()

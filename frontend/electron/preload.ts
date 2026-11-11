@@ -9,6 +9,7 @@ const api: DesktopApi = {
   searchCatalog: (query) => ipcRenderer.invoke("recovery:search-catalog", { query }),
   listSupportedFileTypes: () => ipcRenderer.invoke("recovery:list-file-types"),
   getChildren: (nodeId) => ipcRenderer.invoke("recovery:catalog-children", { nodeId }),
+  previewFile: (nodeId) => ipcRenderer.invoke("recovery:preview-file", { nodeId }),
   recover: (options) => ipcRenderer.invoke("recovery:extract", options),
   chooseOutputDirectory: () => ipcRenderer.invoke("recovery:choose-output"),
   onProgress: (callback) => {

@@ -45,6 +45,16 @@ export interface CatalogSearchResult {
   results: CatalogNode[];
 }
 
+export interface FilePreview {
+  available: boolean;
+  reason?: "unsupported_format" | "too_large" | "invalid_content";
+  name?: string;
+  mimeType?: string;
+  kind?: "image" | "pdf";
+  sizeBytes?: number;
+  dataBase64?: string;
+}
+
 export interface ProgressInfo {
   stage: string;
   completed: number;
@@ -73,6 +83,7 @@ export interface DesktopApi {
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;
+  previewFile(nodeId: string): Promise<FilePreview>;
   recover(options: {
     selectedNodeIds: string[];
     excludedNodeIds: string[];

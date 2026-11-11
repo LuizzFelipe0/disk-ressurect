@@ -53,10 +53,21 @@ export const TreeName = styled.span`
 `;
 
 export const TreeMeta = styled.span`
-  margin-left: auto;
+  flex: 0 0 140px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
   color: ${brandColors.textTertiary};
   font-size: ${typography.sizeXs};
   white-space: nowrap;
+`;
+
+export const PreviewAction = styled.span`
+  display: flex;
+  flex: 0 0 96px;
+  width: 96px;
+  justify-content: center;
+  button { width: 84px; }
 `;
 
 export const ExpandButton = styled.button`

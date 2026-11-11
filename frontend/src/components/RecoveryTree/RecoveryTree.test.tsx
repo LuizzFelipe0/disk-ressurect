@@ -23,6 +23,7 @@ const makeProps = (overrides: Partial<ComponentProps<typeof RecoveryTree>> = {})
   isSelected: () => false,
   onToggleFolder: vi.fn(),
   onToggleSelection: vi.fn(),
+  onPreview: vi.fn(),
   ...overrides,
 });
 
@@ -56,6 +57,16 @@ describe("RecoveryTree", () => {
     expect(screen.getByText("2.0 KB")).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox", { name: "Select holiday.jpg" }));
     expect(onToggleSelection).toHaveBeenCalledWith(file.id, true);
+  });
+
+  it("opens an image preview without changing the recovery checkbox", () => {
+    const onPreview = vi.fn();
+    render(<RecoveryTree {...makeProps({ roots: [file], onPreview })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Preview holiday.jpg" }));
+
+    expect(onPreview).toHaveBeenCalledWith(file);
+    expect(screen.getByRole("checkbox", { name: "Select holiday.jpg" })).toBeTruthy();
   });
 
   it("labels deleted orphan records explicitly", () => {

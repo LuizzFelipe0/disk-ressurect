@@ -3,6 +3,7 @@ export type {
   CatalogInfo,
   CatalogNode,
   CatalogSearchResult,
+  FilePreview,
   DiskInfo,
   ProgressInfo,
   PrivilegeStatus,

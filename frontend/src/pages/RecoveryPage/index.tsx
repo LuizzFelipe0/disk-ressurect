@@ -34,6 +34,8 @@ import {
   FormControlCaption,
   MinimumSizeControl,
   OrphanScanControls,
+  PreviewBody,
+  PreviewPane,
 } from "./style";
 
 export const RecoveryPage: React.FC = () => {
@@ -156,9 +158,29 @@ export const RecoveryPage: React.FC = () => {
           isSelected={recovery.isSelected}
           onToggleFolder={(node) => void recovery.toggleFolder(node)}
           onToggleSelection={recovery.toggleSelection}
+          onPreview={(node) => void recovery.previewFile(node)}
           language={language}
         /> : <EmptyState>{searchActive ? t("noMatches") : t("noFiles")}</EmptyState>}
-      </BrowserSection></Card></BrowserFrame>
+      </BrowserSection></Card>
+      <PreviewPane>
+        <Card size="sm" variant="flat" hasHeader title={t("preview")}>
+        <PreviewBody aria-live="polite">
+          {recovery.previewLoading ? <p>{t("previewLoading")}</p>
+            : recovery.preview?.available && recovery.preview.kind === "image" && recovery.preview.dataBase64 ? <>
+              <h3>{sanitizeDisplayText(recovery.preview.name ?? "")}</h3>
+              <img alt={sanitizeDisplayText(recovery.preview.name ?? t("preview"))}
+                src={`data:${recovery.preview.mimeType};base64,${recovery.preview.dataBase64}`} />
+            </> : recovery.preview?.available && recovery.preview.kind === "pdf" && recovery.preview.dataBase64 ? <>
+              <h3>{sanitizeDisplayText(recovery.preview.name ?? "")}</h3>
+              <iframe title={sanitizeDisplayText(recovery.preview.name ?? t("preview"))}
+                src={`data:${recovery.preview.mimeType};base64,${recovery.preview.dataBase64}`} />
+            </> : recovery.preview?.reason === "unsupported_format" ? <p>{t("previewUnsupported")}</p>
+              : recovery.preview?.reason === "too_large" ? <p>{t("previewTooLarge")}</p>
+                : recovery.preview?.reason === "invalid_content" ? <p>{t("previewInvalid")}</p>
+                  : <p>{t("previewHint")}</p>}
+        </PreviewBody>
+        </Card>
+      </PreviewPane></BrowserFrame>
 
       <RecoveryStatusPanel
         status={translateStatus(recovery.status, language)}

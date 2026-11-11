@@ -3,12 +3,13 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useRecoveryController } from "./useRecoveryController";
 
-const { listDisks, listPartitions, scanCatalog, searchCatalog, listSupportedFileTypes, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
+const { listDisks, listPartitions, scanCatalog, searchCatalog, listSupportedFileTypes, previewFile, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
   listDisks: vi.fn(),
   listPartitions: vi.fn(),
   scanCatalog: vi.fn(),
   searchCatalog: vi.fn(),
   listSupportedFileTypes: vi.fn(),
+  previewFile: vi.fn(),
   onProgress: vi.fn(() => vi.fn()),
   getBackendStatus: vi.fn(),
   onBackendStatus: vi.fn(() => vi.fn()),
@@ -23,6 +24,7 @@ vi.mock("../services/recoveryService", () => ({
     scanCatalog,
     searchCatalog,
     listSupportedFileTypes,
+    previewFile,
     onProgress,
     getBackendStatus,
     onBackendStatus,
@@ -80,6 +82,20 @@ describe("useRecoveryController backend lifecycle", () => {
     await act(async () => { await result.current.buildCatalog(true); });
 
     expect(scanCatalog).toHaveBeenCalledWith("1:4096", true);
+  });
+
+  it("loads a preview for the chosen file and clears it when the source changes", async () => {
+    const file = { id: "n0", name: "photo.jpg", path: "photo.jpg", isDirectory: false, sizeBytes: 8, hasChildren: false };
+    previewFile.mockResolvedValue({ available: true, name: "photo.jpg", mimeType: "image/jpeg", kind: "image", sizeBytes: 8, dataBase64: "AA==" });
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+
+    await act(async () => { await result.current.previewFile(file); });
+
+    expect(previewFile).toHaveBeenCalledWith("n0");
+    expect(result.current.preview?.available).toBe(true);
+    act(() => result.current.selectVolume("1:4096"));
+    expect(result.current.preview).toBeNull();
   });
 
   it("restores saved deep-scan candidates when switching back to a disk", async () => {

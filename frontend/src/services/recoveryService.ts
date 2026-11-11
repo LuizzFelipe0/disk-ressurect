@@ -2,6 +2,7 @@ import type {
   CatalogInfo,
   CatalogNode,
   CatalogSearchResult,
+  FilePreview,
   BackendRuntimeStatus,
   DiskInfo,
   PrivilegeStatus,
@@ -25,6 +26,7 @@ export const recoveryService = {
   searchCatalog: (query: string): Promise<CatalogSearchResult> => getApi().searchCatalog(query),
   listSupportedFileTypes: (): Promise<string[]> => getApi().listSupportedFileTypes(),
   getChildren: (nodeId: string): Promise<CatalogNode[]> => getApi().getChildren(nodeId),
+  previewFile: (nodeId: string): Promise<FilePreview> => getApi().previewFile(nodeId),
   recover: (options: RecoveryOptions): Promise<RecoveryResult> => getApi().recover(options),
   chooseOutputDirectory: (): Promise<string | null> => getApi().chooseOutputDirectory(),
   onProgress: (callback: Parameters<Window["diskResurrect"]["onProgress"]>[0]) =>
