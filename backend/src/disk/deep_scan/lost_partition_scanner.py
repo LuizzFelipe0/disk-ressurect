@@ -17,7 +17,7 @@ class LostPartitionScanner:
     PRIORITY_TAIL_BYTES = 1024 * 1024 * 1024
 
     def __init__(self, disk, disk_number, chunk_size=DEFAULT_CHUNK_SIZE,
-                 priority_tail_bytes=PRIORITY_TAIL_BYTES):
+        priority_tail_bytes=PRIORITY_TAIL_BYTES):
         self.disk = disk
         self.disk_number = int(disk_number)
         self.chunk_source = DiskChunkSource(disk, chunk_size)
@@ -34,14 +34,14 @@ class LostPartitionScanner:
         )
 
     def scan(self, progress_callback=None, candidate_callback=None, checkpoint=None,
-             checkpoint_callback=None):
+        checkpoint_callback=None):
         return self.scan_ranges(
             self._scan_ranges(), progress_callback, candidate_callback,
             checkpoint, checkpoint_callback,
         )
 
     def scan_ranges(self, ranges, progress_callback=None, candidate_callback=None,
-                    checkpoint: ScanCheckpoint | None = None, checkpoint_callback=None):
+        checkpoint: ScanCheckpoint | None = None, checkpoint_callback=None):
         """Run the same discovery pipeline against selected byte ranges."""
         volumes_by_offset = {}
         overlap = len(NTFSBootSectorParser.SIGNATURE) + 3 - 1
