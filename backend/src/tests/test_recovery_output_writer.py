@@ -22,10 +22,11 @@ class RecoveryOutputWriterTests(unittest.TestCase):
         writer = RecoveryOutputWriter()
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as output_dir:
             with patch("ntfs.recovery_output_writer.ensure_pkexec_user_owned_directory") as ensure_directory:
-                destination, temporary_path = writer.prepare_target(output_dir, "nested/report.pdf")
+                destination, temporary_path, created_directories = writer.prepare_target(output_dir, "nested/report.pdf")
 
         self.assertEqual(destination, os.path.join(output_dir, "nested", "report.pdf"))
         self.assertEqual(temporary_path, destination + ".partial")
+        self.assertEqual(created_directories, (os.path.join(output_dir, "nested"),))
         ensure_directory.assert_called_once_with(os.path.join(output_dir, "nested"))
 
     def test_temporary_files_are_unique_and_owned_before_publishing(self):
