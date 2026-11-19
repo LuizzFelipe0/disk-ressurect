@@ -13,12 +13,12 @@ from ntfs.tree_builder import TreeBuilder
 
 
 def _resident_attribute(attribute_type, content):
-    length = 24 + len(content)
+    length = (24 + len(content) + 7) & ~7
     attribute = bytearray(length)
     struct.pack_into("<II", attribute, 0, attribute_type, length)
     struct.pack_into("<I", attribute, 16, len(content))
     struct.pack_into("<H", attribute, 20, 24)
-    attribute[24:] = content
+    attribute[24:24 + len(content)] = content
     return attribute
 
 
@@ -50,6 +50,7 @@ def make_record(name="photo.jpg", *, record_size=1024, allocated=False, payload=
         attributes += _resident_attribute(0x20, b"list")
     attributes += _resident_attribute(0x80, payload)
     attributes += struct.pack("<I", 0xFFFFFFFF)
+    attributes += bytes((-len(attributes)) % 8)
     raw[attr_offset:attr_offset + len(attributes)] = attributes
     struct.pack_into("<I", raw, 24, attr_offset + len(attributes))
     return bytes(raw)
@@ -60,18 +61,22 @@ def make_nonresident_record(name="unsafe.jpg", *, lcn=20, record_size=1024):
     attr_offset = struct.unpack_from("<H", raw, 20)[0]
     filename_length = struct.unpack_from("<I", raw, attr_offset + 4)[0]
     data_offset = attr_offset + filename_length
-    end_offset = data_offset + struct.unpack_from("<I", raw, data_offset + 4)[0]
     cluster_count = 1
     runlist = bytes((0x11, cluster_count, lcn, 0))
-    attribute = bytearray(64 + len(runlist))
+    attribute = bytearray((64 + len(runlist) + 7) & ~7)
     struct.pack_into("<II", attribute, 0, 0x80, len(attribute))
     attribute[8] = 1
     struct.pack_into("<H", attribute, 32, 64)
     struct.pack_into("<Q", attribute, 40, 512)
     struct.pack_into("<Q", attribute, 48, 512)
-    attribute[64:] = runlist
-    raw[data_offset:end_offset] = attribute + struct.pack("<I", 0xFFFFFFFF)
-    struct.pack_into("<I", raw, 24, data_offset + len(attribute) + 4)
+    attribute[64:64 + len(runlist)] = runlist
+    terminator_offset = data_offset + len(attribute)
+    bytes_in_use = terminator_offset + 4
+    bytes_in_use += (-bytes_in_use) % 8
+    raw[data_offset:terminator_offset] = attribute
+    raw[terminator_offset:terminator_offset + 4] = struct.pack("<I", 0xFFFFFFFF)
+    raw[terminator_offset + 4:bytes_in_use] = bytes(bytes_in_use - terminator_offset - 4)
+    struct.pack_into("<I", raw, 24, bytes_in_use)
     usa_offset = struct.unpack_from("<H", raw, 4)[0]
     usa_count = struct.unpack_from("<H", raw, 6)[0]
     sequence = raw[usa_offset:usa_offset + 2]
@@ -165,6 +170,22 @@ class GhostMFTCarverTests(unittest.TestCase):
             volume(), allowed_extensions={".jpg"},
         )
         self.assertEqual(records, {})
+
+    def test_ignores_empty_deleted_file_records(self):
+        disk = FakeDisk()
+        disk.data[2048:3072] = make_record("empty.jpg", payload=b"")
+
+        records = GhostMFTCarver(disk).hunt(volume(), allowed_extensions={".jpg"})
+
+        self.assertEqual(records, {})
+
+    def test_can_audit_complete_orphans_without_an_extension_filter(self):
+        disk = FakeDisk()
+        disk.data[2048:3072] = make_record("notes.txt")
+
+        records = GhostMFTCarver(disk).hunt(volume(), allowed_extensions=None)
+
+        self.assertEqual([record.name for record in records.values()], ["notes.txt"])
 
     def test_accepts_a_complete_nonresident_runlist_inside_the_selected_volume(self):
         disk = FakeDisk()
