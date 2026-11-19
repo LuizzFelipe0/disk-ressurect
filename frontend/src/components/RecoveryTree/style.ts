@@ -53,13 +53,14 @@ export const TreeName = styled.span`
 `;
 
 export const TreeMeta = styled.span`
-  flex: 0 0 140px;
-  overflow: hidden;
+  flex: 0 1 240px;
+  min-width: 0;
+  overflow: visible;
   text-align: right;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
   color: ${brandColors.textTertiary};
   font-size: ${typography.sizeXs};
-  white-space: nowrap;
+  white-space: normal;
 `;
 
 export const PreviewAction = styled.span`
