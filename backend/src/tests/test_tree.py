@@ -8,6 +8,48 @@ from ntfs.tree_builder import FileNode, TreeBuilder
 
 
 class TreeBuilderTests(unittest.TestCase):
+    def test_parent_sequence_mismatch_keeps_a_stale_reference_unlinked(self):
+        parent = FileNode(SimpleNamespace(
+            index=5, sequence_number=8, name="root", is_allocated=True, is_dir=True,
+        ))
+        child_record = SimpleNamespace(
+            index=42, sequence_number=1, parent_index=5, parent_sequence_number=7,
+            name="old.jpg", is_allocated=False, is_dir=False,
+            metadata_warnings=[], is_metadata_consistent=True,
+        )
+        child = FileNode(child_record)
+        builder = TreeBuilder(disk=None, fragments=[], base_offset=0)
+        builder.nodes = {5: parent, 42: child}
+
+        builder._link_nodes()
+
+        self.assertIsNone(child.parent)
+        self.assertNotIn(child, parent.children)
+        self.assertFalse(child_record.is_metadata_consistent)
+        self.assertIn(
+            "parent_sequence_number_does_not_match_parent_record",
+            child_record.metadata_warnings,
+        )
+
+    def test_parent_reference_to_a_file_is_reported_as_inconsistent(self):
+        parent = FileNode(SimpleNamespace(
+            index=5, sequence_number=8, name="document.pdf", is_allocated=True, is_dir=False,
+        ))
+        child_record = SimpleNamespace(
+            index=42, sequence_number=1, parent_index=5, parent_sequence_number=8,
+            name="child.jpg", is_allocated=False, is_dir=False,
+            metadata_warnings=[], is_metadata_consistent=True,
+        )
+        child = FileNode(child_record)
+        builder = TreeBuilder(disk=None, fragments=[], base_offset=0)
+        builder.nodes = {5: parent, 42: child}
+
+        builder._link_nodes()
+
+        self.assertIsNone(child.parent)
+        self.assertFalse(child_record.is_metadata_consistent)
+        self.assertIn("parent_reference_targets_non_directory", child_record.metadata_warnings)
+
     def test_resolves_paths_and_marks_deleted_files(self):
         root_record = SimpleNamespace(
             index=5,
@@ -40,7 +82,7 @@ class TreeBuilderTests(unittest.TestCase):
         current = root
         for index in range(1, 1_200):
             child = FileNode(SimpleNamespace(index=index, name=f"folder-{index}",
-                                             is_allocated=True, is_dir=True))
+                is_allocated=True, is_dir=True))
             current.children.append(child)
             child.parent = current
             current = child
@@ -69,6 +111,28 @@ class TreeBuilderTests(unittest.TestCase):
         self.assertIs(builder.root_nodes[0], first)
         self.assertTrue(first.full_path)
         self.assertTrue(second.full_path)
+
+    def test_reports_progress_while_checking_a_large_parent_chain(self):
+        nodes = {}
+        for index in range(9000):
+            node = FileNode(SimpleNamespace(index=index, name=f"node-{index}",
+                is_allocated=True, is_dir=True))
+            nodes[index] = node
+        for index in range(8999):
+            node = nodes[index]
+            node.parent = nodes[index + 1]
+            nodes[index + 1].children.append(node)
+
+        events = []
+        builder = TreeBuilder(disk=None, fragments=[], base_offset=0)
+        builder.nodes = nodes
+        builder._detach_parent_cycles(
+            lambda phase, completed, total: events.append((phase, completed, total)),
+        )
+
+        self.assertTrue(any(phase == "hierarchy" and completed == 4096
+            for phase, completed, _total in events))
+        self.assertEqual(events[-1], ("hierarchy", 9000, 9000))
 
 
 if __name__ == "__main__":
