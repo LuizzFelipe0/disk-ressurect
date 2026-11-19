@@ -10,8 +10,11 @@ Unlike basic file carvers that recover files without names, this engine reconstr
 
 * Virtual File System (VFS): Reads the $MFT and mounts the original folder structure in memory before extraction.
 * Deleted and orphaned MFT entries: The catalog includes deleted records in the mapped MFT. An opt-in scan searches outside those mapped fragments for deleted records with complete, supported file data.
+* NTFS recovery evidence: MFT record numbers and parent sequences are checked, orphan data runs are compared with `$Bitmap`, and known file-header mismatches are excluded from the orphan list.
+* Bounded content carving: When the selected-volume `$Bitmap` is valid, the opt-in workflow searches trusted free ranges for contiguous JPEG, PNG and PDF candidates. Separate low-confidence passes target orphan MFT data runs whose allocation bits were not observed or may describe reused data. Generated names and format checks do not prove that files are deleted or fully recoverable.
 * Smart Header Validation: Reads physical file signatures (magic numbers) during extraction to skip corrupted or overwritten files.
 * Lost-partition discovery: Searches physical media for validated NTFS structures when the partition table is missing.
+* Full-disk validation evidence: A read-only backend audit records disk identity, byte-range coverage, partition-table checks, filesystem signatures, and NTFS boot-sector, MFT mirror, deleted-record, and `$Bitmap` findings.
 * User-controlled selection: The recovery catalog exposes the original folder tree, and users choose both folders and supported file types. No folder names are excluded by default.
 
 ## Architecture
@@ -33,7 +36,7 @@ backend/src/
 │   ├── partition_table/# MBR, EBR and GPT parsing
 │   ├── ntfs_discovery/ # NTFS volume scanning and MFT-anchor resolution
 │   ├── scanning/       # Chunk sources, signatures and MFT-anchor scanning
-│   ├── deep_scan/      # Lost-partition search and deleted orphan-MFT carving
+│   ├── deep_scan/      # Lost-partition search, orphan-MFT and bounded content carving
 │   ├── safety/         # Keep recovery output off the source disk
 │   ├── models.py       # PhysicalDisk, PartitionEntry and NTFSVolume
 │   └── inventory.py    # DiskInventory composition facade
@@ -44,7 +47,7 @@ backend/src/
 
 Each feature module owns its use-case service and the contracts/models specific to that feature. `RecoveryCommandHandler` maps validated command DTOs to those services and returns stable response DTOs. Repository interfaces are used for persistence; physical sector access is represented by replaceable disk-reader ports, not by a CRUD repository abstraction. The entry point only composes production dependencies and adapts JSON lines to commands.
 
-The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. The catalog can opt in to carving deleted orphan records outside the currently mapped MFT fragments.
+The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. The catalog can reuse audited orphan records and perform separate bounded scans of trusted `$Bitmap`-free ranges and low-confidence orphan data runs.
 
 * frontend/src/ (React client): Contains typed domain contracts, services, hooks, reusable styled-components and page composition.
 * frontend/electron/ (Desktop shell): Owns Electron main/preload processes and the context-isolated IPC contract.
@@ -56,9 +59,25 @@ Frontend pages and components each live in a folder named after the unit. Keep t
 
 `TreeBuilder` creates the in-memory folder/file catalog and keeps parent/child links on each `FileNode`. `RecoveryCatalog` applies file type and minimum-size rules, while the React client lazily loads folder children and sends hierarchical selections to the Python adapter. `CatalogService` builds the catalog and `RecoveryWorkflow` extracts selected files; JSON-line progress events keep the interface responsive while disk operations run in the Python child process.
 
-Deleted records inside the mapped MFT fragments already appear in the normal catalog. The optional **Search for deleted MFT entries outside the catalog** setting carves the gaps between those fragments across the selected partition. It retains only USA-validated deleted file records with a supported extension and complete resident data or a complete non-resident runlist contained within the selected volume. Exact record copies are deduplicated. Orphans appear with an explicit status under `Lost_Files_DeepScan`; their original parent paths are not reconstructed from untrusted references. This scan reads areas outside the mapped MFT fragments and can take a long time. The source stays read-only, but overwritten records and records with incomplete data cannot be recovered.
+Deleted records inside the mapped MFT fragments already appear in the normal catalog. The optional **Search for deleted files missing from the list** setting audits the physical disk, validates NTFS metadata and searches gaps outside the mapped MFT fragments. It retains USA-validated deleted file records with consistent metadata, a supported extension and complete resident data or a complete in-volume runlist. Candidate headers are checked with bounded reads; known signature mismatches are filtered, while unknown content remains labeled as unverified. `$Bitmap` evidence reports whether each candidate's data clusters are free, allocated, mixed or unknown; allocated bits indicate possible reuse and do not automatically reject a candidate.
+
+The same opt-in workflow scans up to 1 GiB of ranges proved free by a complete, valid `$Bitmap` for contiguous JPEG, PNG and PDF candidates. The `$Bitmap` file's own runs and allocation bits are checked before those free ranges are trusted. Candidates use generated names under `Lost_Files_DeepScan/ContentCarving` because original names and paths are unavailable. JPEG marker/frame/scan structure is checked but image entropy is not decoded. PNG chunks and CRCs are checked and the IDAT stream is bounded-decompressed to the expected scanline length, but pixels are not rendered. PDFs require a parseable classic xref table and trailer; xref streams are not currently accepted. The trusted-free scan is bounded to 32 MiB per file, 128 MiB retained content, 256 files, 768 MiB total candidate reads and 256 MiB candidate reads per format. A 64 MiB PNG decompressed-output cap also applies. Per-format and aggregate limit flags are reported separately.
+
+Two additional passes target only locatable in-volume data runs named by orphan MFT records: `bitmap_unobserved` tails beyond the observed `$Bitmap` prefix, and `possibly_reused` runs containing allocated bits. These results are kept separately under `Lost_Files_DeepScan/LowConfidence/BitmapUnobserved` and `.../PossiblyReused`. They may refer to current or reused file content and are not marked as confirmed deleted. Each tier retains at most 128 MiB and 4,096 ranges, scans at most 128 MiB, reads at most 48 MiB of candidate data (16 MiB per format), retains at most 32 MiB across 64 files and limits an individual file to 16 MiB. Lower-confidence duplicates are omitted when a higher-confidence candidate with the same offset or content was already added. All carving is additional bounded I/O after the disk audit; it cannot restore overwritten data, reconstruct fragmentation or prove that a candidate will decode in its target application. The source remains read-only.
 
 The output directory is checked against the source physical disk before recovery starts. Extraction results carry a status and reason per file. Incomplete disk reads and MFT data extents are not counted as successful recoveries.
+
+## Full-disk validation
+
+The JSON-lines backend exposes a `validate_disk` operation for a selected physical disk:
+
+```json
+{"id":"audit-1","operation":"validate_disk","payload":{"diskNumber":0}}
+```
+
+This operation reads the addressable disk sequentially, tracks uniquely covered byte intervals and read errors, checks MBR and primary/backup GPT structures, looks for NTFS boot sectors across the full disk, and reports FAT/exFAT boot-signature candidates for follow-up. For validated NTFS volumes it compares primary and backup boot sectors, compares the first MFT records with `$MFTMirr`, counts allocated/deleted and structurally inconsistent MFT records, checks `$Bitmap` size and allocation bits for MFT, mirror and bitmap-storage clusters, and reports per-orphan data-cluster allocation evidence. During catalog creation, the selected-volume orphan records, bitmap-derived free ranges and locatable uncertain orphan runs are passed forward for separate bounded carving tiers, avoiding a repeat of the full audit or selected-volume orphan scan.
+
+The response's `coverageStatus` is `incomplete` when any bytes could not be read or a read failed. `assessment` remains `inconclusive` when coverage is incomplete, a partition/filesystem is unsupported or unvalidated, NTFS metadata checks fail, or recoverable deleted records are found. A complete read is evidence only; it does not prove that the disk is empty or contains no recoverable files. FAT/exFAT signatures are candidates only and are not yet fully parsed. The operation can take hours and performs additional reads during metadata checks; keep the source read-only and use a separate destination disk for any recovery.
 
 ## Prerequisites
 
@@ -108,7 +127,7 @@ Users select a physical source disk, discover its NTFS partitions, choose an out
 
 Validated candidates found during deep scans are checkpointed to `deep_scan_cache.json` under Electron's per-user `userData` directory. Cache entries are keyed by disk model, capacity and serial number (or disk number when no serial is available), so candidates are restored only for the matching source disk. A scan interruption keeps already discovered candidates; completed scans replace the old candidate set. Selecting the same disk after reopening the app restores those candidates without rerunning the scan.
 
-Keep the output destination on a different physical disk from the source. A lost partition cannot be reconstructed if its NTFS boot sectors and MFT metadata have both been overwritten. This is a test build: validate on disposable images or duplicate media before relying on it for important recovery work.
+Keep the output destination on a different physical disk from the source. A lost partition cannot be reconstructed if its NTFS boot sectors and MFT metadata have both been overwritten. When **Search for deleted files missing from the list** is enabled, building the catalog audits the selected disk, reuses its selected-volume orphan scan and tries the bounded trusted-free and low-confidence carving tiers described above. The UI shows audit coverage, read errors, MFT counts, orphan cluster-allocation evidence, per-format carving counts and any reached limits. The process can take hours, and even complete coverage or structurally valid carving candidates are evidence only; they do not prove successful recovery or that a disk is empty. This is a test build: validate on disposable images or duplicate media before relying on it for important recovery work.
 
 ## Tests
 
