@@ -2,7 +2,7 @@ from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, 
 from modules.catalog.mapper import CatalogMapper
 from modules.commands.dto import CommandErrorDto, CommandRequestDto, CommandResultDto, ProgressEventDto
 from modules.commands.session import RecoverySession
-from modules.disk_discovery.dto import PartitionScanRequestDto
+from modules.disk_discovery.dto import DiskValidationRequestDto, PartitionScanRequestDto
 from modules.disk_discovery.mapper import DiskDiscoveryMapper
 from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto, RecoveryResultDto
@@ -49,17 +49,83 @@ class RecoveryCommandHandler:
                 ).to_dict()
                 for volume in volumes
             ]
+        if operation == "validate_disk":
+            request = DiskValidationRequestDto.from_payload(payload)
+            report = self.disk_discovery.validate_disk(
+                request.disk_number,
+                self._validation_progress(emit),
+            )
+            return DiskDiscoveryMapper.validation(report).to_dict()
         if operation == "scan_catalog":
             request = VolumeSelectionRequestDto.from_payload(payload)
             volume = self.session.get_volume(request.volume_id)
             progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)
+            validation_summary = None
+            precomputed_orphans = None
+            precomputed_carving_ranges = None
+            carving_ranges_truncated = False
+            precomputed_uncertain_carving_ranges = None
+            uncertain_carving_ranges_truncated = None
+            if request.include_orphaned:
+                try:
+                    report = self.disk_discovery.validate_disk(
+                        volume.disk_number,
+                        self._validation_progress(emit),
+                        retain_orphans_for_offset=int(volume.partition_offset),
+                        orphan_scan_volume=volume,
+                    )
+                    validation_summary = self._validation_summary(
+                        DiskDiscoveryMapper.validation(report).to_dict(),
+                    )
+                    partition_offset = int(volume.partition_offset)
+                    precomputed_orphans = report.get("orphan_records_by_partition", {}).get(partition_offset)
+                    precomputed_carving_ranges = report.get(
+                        "content_carving_ranges_by_partition", {},
+                    ).get(partition_offset)
+                    carving_ranges_truncated = report.get(
+                        "content_carving_ranges_truncated_by_partition", {},
+                    ).get(partition_offset, False)
+                    precomputed_uncertain_carving_ranges = report.get(
+                        "uncertain_content_carving_ranges_by_partition", {},
+                    ).get(partition_offset)
+                    uncertain_carving_ranges_truncated = report.get(
+                        "uncertain_content_carving_ranges_truncated_by_partition", {},
+                    ).get(partition_offset)
+                except Exception as exc:
+                    validation_summary = {
+                        "coverageStatus": "unavailable",
+                        "assessment": "inconclusive",
+                        "bytesRead": 0,
+                        "sizeBytes": 0,
+                        "readErrorCount": 0,
+                        "partitionCount": 0,
+                        "ntfsVolumeCount": 0,
+                        "deletedMftRecordCount": 0,
+                        "orphanedFileRecordCount": 0,
+                        "unsupportedFilesystems": [],
+                        "validationError": f"{type(exc).__name__}: {exc}",
+                    }
             snapshot = (
-                self.catalog_service.build(volume, progress_callback, include_orphaned=True)
+                self.catalog_service.build(
+                    volume,
+                    progress_callback,
+                    include_orphaned=True,
+                    precomputed_orphans=precomputed_orphans,
+                    precomputed_carving_ranges=precomputed_carving_ranges,
+                    carving_ranges_truncated=carving_ranges_truncated,
+                    precomputed_uncertain_carving_ranges=precomputed_uncertain_carving_ranges,
+                    uncertain_carving_ranges_truncated=uncertain_carving_ranges_truncated,
+                    phase_callback=self._catalog_phase_progress(emit),
+                )
                 if request.include_orphaned
-                else self.catalog_service.build(volume, progress_callback)
+                else self.catalog_service.build(
+                    volume,
+                    progress_callback,
+                    phase_callback=self._catalog_phase_progress(emit),
+                )
             )
             ids_by_identity = self.session.set_catalog(snapshot)
-            return CatalogMapper.catalog(snapshot, ids_by_identity).to_dict()
+            return CatalogMapper.catalog(snapshot, ids_by_identity, validation_summary).to_dict()
         if operation == "search_catalog":
             request = CatalogSearchRequestDto.from_payload(payload)
             snapshot = self.session.require_snapshot()
@@ -114,6 +180,12 @@ class RecoveryCommandHandler:
         return report
 
     @staticmethod
+    def _validation_progress(emit):
+        def report(completed, total, message):
+            emit(ProgressEventDto("disk-validation", completed, total, message).to_dict())
+        return report
+
+    @staticmethod
     def _catalog_progress(emit, include_orphaned=False):
         message = (
             "Reading MFT metadata and searching for orphaned entries…"
@@ -123,3 +195,62 @@ class RecoveryCommandHandler:
         def report(completed, total):
             emit(ProgressEventDto("catalog", completed, total, message).to_dict())
         return report
+
+    @staticmethod
+    def _catalog_phase_progress(emit):
+        phase_messages = {
+            "linking": "Organizing file and folder records…",
+            "hierarchy": "Checking folder links…",
+            "paths": "Building file paths…",
+            "orphans": "Searching unused volume areas for deleted MFT records…",
+            "content_carving": "Searching trusted free space for validated file candidates…",
+            "content_carving_unobserved": "Searching ranges with unobserved allocation bitmap for file candidates…",
+            "content_carving_reused": "Searching possibly reused data ranges for file candidates…",
+        }
+
+        def report(phase, completed, total):
+            emit(ProgressEventDto(
+                "catalog",
+                completed,
+                total,
+                phase_messages.get(phase, "Building the recovery catalog…"),
+            ).to_dict())
+        return report
+
+    @staticmethod
+    def _validation_summary(report):
+        ntfs_checks = report.get("ntfsChecks", [])
+        return {
+            "coverageStatus": report["coverageStatus"],
+            "assessment": report["assessment"],
+            "bytesRead": report["bytesRead"],
+            "sizeBytes": report["sizeBytes"],
+            "readErrorCount": len(report.get("readErrors", [])),
+            "partitionCount": len(report.get("partitions", [])),
+            "ntfsVolumeCount": len(ntfs_checks),
+            "deletedMftRecordCount": sum(
+                int(item.get("mftRecords", {}).get("deleted", 0)) for item in ntfs_checks
+            ),
+            "orphanedFileRecordCount": sum(
+                int(item.get("orphanedFileRecordCount", 0)) for item in ntfs_checks
+            ),
+            "inconsistentMftRecordCount": sum(
+                int(item.get("mftRecords", {}).get("metadataInconsistent", 0))
+                for item in ntfs_checks
+            ),
+            "orphanRecordsByAllocationStatus": RecoveryCommandHandler._orphan_record_allocation_counts(ntfs_checks),
+            "unsupportedFilesystems": list(report.get("unsupportedFilesystems", [])),
+        }
+
+    @staticmethod
+    def _orphan_record_allocation_counts(ntfs_checks):
+        counts = {"free": 0, "allocated": 0, "mixed": 0, "unknown": 0}
+        for check in ntfs_checks:
+            evidence = check.get("bitmapAllocation", {}).get("orphanDataAllocation", [])
+            for item in evidence:
+                status = item.get("status")
+                if status in ("partially_observed", "unavailable", "no_non_sparse_runs"):
+                    counts["unknown"] += 1
+                elif status in counts:
+                    counts[status] += 1
+        return counts
