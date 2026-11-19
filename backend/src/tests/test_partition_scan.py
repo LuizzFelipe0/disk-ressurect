@@ -55,8 +55,8 @@ class PartitionScanPipeTests(unittest.TestCase):
         chunks = list(source(ranges, lambda done, total, message: events.append((done, total, message))))
 
         self.assertEqual([(chunk.offset, len(chunk.data)) for chunk in chunks],
-                         [(4096, 1024), (5120, 1024), (0, 1024), (1024, 1024),
-                          (2048, 1024), (3072, 1024)])
+            [(4096, 1024), (5120, 1024), (0, 1024), (1024, 1024),
+                (2048, 1024), (3072, 1024)])
         self.assertEqual(events[-1][0:2], (6144, 6144))
         self.assertTrue(events[0][2].startswith("tail"))
         self.assertIn("tail | 1,024/6,144 bytes", events[0][2])

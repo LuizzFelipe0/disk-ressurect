@@ -62,7 +62,18 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
             <Button className="brand-button--ghost" variant="ghost" size="sm" onClick={() => onPreview(node)} aria-label={`${t("previewFile")} ${node.name}`}>{t("previewFile")}</Button>
           )}
         </PreviewAction>
-        <TreeMeta>{node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}</TreeMeta>
+        <TreeMeta>
+          {node.isContentCarved ? t("contentCarved") : node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}
+          {node.contentValidation === "signature_match" && ` · ${t("signatureMatch")}`}
+          {node.contentValidation === "unavailable" && ` · ${t("signatureUnavailable")}`}
+          {node.metadataConsistent === false && ` · ${t("metadataWarning")}`}
+          {node.clusterAllocationStatus === "free" && ` · ${t("bitmapFree")}`}
+          {node.clusterAllocationStatus === "allocated" && ` · ${t("bitmapAllocated")}`}
+          {node.clusterAllocationStatus === "mixed" && ` · ${t("bitmapMixed")}`}
+          {((node.clusterAllocationStatus === "partially_observed") || (node.clusterAllocationStatus === "unavailable")) && ` · ${t("bitmapUnknown")}`}
+          {node.clusterAllocationStatus === "bitmap_unobserved" && ` · ${t("bitmapUnobserved")}`}
+          {node.clusterAllocationStatus === "possibly_reused" && ` · ${t("possiblyReused")}`}
+        </TreeMeta>
       </TreeRow>
       {loadingFolderIds.has(node.id) && <TreeLoading role="status">{t("loadingContents", { name: node.name })}</TreeLoading>}
       {expandedFolderIds.has(node.id) && (childrenById[node.id] ?? []).length > 0 && (

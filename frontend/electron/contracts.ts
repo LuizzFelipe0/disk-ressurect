@@ -30,14 +30,78 @@ export interface CatalogNode {
   ancestorIds?: string[];
   isDeleted?: boolean;
   isOrphaned?: boolean;
+  isContentCarved?: boolean;
+  contentValidation?: "signature_match" | "signature_mismatch" | "format_structure_match" | "unavailable" | "incomplete_metadata" | "invalid_size" | "unsupported";
+  clusterAllocationStatus?: "free" | "allocated" | "mixed" | "partially_observed" | "unavailable" | "no_non_sparse_runs" | "bitmap_unobserved" | "possibly_reused";
+  metadataConsistent?: boolean;
+}
+
+export interface ContentCarvingSummary {
+  filesFound: number;
+  bytesScanned: number;
+  scanLimitReached: boolean;
+  candidateBytesRead: number;
+  candidateLimitReached: boolean;
+  fileCountLimitReached: boolean;
+  retainedBytesLimitReached: boolean;
+  rangeCount: number;
+  rangeCollectionTruncated: boolean;
+  filesFoundByExtension?: Record<string, number>;
+  candidatesExaminedByExtension?: Record<string, number>;
+  candidateBytesReadByExtension?: Record<string, number>;
+  candidateLimitReachedByExtension?: Record<string, boolean>;
+  fileSizeLimitReachedByExtension?: Record<string, boolean>;
+  decodedDataLimitReachedByExtension?: Record<string, boolean>;
+  candidateReadCapBytes?: number;
+  candidateReadCapBytesPerFormat?: number;
+  maxFileBytes?: number;
+  maxDecodedPngBytes?: number;
+  scanByteCap?: number;
+  retainedBytesCap?: number;
+  fileCountCap?: number;
+  rangeBytesRetained?: number;
+  rangeCollectionCapBytes?: number;
+  formatsAttempted?: string[];
+  validationScope?: string;
+}
+
+export interface LowConfidenceCarvingTier extends ContentCarvingSummary {
+  confidence: string;
+  allocationStatus: "bitmap_unobserved" | "possibly_reused";
+  catalogItemsAdded: number;
+}
+
+export interface LowConfidenceCarvingSummary {
+  bitmapUnobserved: LowConfidenceCarvingTier;
+  possiblyReused: LowConfidenceCarvingTier;
 }
 
 export interface CatalogInfo {
   recordCount: number;
   orphanedRecordCount?: number;
+  contentCarvedCount?: number;
   orphanScanPerformed?: boolean;
+  diskValidation?: DiskValidationSummary;
+  contentCarving?: ContentCarvingSummary;
+  lowConfidenceCarving?: LowConfidenceCarvingSummary;
   availableExtensions: string[];
   roots: CatalogNode[];
+}
+
+export interface DiskValidationSummary {
+  coverageStatus: "complete" | "incomplete" | "unavailable";
+  assessment: "evidence_collected" | "inconclusive";
+  bytesRead: number;
+  sizeBytes: number;
+  readErrorCount: number;
+  partitionCount: number;
+  ntfsVolumeCount: number;
+  deletedMftRecordCount: number;
+  orphanedFileRecordCount: number;
+  inconsistentMftRecordCount?: number;
+  orphanRecordsByAllocationStatus?: { free: number; allocated: number; mixed: number; unknown: number };
+  unsupportedFilesystems: string[];
+  validationError?: string;
 }
 
 export interface CatalogSearchResult {

@@ -164,10 +164,25 @@ export const BrowserHeading = styled.div`
   p { margin: 5px 0 0; color: ${brandColors.textTertiary}; font-size: 11px; }
 `;
 
+export const ValidationNotice = styled.p<{ $inconclusive: boolean }>`
+  margin: 7px 0 0;
+  color: ${({ $inconclusive }) => $inconclusive ? brandColors.warning : brandColors.textSecondary};
+  font-size: 11px;
+  line-height: 1.45;
+`;
+
 export const SelectionSummary = styled.span`
-  margin-left: auto;
   color: ${brandColors.textSecondary};
   font-size: 11px;
+`;
+
+export const AuditActions = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
 `;
 
 export const ActionRow = styled.div`

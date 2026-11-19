@@ -74,7 +74,19 @@ describe("useRecoveryController backend lifecycle", () => {
   });
 
   it("passes the opt-in orphan scan flag to the catalog service", async () => {
-    scanCatalog.mockResolvedValue({ recordCount: 1, availableExtensions: [".jpg"], roots: [] });
+    const diskValidation = {
+      coverageStatus: "complete" as const,
+      assessment: "inconclusive" as const,
+      bytesRead: 100,
+      sizeBytes: 100,
+      readErrorCount: 0,
+      partitionCount: 1,
+      ntfsVolumeCount: 1,
+      deletedMftRecordCount: 2,
+      orphanedFileRecordCount: 1,
+      unsupportedFilesystems: [],
+    };
+    scanCatalog.mockResolvedValue({ recordCount: 1, availableExtensions: [".jpg"], roots: [], diskValidation });
     const { result } = renderHook(() => useRecoveryController());
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
@@ -82,6 +94,7 @@ describe("useRecoveryController backend lifecycle", () => {
     await act(async () => { await result.current.buildCatalog(true); });
 
     expect(scanCatalog).toHaveBeenCalledWith("1:4096", true);
+    expect(result.current.catalog?.diskValidation).toEqual(diskValidation);
   });
 
   it("loads a preview for the chosen file and clears it when the source changes", async () => {

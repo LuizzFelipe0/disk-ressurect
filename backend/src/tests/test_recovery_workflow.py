@@ -102,6 +102,37 @@ class RecoveryWorkflowTests(unittest.TestCase):
         self.assertEqual(progress[0].stage, "extract")
         self.assertEqual(progress[0].completed, 1)
 
+    def test_failed_orphan_recovery_does_not_leave_empty_record_directories(self):
+        content = b"not a JPEG"
+        record = SimpleNamespace(
+            index=-2049,
+            sequence_number=1,
+            name="[DELETED]_photo.jpg",
+            is_dir=False,
+            is_allocated=False,
+            file_size=len(content),
+            resident_data=content,
+            data_runs=[],
+            data_is_complete=True,
+        )
+        orphan_path = os.path.join("Lost_Files_DeepScan", "0000000000000800", record.name)
+        node = SimpleNamespace(record=record, full_path=orphan_path, parent=None, children=[])
+        catalog = RecoveryCatalog({record.index: node}, [node])
+        volume = NTFSVolume(2, 1, 0, 1024 * 1024, 512, 4096, 1024, 8192, 1024,
+                            ((8192, 1, 0),))
+        snapshot = RecoveryCatalogSnapshot(catalog, volume)
+        workflow = RecoveryWorkflow(
+            disk_factory=lambda disk_number: FakeDisk(disk_number),
+            output_guard=FakeOutputGuard(),
+        )
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
+        with tempfile.TemporaryDirectory(dir=repo_root) as output_directory:
+            summary = workflow.extract_selection(snapshot, [node], output_directory, {".jpg"})
+
+            self.assertEqual(summary.results[0].status, "signature_mismatch")
+            self.assertEqual(os.listdir(output_directory), [])
+
 
 if __name__ == "__main__":
     unittest.main()

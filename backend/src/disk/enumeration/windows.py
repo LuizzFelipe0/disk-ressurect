@@ -44,5 +44,5 @@ class WindowsDiskEnumerator:
             if number < 0 or size <= 0:
                 continue
             disks.append(PhysicalDisk(number, str(item.get("model") or "Unknown disk").strip(), size,
-                                      str(item.get("serial") or "").strip()))
+                str(item.get("serial") or "").strip()))
         return sorted(disks, key=lambda disk: disk.number)

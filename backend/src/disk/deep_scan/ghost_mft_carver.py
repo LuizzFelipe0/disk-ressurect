@@ -24,9 +24,10 @@ class GhostMFTCarver:
         self,
         volume: NTFSVolume,
         *,
-        allowed_extensions: Iterable[str],
+        allowed_extensions: Iterable[str] | None,
         existing_records: Iterable[MFTRecord] = (),
         progress_callback: ProgressCallback | None = None,
+        phase_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[int, MFTRecord]:
         start = int(volume.partition_offset)
         end = start + int(volume.partition_size)
@@ -43,7 +44,9 @@ class GhostMFTCarver:
 
         ranges = self._unmapped_ranges(volume, start, end, record_size, record_alignment)
         total_bytes = sum(range_end - range_start for range_start, range_end in ranges)
-        extensions = {str(value).casefold() for value in allowed_extensions}
+        extensions = None if allowed_extensions is None else {
+            str(value).casefold() for value in allowed_extensions
+        }
         known_records = {
             bytes(record.raw_data)
             for record in existing_records
@@ -52,6 +55,8 @@ class GhostMFTCarver:
         found_records: dict[int, MFTRecord] = {}
         found_fingerprints = set(known_records)
         completed_bytes = 0
+        if phase_callback is not None:
+            phase_callback("orphans", 0, total_bytes)
 
         for range_start, range_end in ranges:
             carry = b""
@@ -87,8 +92,14 @@ class GhostMFTCarver:
                 completed_bytes += request_size
                 if progress_callback is not None:
                     progress_callback(completed_bytes, total_bytes)
+                if phase_callback is not None:
+                    phase_callback("orphans", completed_bytes, total_bytes)
 
         return found_records
+
+    def stream(self, volume: NTFSVolume, *, allowed_extensions=None):
+        """Create a collector that carves MFT records from an existing disk read."""
+        return _GhostMFTStream(self, volume, allowed_extensions)
 
     @staticmethod
     def _unmapped_ranges(volume, volume_start, volume_end, record_size, alignment):
@@ -161,12 +172,13 @@ class GhostMFTCarver:
 
     @staticmethod
     def _is_recoverable(record, extensions, cluster_size, volume_start, volume_end):
-        if (not record.is_valid or record.is_allocated or record.is_dir
-                or not record.name or not record.data_is_complete):
+        if (not record.is_valid or not getattr(record, "is_metadata_consistent", True)
+                or record.is_allocated or record.is_dir
+                or not record.name or not record.data_is_complete or int(record.file_size) <= 0):
             return False
         if any(ord(character) < 32 for character in record.name):
             return False
-        if os.path.splitext(record.name)[1].casefold() not in extensions:
+        if extensions is not None and os.path.splitext(record.name)[1].casefold() not in extensions:
             return False
 
         if record.resident_data is not None:
@@ -185,3 +197,80 @@ class GhostMFTCarver:
                 if run_start < volume_start or run_start + run_capacity > volume_end:
                     return False
         return total_capacity >= int(record.file_size)
+
+
+class _GhostMFTStream:
+    """Consumes sequential read blocks without issuing another disk read."""
+
+    def __init__(self, carver, volume, allowed_extensions):
+        self.carver = carver
+        self.start = int(volume.partition_offset)
+        self.end = self.start + int(volume.partition_size)
+        self.record_size = int(volume.record_size)
+        self.alignment = 512
+        self.cluster_size = int(volume.cluster_size)
+        if (self.start < 0 or self.end <= self.start or self.end > int(carver.disk.size)
+                or self.record_size < self.alignment or self.record_size % self.alignment
+                or self.cluster_size <= 0):
+            raise ValueError("Invalid volume bounds or NTFS record geometry for orphan MFT scan")
+        self.ranges = carver._unmapped_ranges(
+            volume, self.start, self.end, self.record_size, self.alignment,
+        )
+        self.extensions = None if allowed_extensions is None else {
+            str(value).casefold() for value in allowed_extensions
+        }
+        self.fingerprints = set()
+        self.records = {}
+        self._range_index = 0
+        self._carry = b""
+        self._last_end = None
+        self._last_consumed_end = None
+
+    def feed(self, offset, data):
+        """Consume one successfully read physical-disk segment in order."""
+        offset = int(offset)
+        data = bytes(data)
+        if not data:
+            return
+        if self._last_end is not None and offset != self._last_end:
+            self._carry = b""
+        self._last_end = offset + len(data)
+        segment_end = offset + len(data)
+        while self._range_index < len(self.ranges):
+            range_start, range_end = self.ranges[self._range_index]
+            if range_end <= offset:
+                self._range_index += 1
+                self._carry = b""
+                continue
+            if range_start >= segment_end:
+                break
+            overlap_start = max(offset, range_start)
+            overlap_end = min(segment_end, range_end)
+            if overlap_start != offset or (
+                    self._carry and overlap_start != self._last_consumed_end):
+                self._carry = b""
+            chunk = data[overlap_start - offset:overlap_end - offset]
+            combined = self._carry + chunk
+            buffer_start = overlap_start - len(self._carry)
+            self.carver._collect_records(
+                combined, buffer_start, range_start, range_end, self.start,
+                self.record_size, self.alignment, self.cluster_size, self.end,
+                self.extensions, self.fingerprints, self.records,
+            )
+            carry_size = min(self.record_size - 1, len(combined))
+            self._carry = combined[-carry_size:] if carry_size else b""
+            self._last_consumed_end = overlap_end
+            if overlap_end >= range_end:
+                self._range_index += 1
+                self._carry = b""
+            if overlap_end >= segment_end:
+                break
+
+    def gap(self, offset, size):
+        """Break signature carry across an unreadable range."""
+        if size > 0:
+            self._carry = b""
+            self._last_end = int(offset) + int(size)
+
+    def finish(self):
+        return self.records

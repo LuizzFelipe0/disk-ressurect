@@ -27,11 +27,36 @@ class RecoveryOutputWriter:
         if not within_root:
             raise UnsafeRecoveryPath("Output path escapes the recovery directory")
 
+        destination_parent = os.path.dirname(destination)
+        created_directories = self._missing_directories(destination_parent, root)
         try:
-            ensure_pkexec_user_owned_directory(os.path.dirname(destination))
+            ensure_pkexec_user_owned_directory(destination_parent)
         except OSError as exc:
+            self.cleanup_empty_directories(created_directories)
             raise UnsafeRecoveryPath("Output path contains an unsafe or inaccessible directory") from exc
-        return destination, destination + self.PARTIAL_SUFFIX
+        return destination, destination + self.PARTIAL_SUFFIX, tuple(created_directories)
+
+    @staticmethod
+    def _missing_directories(path, root):
+        missing = []
+        current = path
+        while current != root:
+            if not os.path.isdir(current):
+                missing.append(current)
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return missing
+
+    @staticmethod
+    def cleanup_empty_directories(directories):
+        for directory in directories:
+            try:
+                os.rmdir(directory)
+            except OSError:
+                # Keep directories that now contain data or are otherwise in use.
+                pass
 
     @staticmethod
     def open_temporary(temporary_path):

@@ -4,12 +4,13 @@ from typing import Callable
 from ntfs.mft_parser import MFTRecord
 
 class FileNode:
-    def __init__(self, record, *, is_orphaned=False):
+    def __init__(self, record, *, is_orphaned=False, is_content_carved=False):
         self.record = record
         self.children = []
         self.parent = None
         self.full_path = ""
         self.is_orphaned = bool(is_orphaned)
+        self.is_content_carved = bool(is_content_carved)
         
     def sanitize(self, name):
         return re.sub(r'[\\/*?:"<>|]', "_", name).strip()
@@ -25,8 +26,13 @@ class TreeBuilder:
             raise ValueError("MFT record size must be a positive multiple of 512 bytes")
         self.nodes = {}
         self.root_nodes = []
+        self.parent_reference_issue_count = 0
 
-    def build(self, progress_callback: Callable[[int, int], None] | None = None):
+    def build(
+        self,
+        progress_callback: Callable[[int, int], None] | None = None,
+        phase_callback: Callable[[str, int, int], None] | None = None,
+    ):
         total_records = sum(fragment["count"] for fragment in self.fragments)
         processed = 0
         batch_records = max(1, (4 * 1024 * 1024) // self.record_size)
@@ -64,19 +70,51 @@ class TreeBuilder:
                 read_index += batch_count
                 if progress_callback is not None:
                     progress_callback(processed, total_records)
-        for index, node in self.nodes.items():
-            parent_index = node.record.parent_index
-            parent = self.nodes.get(parent_index)
-            if (parent is not None and parent.record.is_dir
-                    and parent_index != index and index != 5):
-                parent.children.append(node)
-                node.parent = parent
-
-        self._detach_parent_cycles()
+        node_total = len(self.nodes)
+        self._report_phase(phase_callback, "linking", 0, node_total)
+        self._link_nodes(phase_callback)
+        self.parent_reference_issue_count = sum(
+            any(warning in getattr(node.record, "metadata_warnings", ()) for warning in (
+                "parent_sequence_number_does_not_match_parent_record",
+                "parent_reference_targets_non_directory",
+            ))
+            for node in self.nodes.values()
+        )
+        self._detach_parent_cycles(phase_callback)
         self.root_nodes = [node for node in self.nodes.values() if node.parent is None]
 
-        self._resolve_paths()
+        self._resolve_paths(phase_callback)
         return self.nodes
+
+    def _link_nodes(self, phase_callback=None):
+        node_total = len(self.nodes)
+        for position, (index, node) in enumerate(self.nodes.items(), start=1):
+            parent_index = getattr(node.record, "parent_index", None)
+            parent = self.nodes.get(parent_index)
+            if parent is not None and parent_index != index and index != 5:
+                expected_sequence = getattr(node.record, "parent_sequence_number", None)
+                actual_sequence = getattr(parent.record, "sequence_number", None)
+                if not parent.record.is_dir:
+                    self._mark_metadata_inconsistent(
+                        node.record, "parent_reference_targets_non_directory",
+                    )
+                elif expected_sequence is None or expected_sequence == actual_sequence:
+                    parent.children.append(node)
+                    node.parent = parent
+                else:
+                    self._mark_metadata_inconsistent(
+                        node.record, "parent_sequence_number_does_not_match_parent_record",
+                    )
+            if position % 4096 == 0 or position == node_total:
+                self._report_phase(phase_callback, "linking", position, node_total)
+
+    @staticmethod
+    def _mark_metadata_inconsistent(record, warning):
+        warnings = getattr(record, "metadata_warnings", None)
+        if warnings is not None and warning not in warnings:
+            warnings.append(warning)
+        if hasattr(record, "is_metadata_consistent"):
+            record.is_metadata_consistent = False
 
     def inject_ghosts(self, ghost_dict):
         """Add carved entries as isolated roots with unique, safe output paths."""
@@ -94,9 +132,11 @@ class TreeBuilder:
             self.nodes[synthetic_id] = node
             self.root_nodes.append(node)
 
-    def _resolve_paths(self):
+    def _resolve_paths(self, phase_callback=None):
         visited = set()
         pending = [(root, "") for root in reversed(self.root_nodes)]
+        total = len(self.nodes)
+        self._report_phase(phase_callback, "paths", 0, total)
         while pending:
             node, parent_path = pending.pop()
             identity = id(node)
@@ -112,17 +152,25 @@ class TreeBuilder:
                 directory, filename = os.path.split(node.full_path)
                 node.full_path = os.path.join(directory, f"[DELETED]_{filename}")
             pending.extend((child, node.full_path) for child in reversed(node.children))
+            if len(visited) % 4096 == 0 or len(visited) == total:
+                self._report_phase(phase_callback, "paths", len(visited), total)
 
         # Preserve disconnected records in the catalog even if a damaged parent
         # reference made them unreachable from every valid root.
         for node in self.nodes.values():
             if id(node) not in visited:
                 node.full_path = node.sanitize(node.record.name)
+                visited.add(id(node))
+                if len(visited) % 4096 == 0 or len(visited) == total:
+                    self._report_phase(phase_callback, "paths", len(visited), total)
 
-    def _detach_parent_cycles(self):
+    def _detach_parent_cycles(self, phase_callback=None):
         """Break corrupt parent-reference cycles at a deterministic record."""
         visited = set()
-        for start in self.nodes.values():
+        total = len(self.nodes)
+        self._report_phase(phase_callback, "hierarchy", 0, total)
+        processed = 0
+        for position, start in enumerate(self.nodes.values(), start=1):
             chain = []
             positions = {}
             current = start
@@ -137,5 +185,15 @@ class TreeBuilder:
                     break
                 positions[identity] = len(chain)
                 chain.append(current)
+                processed += 1
                 current = current.parent
+                if processed % 4096 == 0:
+                    self._report_phase(phase_callback, "hierarchy", processed, total)
             visited.update(id(node) for node in chain)
+            if position % 4096 == 0 or position == total:
+                self._report_phase(phase_callback, "hierarchy", max(processed, position), total)
+
+    @staticmethod
+    def _report_phase(callback, phase, completed, total):
+        if callback is not None:
+            callback(phase, completed, total)

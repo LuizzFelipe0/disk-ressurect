@@ -76,4 +76,32 @@ describe("RecoveryTree", () => {
 
     expect(screen.getByText("Found outside the list")).toBeTruthy();
   });
+
+  it("shows signature and cluster allocation evidence for orphan candidates", () => {
+    render(<RecoveryTree {...makeProps({
+      roots: [{ ...file, isDeleted: true, isOrphaned: true,
+        contentValidation: "signature_match", clusterAllocationStatus: "free" }],
+    })} />);
+
+    expect(screen.getByText(/Header matches extension/)).toBeTruthy();
+    expect(screen.getByText(/Clusters marked free/)).toBeTruthy();
+  });
+
+  it("labels raw carved content as a generated-name candidate", () => {
+    render(<RecoveryTree {...makeProps({
+      roots: [{ ...file, name: "Carved_0000000000001000.jpg", isOrphaned: true, isContentCarved: true }],
+    })} />);
+
+    expect(screen.getByText("Raw-carved file candidate")).toBeTruthy();
+  });
+
+  it("labels low-confidence carving allocation statuses", () => {
+    render(<RecoveryTree {...makeProps({ roots: [
+      { ...file, name: "Possible_current.jpg", isContentCarved: true, clusterAllocationStatus: "bitmap_unobserved" },
+      { ...file, id: "reused", name: "Possibly_reused.jpg", isContentCarved: true, clusterAllocationStatus: "possibly_reused" },
+    ] })} />);
+
+    expect(screen.getByText(/Bitmap was not observed; data may be current/)).toBeTruthy();
+    expect(screen.getByText(/Clusters may contain reused data; deletion is unconfirmed/)).toBeTruthy();
+  });
 });

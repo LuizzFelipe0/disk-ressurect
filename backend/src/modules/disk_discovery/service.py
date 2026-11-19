@@ -15,6 +15,19 @@ class DiskDiscoveryService:
             for disk in self.inventory.list_disks()
         ]
 
+    def validate_disk(
+        self, disk_number: int, progress_callback=None, retain_orphans_for_offset=None,
+        orphan_scan_volume: NTFSVolume | None = None,
+    ):
+        validator = getattr(self.inventory, "validate_disk", None)
+        if validator is None:
+            raise NotImplementedError("This disk inventory does not support full-disk validation")
+        if retain_orphans_for_offset is None:
+            return validator(disk_number, progress_callback)
+        return validator(
+            disk_number, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
+        )
+
     def scan_partitions(self, disk_number: int, deep_scan: bool, progress_callback=None, resume=False):
         disk = next(
             (item for item in self.inventory.list_disks() if item.number == disk_number),

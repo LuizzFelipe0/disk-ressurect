@@ -80,10 +80,14 @@ class Extractor:
 
     def _extract_one(self, out_dir, node):
         temporary_path = None
+        created_directories = ()
+        published = False
         bytes_written = 0
         extension = os.path.splitext(node.record.name.lower())[1]
         try:
-            destination, temporary_path_template = self.output_writer.prepare_target(out_dir, node.full_path)
+            destination, temporary_path_template, created_directories = self.output_writer.prepare_target(
+                out_dir, node.full_path,
+            )
             header = bytearray()
             header_limit = self.signature_validator.header_window(extension)
             output, temporary_path = self.output_writer.open_temporary(temporary_path_template)
@@ -103,6 +107,7 @@ class Extractor:
                 return ExtractionResult(node, "invalid_container", container_error, bytes_written)
 
             self.output_writer.publish(temporary_path, destination)
+            published = True
             return ExtractionResult(
                 node,
                 "recovered",
@@ -119,3 +124,5 @@ class Extractor:
             return ExtractionResult(node, "invalid_data", str(exc), bytes_written)
         finally:
             self.output_writer.discard(temporary_path)
+            if not published:
+                self.output_writer.cleanup_empty_directories(created_directories)
