@@ -34,7 +34,7 @@ def make_node(index, name, is_directory, path, children=(), parent=None, size=0)
 
 def make_volume():
     return NTFSVolume(1, 1, 4096, 1024 * 1024, 512, 4096, 1024,
-                      8192, 2048, ((8192, 2, 0),))
+        8192, 2048, ((8192, 2, 0),))
 
 
 class FakeInventory:
@@ -43,7 +43,7 @@ class FakeInventory:
 
     def list_disks(self):
         return [SimpleNamespace(number=1, model="Test disk", size_bytes=16 * 1024 * 1024,
-                                serial_number="test", display_name="Disk 1 · Test disk")]
+            serial_number="test", display_name="Disk 1 · Test disk")]
 
     def list_ntfs_volumes(self, disk_number, progress_callback=None):
         if progress_callback:
@@ -51,7 +51,7 @@ class FakeInventory:
         return self.volumes
 
     def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
-                               resume_checkpoint=None, checkpoint_callback=None):
+        resume_checkpoint=None, checkpoint_callback=None):
         if candidate_callback:
             candidate_callback(tuple(self.volumes))
         return self.list_ntfs_volumes(disk_number, progress_callback)
@@ -78,8 +78,15 @@ class FakeCatalogService:
         self.workflow = workflow
         self.include_orphaned = False
 
-    def build(self, volume, progress_callback=None, include_orphaned=False):
+    def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
+              precomputed_orphans=None, precomputed_carving_ranges=None,
+              carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
+              uncertain_carving_ranges_truncated=None):
         self.include_orphaned = include_orphaned
+        self.precomputed_carving_ranges = precomputed_carving_ranges
+        self.carving_ranges_truncated = carving_ranges_truncated
+        self.precomputed_uncertain_carving_ranges = precomputed_uncertain_carving_ranges
+        self.phase_callback = phase_callback
         callback = None
         if progress_callback is not None:
             callback = lambda event: progress_callback(event.completed, event.total)
@@ -146,7 +153,7 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
     def test_deep_scan_candidates_survive_an_interrupted_scan_and_backend_restart(self):
         class InterruptedInventory(FakeInventory):
             def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
-                                       resume_checkpoint=None, checkpoint_callback=None):
+                resume_checkpoint=None, checkpoint_callback=None):
                 candidate_callback(tuple(self.volumes))
                 raise OSError("Simulated interruption after finding a candidate")
 
@@ -207,6 +214,88 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         self.assertTrue(catalog_service.include_orphaned)
         self.assertTrue(any(
             event.get("payload", {}).get("message") == "Reading MFT metadata and searching for orphaned entries…"
+            for event in events
+        ))
+
+    def test_orphan_scan_runs_full_disk_validation_and_returns_its_summary(self):
+        order = []
+
+        class AuditedInventory(FakeInventory):
+            def validate_disk(self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
+                              orphan_scan_volume=None):
+                order.append("audit")
+                if progress_callback:
+                    progress_callback(100, 100, "Reading physical disk | 100/100 bytes")
+                return {
+                    "disk": SimpleNamespace(number=disk_number, model="Test disk", size_bytes=100,
+                        serial_number="test"),
+                    "coverage": SimpleNamespace(bytes_read=100, bytes_requested=100,
+                        bytes_read_total=104, issues=(), intervals_as_objects=lambda: ()),
+                    "capacity_mismatch": False,
+                    "unsupported_filesystems": (),
+                    "ntfs_checks": ({
+                        "mftRecords": {"deleted": 2},
+                        "orphanedFileRecordCount": 1,
+                        "bitmapAllocation": {"orphanDataAllocation": [
+                            {"status": "free"}, {"status": "allocated"},
+                            {"status": "partially_observed"},
+                        ]},
+                    },),
+                    "partition_table_checks": ({"valid": True},),
+                    "mbr_signature_found": True,
+                    "partitions": ({"offset": 4096, "filesystem": "NTFS"},),
+                    "filesystem_signatures": (),
+                    "orphan_records_by_partition": {4096: {}},
+                    "content_carving_ranges_by_partition": {4096: ((8192, 12288),)},
+                    "content_carving_ranges_truncated_by_partition": {4096: True},
+                }
+
+        class OrderedCatalogService(FakeCatalogService):
+            def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
+                      precomputed_orphans=None, precomputed_carving_ranges=None,
+                      carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
+                      uncertain_carving_ranges_truncated=None):
+                order.append("catalog")
+                if phase_callback:
+                    phase_callback("linking", 1, 1)
+                self.precomputed_orphans = precomputed_orphans
+                self.precomputed_carving_ranges = precomputed_carving_ranges
+                self.carving_ranges_truncated = carving_ranges_truncated
+                self.precomputed_uncertain_carving_ranges = precomputed_uncertain_carving_ranges
+                return super().build(volume, progress_callback, include_orphaned,
+                    phase_callback, precomputed_orphans, precomputed_carving_ranges,
+                    carving_ranges_truncated, precomputed_uncertain_carving_ranges,
+                    uncertain_carving_ranges_truncated)
+
+        inventory = AuditedInventory()
+        workflow = FakeWorkflow()
+        handler = RecoveryCommandHandler(
+            DiskDiscoveryService(inventory, FakeRepository()),
+            OrderedCatalogService(workflow), workflow,
+        )
+        handler.session.volumes["1:4096"] = make_volume()
+        events = []
+
+        catalog = handler.dispatch("scan_catalog", {
+            "volumeId": "1:4096", "includeOrphaned": True,
+        }, events.append)
+
+        self.assertEqual(order, ["audit", "catalog"])
+        self.assertEqual(catalog["diskValidation"]["coverageStatus"], "complete")
+        self.assertEqual(catalog["diskValidation"]["deletedMftRecordCount"], 2)
+        self.assertEqual(catalog["diskValidation"]["orphanedFileRecordCount"], 1)
+        self.assertEqual(catalog["diskValidation"]["orphanRecordsByAllocationStatus"], {
+            "free": 1, "allocated": 1, "mixed": 0, "unknown": 1,
+        })
+        self.assertEqual(handler.catalog_service.precomputed_orphans, {})
+        self.assertEqual(handler.catalog_service.precomputed_carving_ranges, ((8192, 12288),))
+        self.assertTrue(handler.catalog_service.carving_ranges_truncated)
+        self.assertTrue(any(
+            event.get("payload", {}).get("stage") == "disk-validation"
+            for event in events
+        ))
+        self.assertTrue(any(
+            event.get("payload", {}).get("message") == "Organizing file and folder records…"
             for event in events
         ))
 
