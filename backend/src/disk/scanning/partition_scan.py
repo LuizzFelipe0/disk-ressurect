@@ -39,6 +39,7 @@ class NTFSBootGeometry:
     cluster_size: int
     volume_size: int
     mft_lcn: int
+    mftmirr_lcn: int
     record_size: int
 
 
@@ -171,6 +172,7 @@ class NTFSBootSectorParser:
             sectors_per_cluster = boot_sector[13]
             total_sectors = struct.unpack_from("<Q", boot_sector, 40)[0]
             mft_lcn = struct.unpack_from("<Q", boot_sector, 48)[0]
+            mftmirr_lcn = struct.unpack_from("<Q", boot_sector, 56)[0]
             record_code = struct.unpack_from("<b", boot_sector, 64)[0]
         except struct.error:
             return None
@@ -190,5 +192,6 @@ class NTFSBootSectorParser:
             cluster_size=cluster_size,
             volume_size=volume_size,
             mft_lcn=mft_lcn,
+            mftmirr_lcn=mftmirr_lcn,
             record_size=record_size,
         )
