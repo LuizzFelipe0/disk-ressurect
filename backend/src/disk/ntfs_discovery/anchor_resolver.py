@@ -20,7 +20,7 @@ class MFTAnchorVolumeResolver:
                 or record.allocated_size <= 0):
             return None
         physical_runs = [(lcn, count) for lcn, count in record.data_runs
-                         if lcn is not None and count > 0]
+            if lcn is not None and count > 0]
         if len(physical_runs) != len(record.data_runs) or not physical_runs:
             return None
         total_clusters = sum(count for _, count in physical_runs)
@@ -49,7 +49,7 @@ class MFTAnchorVolumeResolver:
             return None
 
         partition = PartitionEntry(0, partition_offset, self.disk.size - partition_offset,
-                                   "MFT-derived", "$MFT anchor; partition end estimated")
+            "MFT-derived", "$MFT anchor; partition end estimated")
         fragments = NTFSVolumeScanner._mft_fragments(
             partition, cluster_size, record.record_size, record
         )
