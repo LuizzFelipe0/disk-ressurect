@@ -25,7 +25,7 @@ class BatchedTreeTests(unittest.TestCase):
         builder = TreeBuilder(disk, [fragment], 0)
         self.assertEqual(builder.build(), {})
         self.assertEqual(disk.reads, [(100, 4096 * 1024), (100 + 4096 * 1024, 4096 * 1024),
-                                      (100 + 8192 * 1024, 808 * 1024)])
+            (100 + 8192 * 1024, 808 * 1024)])
 
     def test_rejects_short_physical_read_instead_of_silently_skipping_records(self):
         disk = FakeDisk(b"x" * (1024 - 1))
