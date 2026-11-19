@@ -72,7 +72,7 @@ def main():
         if not operation_lock.acquire(blocking=False):
             request_id = request.get("id") if isinstance(request, dict) else None
             emit({"id": request_id, "type": "error", "error": "Another disk operation is already running",
-                  "errorType": "BusyError"})
+                "errorType": "BusyError"})
             continue
 
         def run(current_request=request):
