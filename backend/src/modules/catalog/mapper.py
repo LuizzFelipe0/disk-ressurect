@@ -6,7 +6,15 @@ from modules.recovery.extractor import Extractor
 
 class CatalogMapper:
     @staticmethod
-    def catalog(snapshot, node_ids_by_identity):
+    def catalog(snapshot, node_ids_by_identity, disk_validation=None):
+        if disk_validation is not None and getattr(snapshot, "parent_reference_issue_count", 0):
+            disk_validation = dict(disk_validation)
+            disk_validation["inconsistentMftRecordCount"] = (
+                int(disk_validation.get("inconsistentMftRecordCount", 0))
+                + int(snapshot.parent_reference_issue_count)
+            )
+            if disk_validation.get("assessment") == "evidence_collected":
+                disk_validation["assessment"] = "inconclusive"
         roots = tuple(
             CatalogMapper.node(node, node_ids_by_identity)
             for node in snapshot.catalog.root_nodes
@@ -19,9 +27,17 @@ class CatalogMapper:
             roots=roots,
             orphaned_record_count=sum(
                 bool(getattr(node, "is_orphaned", False))
+                and not bool(getattr(node, "is_content_carved", False))
+                for node in snapshot.catalog.nodes.values()
+            ),
+            content_carved_count=sum(
+                bool(getattr(node, "is_content_carved", False))
                 for node in snapshot.catalog.nodes.values()
             ),
             orphan_scan_performed=bool(getattr(snapshot, "orphan_scan_performed", False)),
+            disk_validation=disk_validation,
+            content_carving=getattr(snapshot, "content_carving_summary", None),
+            low_confidence_carving=getattr(snapshot, "low_confidence_carving_summary", None),
         )
 
     @staticmethod
@@ -36,6 +52,14 @@ class CatalogMapper:
             parent_id=node_ids_by_identity.get(id(getattr(node, "parent", None))),
             is_deleted=not bool(getattr(node.record, "is_allocated", True)),
             is_orphaned=bool(getattr(node, "is_orphaned", False)),
+            is_content_carved=bool(getattr(node, "is_content_carved", False)),
+            content_validation=getattr(node.record, "catalog_content_validation", None),
+            cluster_allocation_status=(
+                getattr(node.record, "cluster_allocation_evidence", {}).get("status")
+                if isinstance(getattr(node.record, "cluster_allocation_evidence", None), dict)
+                else getattr(node.record, "cluster_allocation_status", None)
+            ),
+            metadata_consistent=getattr(node.record, "is_metadata_consistent", None),
         )
 
     @staticmethod
