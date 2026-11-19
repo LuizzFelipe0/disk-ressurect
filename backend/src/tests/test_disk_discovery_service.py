@@ -21,7 +21,7 @@ class InterruptibleInventory:
         return [self.disk]
 
     def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
-                               resume_checkpoint=None, checkpoint_callback=None):
+        resume_checkpoint=None, checkpoint_callback=None):
         self.resume_checkpoint = resume_checkpoint
         if self.fail_scan:
             checkpoint_callback(ScanCheckpoint(0, 4 * 1024**3, self.disk.size_bytes, 512))
