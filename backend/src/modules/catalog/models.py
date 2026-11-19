@@ -9,6 +9,9 @@ class RecoveryCatalogSnapshot:
     catalog: RecoveryCatalog
     volume: NTFSVolume
     orphan_scan_performed: bool = False
+    content_carving_summary: dict | None = None
+    parent_reference_issue_count: int = 0
+    low_confidence_carving_summary: dict | None = None
 
     @property
     def volume_start(self):
