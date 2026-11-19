@@ -10,6 +10,25 @@ from modules.disk_discovery.mapper import DiskDiscoveryMapper
 
 
 class ModuleMapperTests(unittest.TestCase):
+    def test_parent_reference_issues_make_catalog_audit_inconclusive(self):
+        catalog = SimpleNamespace(
+            root_nodes=[], nodes={},
+            available_extensions=lambda _supported: [],
+        )
+        snapshot = SimpleNamespace(
+            catalog=catalog,
+            parent_reference_issue_count=2,
+            orphan_scan_performed=True,
+        )
+
+        result = CatalogMapper.catalog(snapshot, {}, {
+            "assessment": "evidence_collected",
+            "inconsistentMftRecordCount": 1,
+        }).to_dict()
+
+        self.assertEqual(result["diskValidation"]["assessment"], "inconclusive")
+        self.assertEqual(result["diskValidation"]["inconsistentMftRecordCount"], 3)
+
     def test_disk_mapper_serializes_cached_partition_and_registers_it(self):
         volume = SimpleNamespace(
             disk_number=2,
@@ -66,7 +85,12 @@ class ModuleMapperTests(unittest.TestCase):
 
     def test_catalog_node_mapper_exposes_deleted_orphaned_state(self):
         node = SimpleNamespace(
-            record=SimpleNamespace(name="orphan.jpg", file_size=4, is_dir=False, is_allocated=False),
+            record=SimpleNamespace(
+                name="orphan.jpg", file_size=4, is_dir=False, is_allocated=False,
+                catalog_content_validation="signature_match",
+                cluster_allocation_evidence={"status": "free"},
+                is_metadata_consistent=False,
+            ),
             full_path="Lost_Files_DeepScan/orphan.jpg",
             children=[],
             parent=None,
@@ -77,6 +101,9 @@ class ModuleMapperTests(unittest.TestCase):
 
         self.assertTrue(result["isDeleted"])
         self.assertTrue(result["isOrphaned"])
+        self.assertEqual(result["contentValidation"], "signature_match")
+        self.assertEqual(result["clusterAllocationStatus"], "free")
+        self.assertFalse(result["metadataConsistent"])
 
 
 if __name__ == "__main__":
