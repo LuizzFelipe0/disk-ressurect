@@ -58,7 +58,10 @@ def mft_record(record_size=1024, lcn=8, clusters=2):
     struct.pack_into("<Q", raw, attr_offset + 48, clusters * 4096)
     run = bytes([0x11, clusters, lcn, 0])
     raw[attr_offset + 64:attr_offset + 64 + len(run)] = run
-    struct.pack_into("<I", raw, 24, attr_offset + attr_length + 4)
+    bytes_in_use = attr_offset + attr_length + 4
+    bytes_in_use += (-bytes_in_use) % 8
+    raw[attr_offset + attr_length + 4:bytes_in_use] = bytes(bytes_in_use - attr_offset - attr_length - 4)
+    struct.pack_into("<I", raw, 24, bytes_in_use)
     struct.pack_into("<I", raw, attr_offset + attr_length, 0xFFFFFFFF)
     return bytes(raw)
 
@@ -77,11 +80,11 @@ def mft_root_record(record_size=1024, lcn=2, clusters=2):
     filename = bytearray(66 + len("$MFT") * 2)
     filename[64] = len("$MFT")
     filename[66:] = "$MFT".encode("utf-16le")
-    filename_length = 24 + len(filename)
+    filename_length = (24 + len(filename) + 7) & ~7
     struct.pack_into("<II", raw, cursor, 0x30, filename_length)
     struct.pack_into("<I", raw, cursor + 16, len(filename))
     struct.pack_into("<H", raw, cursor + 20, 24)
-    raw[cursor + 24:cursor + filename_length] = filename
+    raw[cursor + 24:cursor + 24 + len(filename)] = filename
     cursor += filename_length
 
     data_length = 72
@@ -95,7 +98,10 @@ def mft_root_record(record_size=1024, lcn=2, clusters=2):
     cursor += data_length
     struct.pack_into("<I", raw, cursor, 0xFFFFFFFF)
     struct.pack_into("<H", raw, 20, 0x38)
-    struct.pack_into("<I", raw, 24, cursor + 4)
+    bytes_in_use = cursor + 4
+    bytes_in_use += (-bytes_in_use) % 8
+    raw[cursor + 4:bytes_in_use] = bytes(bytes_in_use - cursor - 4)
+    struct.pack_into("<I", raw, 24, bytes_in_use)
     return bytes(raw)
 
 
