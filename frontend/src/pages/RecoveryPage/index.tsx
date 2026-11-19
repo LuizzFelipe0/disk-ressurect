@@ -6,6 +6,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { ErrorNotice } from "../../components/ErrorNotice";
 import { RecoveryTree } from "../../components/RecoveryTree";
 import { RecoveryStatusPanel } from "../../components/RecoveryStatusPanel";
+import { DiskAuditOverlay } from "../../components/DiskAuditOverlay";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
 import { translate, translateError, translateStatus } from "../../i18n/translations";
 import {
@@ -15,6 +16,7 @@ import {
 } from "../../utils/filterSelection";
 import {
   ActionRow,
+  AuditActions,
   BrowserFrame,
   BrowserHeading,
   BrowserSection,
@@ -36,6 +38,7 @@ import {
   OrphanScanControls,
   PreviewBody,
   PreviewPane,
+  ValidationNotice,
 } from "./style";
 
 export const RecoveryPage: React.FC = () => {
@@ -45,6 +48,9 @@ export const RecoveryPage: React.FC = () => {
     return saved === "en-US" || saved === "es-ES" || saved === "fr-FR" || saved === "zh-CN" ? saved : "pt-BR";
   });
   const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
+  const [auditOpen, setAuditOpen] = React.useState(false);
+  const auditTriggerRef = React.useRef<HTMLSpanElement>(null);
+  const auditWasOpen = React.useRef(false);
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
   const searchActive = Boolean(recovery.searchQuery.trim());
   const allExtensionsSelected = areAllExtensionsSelected(recovery.availableExtensions, recovery.extensions);
@@ -59,7 +65,60 @@ export const RecoveryPage: React.FC = () => {
       ? recovery.searchResult.totalMatches > recovery.searchResult.results.length
         ? t("showingMatches", { visible: recovery.searchResult.results.length.toLocaleString(language), total: recovery.searchResult.totalMatches.toLocaleString(language) })
         : `${recovery.searchResult.totalMatches.toLocaleString(language)} ${t("matchingItems")}`
-      : `${recovery.catalog.recordCount.toLocaleString(language)} ${t("catalogItems")} · ${recovery.catalog.availableExtensions.length.toLocaleString(language)} ${t("fileTypesCount")}${recovery.catalog.orphanScanPerformed ? ` · ${t("orphanedEntriesCount", { count: recovery.catalog.orphanedRecordCount ?? 0 })}` : ""}`;
+      : `${recovery.catalog.recordCount.toLocaleString(language)} ${t("catalogItems")} · ${recovery.catalog.availableExtensions.length.toLocaleString(language)} ${t("fileTypesCount")}${recovery.catalog.orphanScanPerformed ? ` · ${t("orphanedEntriesCount", { count: recovery.catalog.orphanedRecordCount ?? 0 })}` : ""}${(recovery.catalog.contentCarvedCount ?? 0) > 0 ? ` · ${t("contentCarvedCount", { count: recovery.catalog.contentCarvedCount ?? 0 })}` : ""}`;
+  const validation = recovery.catalog?.diskValidation;
+  const contentCarving = recovery.catalog?.contentCarving;
+  const lowConfidenceCarving = recovery.catalog?.lowConfidenceCarving;
+  const lowConfidenceTiers = lowConfidenceCarving ? [
+    { key: "bitmapUnobserved" as const, summary: lowConfidenceCarving.bitmapUnobserved },
+    { key: "possiblyReused" as const, summary: lowConfidenceCarving.possiblyReused },
+  ] : [];
+  const closeAudit = React.useCallback(() => setAuditOpen(false), []);
+  React.useEffect(() => {
+    if (auditWasOpen.current && !auditOpen) {
+      auditTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    }
+    auditWasOpen.current = auditOpen;
+  }, [auditOpen]);
+  const validationCoverage = validation?.sizeBytes
+    ? Math.min(100, Math.floor((validation.bytesRead / validation.sizeBytes) * 100))
+    : 0;
+  const carvingHasReachedFormatLimit = (summary: NonNullable<typeof contentCarving>) => [
+    summary.candidateLimitReachedByExtension,
+    summary.fileSizeLimitReachedByExtension,
+    summary.decodedDataLimitReachedByExtension,
+  ].some((flags) => Object.values(flags ?? {}).some(Boolean));
+
+  const renderFormatDiagnostics = (summary: NonNullable<typeof contentCarving>) => {
+    const names = Array.from(new Set([
+      ...(summary.formatsAttempted ?? []),
+      ...Object.keys(summary.filesFoundByExtension ?? {}),
+      ...Object.keys(summary.candidatesExaminedByExtension ?? {}),
+      ...Object.keys(summary.candidateBytesReadByExtension ?? {}),
+    ])).sort();
+    const available = summary.filesFoundByExtension !== undefined
+      || summary.candidatesExaminedByExtension !== undefined
+      || summary.candidateBytesReadByExtension !== undefined
+      || summary.formatsAttempted !== undefined
+      || summary.validationScope !== undefined;
+    if (!available || !names.length) return <p>{t("carvingDiagnosticsUnavailable")}</p>;
+    return <ul>{names.map((extension) => {
+      const limits = [
+        summary.candidateLimitReachedByExtension?.[extension] && t("candidateReadLimit"),
+        summary.fileSizeLimitReachedByExtension?.[extension] && t("fileSizeLimit"),
+        summary.decodedDataLimitReachedByExtension?.[extension] && t("decodedDataLimit"),
+      ].filter(Boolean).join(", ");
+      return <li key={extension}>
+        {t("carvingFormatStats", {
+          extension,
+          files: summary.filesFoundByExtension?.[extension] ?? 0,
+          candidates: summary.candidatesExaminedByExtension?.[extension] ?? 0,
+          bytes: (summary.candidateBytesReadByExtension?.[extension] ?? 0).toLocaleString(language),
+        })}
+        {limits && ` ${t("carvingLimitsReached", { limits })}`}
+      </li>;
+    })}</ul>;
+  };
 
   return (
     <PageLayout lang={language}>
@@ -137,8 +196,16 @@ export const RecoveryPage: React.FC = () => {
       <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
         <BrowserHeading>
           <div><h2>{t("foundFiles")}</h2>
-            <p>{catalogSummary}</p></div>
-          {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
+            <p>{catalogSummary}</p>
+          </div>
+          <AuditActions>
+            {(validation || contentCarving || lowConfidenceCarving) && <span ref={auditTriggerRef}>
+              <Button className="brand-button--ghost" variant="ghost" size="md"
+                aria-haspopup="dialog" aria-controls="disk-audit-overlay"
+                onClick={() => setAuditOpen(true)}>{t("diskAuditDetails")}</Button>
+            </span>}
+            {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
+          </AuditActions>
         </BrowserHeading>
         {recovery.catalog && <SearchBox><Input
           type="search"
@@ -181,6 +248,124 @@ export const RecoveryPage: React.FC = () => {
         </PreviewBody>
         </Card>
       </PreviewPane></BrowserFrame>
+
+      {auditOpen && <DiskAuditOverlay
+        id="disk-audit-overlay"
+        title={t("diskAuditDetails")}
+        closeLabel={t("closeDetails")}
+        onClose={closeAudit}
+      >
+        {validation && <ValidationNotice role="status" $inconclusive={validation.assessment === "inconclusive"}>
+          {validation.coverageStatus === "unavailable"
+            ? t("validationUnavailable", { error: validation.validationError ?? "Unknown error" })
+            : validation.assessment === "inconclusive"
+              ? t("validationInconclusive", {
+                coverage: validationCoverage,
+                errors: validation.readErrorCount,
+                deleted: validation.deletedMftRecordCount,
+                orphans: validation.orphanedFileRecordCount,
+                inconsistent: validation.inconsistentMftRecordCount ?? 0,
+              })
+              : t("validationEvidence", {
+                coverage: validationCoverage,
+                partitions: validation.partitionCount,
+                ntfs: validation.ntfsVolumeCount,
+                deleted: validation.deletedMftRecordCount,
+                orphans: validation.orphanedFileRecordCount,
+                inconsistent: validation.inconsistentMftRecordCount ?? 0,
+              })}
+        </ValidationNotice>}
+        <p>{t("catalogRecoveryInterpretation", {
+          items: (recovery.catalog?.recordCount ?? 0).toLocaleString(language),
+          types: (recovery.catalog?.availableExtensions.length ?? 0).toLocaleString(language),
+        })}</p>
+        {validation?.orphanRecordsByAllocationStatus && <>
+          <ValidationNotice role="status" $inconclusive={validation.orphanRecordsByAllocationStatus.unknown > 0}>
+            {t("orphanRecordAllocationSummary", validation.orphanRecordsByAllocationStatus)}
+          </ValidationNotice>
+          <p>{t("allocationRecoveryInterpretation")}</p>
+        </>}
+        {validation && <p>{t("orphanRecoveryInterpretation")}</p>}
+        {contentCarving && <ValidationNotice role="status" $inconclusive={Boolean(
+          contentCarving.rangeCollectionTruncated
+          || contentCarving.scanLimitReached
+          || contentCarving.candidateLimitReached
+          || contentCarving.fileCountLimitReached
+          || contentCarving.retainedBytesLimitReached
+          || carvingHasReachedFormatLimit(contentCarving)
+        )}>
+          {t("contentCarvingResult", {
+            files: contentCarving.filesFound,
+            bytes: contentCarving.bytesScanned.toLocaleString(language),
+            candidateBytes: contentCarving.candidateBytesRead.toLocaleString(language),
+          })}
+          {(contentCarving.rangeCollectionTruncated
+            || contentCarving.scanLimitReached
+            || contentCarving.candidateLimitReached
+            || contentCarving.fileCountLimitReached
+            || contentCarving.retainedBytesLimitReached
+            || carvingHasReachedFormatLimit(contentCarving)) && ` ${t("contentCarvingLimited")}`}
+        </ValidationNotice>}
+        {contentCarving && <section aria-label={t("carvingDiagnosticsHeading")}>
+          <h3>{t("carvingDiagnosticsHeading")}</h3>
+          {contentCarving.candidateReadCapBytes !== undefined && <p>{t("carvingCandidateBudget", {
+            perFormat: contentCarving.candidateReadCapBytesPerFormat?.toLocaleString(language) ?? "—",
+            aggregate: contentCarving.candidateReadCapBytes.toLocaleString(language),
+          })}</p>}
+          {contentCarving.scanByteCap !== undefined && <p>{t("carvingSizeBudget", {
+            scan: contentCarving.scanByteCap.toLocaleString(language),
+            maxFile: contentCarving.maxFileBytes?.toLocaleString(language) ?? "—",
+            decoded: contentCarving.maxDecodedPngBytes?.toLocaleString(language) ?? "—",
+            retained: contentCarving.retainedBytesCap?.toLocaleString(language) ?? "—",
+            files: contentCarving.fileCountCap ?? "—",
+          })}</p>}
+          {contentCarving.formatsAttempted !== undefined && <p>{t("carvingFormatsAttempted", {
+            formats: contentCarving.formatsAttempted.join(", ") || "—",
+          })}</p>}
+          {contentCarving.validationScope && <p>{t("carvingValidationScope", {
+            scope: contentCarving.validationScope === "contiguous_structure_and_signature"
+              ? t("carvingScopeContiguous")
+              : contentCarving.validationScope,
+          })}</p>}
+          {renderFormatDiagnostics(contentCarving)}
+        </section>}
+        {lowConfidenceTiers.length > 0 && <>
+          <p>{t("lowConfidenceRecoveryInterpretation")}</p>
+          {lowConfidenceTiers.map(({ key, summary }) => <section key={key}>
+            <h3>{t(key)}</h3>
+            <ValidationNotice role="status" $inconclusive={true}>
+              {t("lowConfidenceTierResult", {
+                confidence: t("lowConfidenceLabel"),
+                files: summary.filesFound,
+                items: summary.catalogItemsAdded,
+                bytes: summary.bytesScanned.toLocaleString(language),
+                candidateBytes: summary.candidateBytesRead.toLocaleString(language),
+              })}
+              {(summary.rangeCollectionTruncated || summary.scanLimitReached
+                || summary.candidateLimitReached || summary.fileCountLimitReached
+                || summary.retainedBytesLimitReached
+                || carvingHasReachedFormatLimit(summary)) && ` ${t("contentCarvingLimited")}`}
+            </ValidationNotice>
+            <p>{t("lowConfidenceBudget", {
+              scanLimit: summary.scanByteCap?.toLocaleString(language) ?? "—",
+              perFormat: summary.candidateReadCapBytesPerFormat?.toLocaleString(language) ?? "—",
+              aggregate: summary.candidateReadCapBytes?.toLocaleString(language) ?? "—",
+              maxFile: (summary.maxFileBytes ?? 0).toLocaleString(language),
+              decoded: (summary.maxDecodedPngBytes ?? 0).toLocaleString(language),
+              retained: summary.retainedBytesCap?.toLocaleString(language) ?? "—",
+              maxFiles: summary.fileCountCap ?? "—",
+            })}</p>
+            {summary.rangeCollectionCapBytes !== undefined && <p>{t("lowConfidenceRangeSummary", {
+              retained: summary.rangeBytesRetained?.toLocaleString(language) ?? "—",
+              cap: summary.rangeCollectionCapBytes.toLocaleString(language),
+            })}</p>}
+            {summary.formatsAttempted !== undefined && <p>{t("carvingFormatsAttempted", {
+              formats: summary.formatsAttempted.join(", ") || "—",
+            })}</p>}
+            {renderFormatDiagnostics(summary)}
+          </section>)}
+        </>}
+      </DiskAuditOverlay>}
 
       <RecoveryStatusPanel
         status={translateStatus(recovery.status, language)}
