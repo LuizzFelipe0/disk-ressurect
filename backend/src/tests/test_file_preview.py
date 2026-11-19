@@ -18,7 +18,7 @@ class FakeDisk:
 
 def make_node(name, payload, is_directory=False):
     record = SimpleNamespace(name=name, file_size=len(payload), is_dir=is_directory,
-                             resident_data=payload, data_is_complete=True)
+        resident_data=payload, data_is_complete=True)
     return SimpleNamespace(record=record)
 
 
