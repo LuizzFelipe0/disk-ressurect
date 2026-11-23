@@ -12,6 +12,8 @@ class RecoveryCatalogSnapshot:
     content_carving_summary: dict | None = None
     parent_reference_issue_count: int = 0
     low_confidence_carving_summary: dict | None = None
+    recycle_bin_summary: dict | None = None
+    usn_journal_summary: dict | None = None
 
     @property
     def volume_start(self):
