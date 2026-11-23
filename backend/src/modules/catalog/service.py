@@ -1,5 +1,6 @@
 import os
 import hashlib
+import copy
 
 from disk.platform import disk_reader_factory
 from domain.recovery_catalog import RecoveryCatalog
@@ -10,6 +11,12 @@ from disk.deep_scan.content_carver import RawContentCarver
 from modules.catalog.carved_content_record import CarvedContentRecord
 from modules.catalog.content_validation import CatalogContentValidator
 from ntfs.cluster_allocation import ClusterAllocationEvidence
+from ntfs.artifact_sources import (
+    RecycleBinRecoveryHelper,
+    UsnJournalEvidenceScanner,
+    has_path_component,
+)
+from ntfs.file_content_reader import NTFSFileContentReader
 from ntfs.tree_builder import FileNode, TreeBuilder
 
 
@@ -27,7 +34,8 @@ class CatalogService:
     def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
               precomputed_orphans=None, precomputed_carving_ranges=None,
               carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
-              uncertain_carving_ranges_truncated=None):
+              uncertain_carving_ranges_truncated=None, carving_options=None,
+              carving_checkpoint=None, carving_checkpoint_callback=None):
         disk = self.disk_factory(volume.disk_number)
         try:
             builder = TreeBuilder(
@@ -39,6 +47,8 @@ class CatalogService:
             nodes = builder.build(progress_callback=progress_callback, phase_callback=phase_callback)
             content_carving_summary = None
             low_confidence_carving_summary = None
+            recycle_bin_summary = None
+            usn_journal_summary = None
             if include_orphaned:
                 from modules.recovery.extractor import Extractor
 
@@ -70,14 +80,35 @@ class CatalogService:
                 )
                 ghosts = self._validate_orphan_content(ghosts, content_validator)
                 builder.inject_ghosts(ghosts)
+                evidence_reader = NTFSFileContentReader(
+                    disk,
+                    volume.partition_offset,
+                    volume.cluster_size,
+                    volume_size_bytes=volume.partition_size,
+                )
+                recycle_bin_summary = self._add_recycle_bin_aliases(
+                    builder, evidence_reader,
+                )
+                usn_journal_summary = self._scan_usn_journal(
+                    builder.nodes.values(), evidence_reader,
+                )
                 if precomputed_carving_ranges is not None:
                     def report_carving_progress(completed, total):
                         if phase_callback is not None:
                             phase_callback("content_carving", completed, total)
 
-                    carving = RawContentCarver(disk).scan(
+                    carver_options = {}
+                    if carving_options is not None:
+                        carver_options = {
+                            "max_scan_bytes": int(carving_options.scan_budget_gib) * 1024**3,
+                            "max_files": int(carving_options.max_files),
+                        }
+                    carving = RawContentCarver(disk, **carver_options).scan(
                         precomputed_carving_ranges,
                         progress_callback=report_carving_progress if phase_callback is not None else None,
+                        resume_checkpoint=carving_checkpoint,
+                        checkpoint_callback=carving_checkpoint_callback,
+                        ranges_truncated=bool(carving_ranges_truncated),
                     )
                     retained_content_digests = set()
                     retained_content_offsets = set()
@@ -124,11 +155,21 @@ class CatalogService:
                         "maxFileBytes": carving.max_file_bytes,
                         "maxDecodedPngBytes": carving.max_decoded_png_bytes,
                         "scanByteCap": carving.max_scan_bytes,
+                        "scanBudgetGiB": (carving_options.scan_budget_gib
+                            if carving_options is not None else 1),
+                        "rangeCollectionCapBytes": (carving_options.scan_budget_gib * 1024**3
+                            if carving_options is not None else 1024**3),
+                        "rangeBytesRetained": sum(
+                            end - start for start, end in precomputed_carving_ranges
+                        ),
                         "retainedBytesCap": carving.max_total_file_bytes,
                         "fileCountCap": carving.max_files,
                         "formatsAttempted": [item.extension for item in carving.format_stats],
                         "validationScope": "contiguous_structure_and_signature",
                         "bytesScanned": carving.bytes_scanned,
+                        "cumulativeBytesScanned": carving.cumulative_bytes_scanned,
+                        "resumeAvailable": carving.checkpoint is not None,
+                        "candidateRestoreBytesRead": carving.candidate_restore_bytes_read,
                         "scanLimitReached": carving.scan_limit_reached,
                         "candidateBytesRead": carving.candidate_bytes_read,
                         "candidateLimitReached": carving.candidate_limit_reached,
@@ -219,6 +260,8 @@ class CatalogService:
                 content_carving_summary=content_carving_summary,
                 parent_reference_issue_count=int(builder.parent_reference_issue_count),
                 low_confidence_carving_summary=low_confidence_carving_summary,
+                recycle_bin_summary=recycle_bin_summary,
+                usn_journal_summary=usn_journal_summary,
             )
         finally:
             disk.close()
@@ -240,6 +283,151 @@ class CatalogService:
             if evidence.status != "signature_mismatch":
                 validated[synthetic_id] = record
         return validated
+
+    @staticmethod
+    def _add_recycle_bin_aliases(builder, reader):
+        """Expose supported, size-matched $R data under generated safe paths."""
+        from modules.recovery.extractor import Extractor
+
+        supported = {extension.casefold() for extension in Extractor.supported_extensions()}
+        helper = RecycleBinRecoveryHelper()
+
+        def read_index(node, _max_bytes):
+            return b"".join(reader.iter_chunks(node))
+
+        recycle_bin_nodes = tuple(
+            node for node in builder.nodes.values()
+            if has_path_component(node, "$Recycle.Bin")
+        )
+        associations = helper.associate(recycle_bin_nodes, read_index)
+        counts = {
+            "indexCount": len(associations),
+            "aliasesAdded": 0,
+            "pairedCount": 0,
+            "missingContentCount": 0,
+            "ambiguousContentCount": 0,
+            "metadataMismatchCount": 0,
+            "invalidIndexCount": 0,
+            "readErrorCount": 0,
+            "limitedIndexCount": 0,
+            "incompleteContentCount": 0,
+            "unsupportedExtensionCount": 0,
+            "directoryContentCount": 0,
+        }
+        inconclusive_statuses = {
+            "missing_content", "ambiguous", "metadata_mismatch", "invalid_index",
+            "read_error", "incomplete", "limited", "unpaired",
+        }
+        inconclusive = not associations
+        for association in associations:
+            status_key = {
+                "missing_content": "missingContentCount",
+                "ambiguous": "ambiguousContentCount",
+                "metadata_mismatch": "metadataMismatchCount",
+                "invalid_index": "invalidIndexCount",
+                "read_error": "readErrorCount",
+                "incomplete": "invalidIndexCount",
+                "limited": "limitedIndexCount",
+                "unpaired": "invalidIndexCount",
+            }.get(association.status)
+            if status_key is not None:
+                counts[status_key] += 1
+            if association.status in inconclusive_statuses:
+                inconclusive = True
+            if association.status != "paired" or association.content_node is None:
+                continue
+
+            counts["pairedCount"] += 1
+            source_record = association.content_node.record
+            if bool(getattr(source_record, "is_dir", False)):
+                counts["directoryContentCount"] += 1
+                continue
+            if getattr(source_record, "data_is_complete", True) is False:
+                counts["incompleteContentCount"] += 1
+                inconclusive = True
+                continue
+
+            extension = os.path.splitext(association.metadata.name or "")[1].casefold()
+            if extension not in supported:
+                counts["unsupportedExtensionCount"] += 1
+                continue
+            if not association.target_name:
+                counts["invalidIndexCount"] += 1
+                inconclusive = True
+                continue
+
+            alias_record = copy.copy(source_record)
+            alias_record.name = association.target_name
+            alias_record.recovery_source = "recycle_bin"
+            alias_record.original_path = association.metadata.original_path
+            alias_record.deletion_timestamp_utc = (
+                association.metadata.timestamp_utc.isoformat()
+                if association.metadata.timestamp_utc is not None else None
+            )
+            alias_record.recycle_bin_original_size_bytes = association.metadata.size_bytes
+            source_index = int(getattr(source_record, "index", 0) or 0)
+            synthetic_id = -(abs(source_index) + 1)
+            while synthetic_id in builder.nodes:
+                synthetic_id -= 1
+            alias_record.index = synthetic_id
+            alias_node = FileNode(alias_record)
+            alias_node.is_recycle_bin_alias = True
+            alias_node.full_path = os.path.join(
+                "Lost_Files_DeepScan", "RecycleBin", association.target_name,
+            )
+            builder.nodes[synthetic_id] = alias_node
+            builder.root_nodes.append(alias_node)
+            counts["aliasesAdded"] += 1
+
+        status = "inconclusive" if inconclusive else "complete"
+        return {
+            "status": status,
+            "inconclusive": inconclusive,
+            "reason": "no_recycle_bin_index_found" if not associations else None,
+            **counts,
+        }
+
+    @staticmethod
+    def _scan_usn_journal(nodes, reader):
+        """Summarize bounded USN metadata without exposing journal events."""
+        try:
+            evidence = UsnJournalEvidenceScanner().scan(nodes, reader.read_named_stream)
+        except Exception:
+            return {
+                "status": "inconclusive",
+                "inconclusive": True,
+                "journalCount": 0,
+                "streamCount": 0,
+                "bytesRead": 0,
+                "recordsExamined": 0,
+                "parsedRecords": 0,
+                "deletedEvents": 0,
+                "malformedRecords": 0,
+                "limitReached": False,
+                "errorCount": 1,
+            }
+
+        scans = [item.scan for item in evidence if item.scan is not None]
+        inconclusive = any(item.status != "complete" for item in evidence)
+        return {
+            "status": "inconclusive" if inconclusive else "complete",
+            "inconclusive": inconclusive,
+            "journalCount": sum(item.journal_node is not None for item in evidence),
+            "streamCount": len(scans),
+            "bytesRead": sum(item.bytes_read for item in evidence),
+            "recordsExamined": sum(item.records_examined for item in scans),
+            "parsedRecords": sum(len(item.artifacts) for item in scans),
+            "deletedEvents": sum(
+                artifact.indicates_delete
+                for scan in scans for artifact in scan.artifacts
+            ),
+            "malformedRecords": sum(item.malformed_records for item in scans),
+            "limitReached": any(
+                item.status == "partial" or item.scan is not None and item.scan.limit_reached
+                for item in evidence
+            ),
+            "errorCount": sum(item.status in {"read_error", "invalid_stream"} for item in evidence),
+        }
 
     @staticmethod
     def _carving_summary(
