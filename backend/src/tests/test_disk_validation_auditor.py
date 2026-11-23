@@ -170,6 +170,20 @@ class DiskReadCoverageTests(unittest.TestCase):
         self.assertEqual(result["freeClusters"], 13)
         self.assertEqual(result["systemClustersAllocated"], {"0": True, "2": True, "3": False, "5": True})
 
+    def test_bitmap_scan_uses_requested_trusted_carving_range_budget(self):
+        volume = SimpleNamespace(partition_offset=0, cluster_size=512)
+        bitmap = SimpleNamespace(file_size=1, resident_data=b"\x00", data_runs=())
+
+        result = DiskValidationAuditor._scan_bitmap(
+            FakeDisk(bytes(4096)), volume, bitmap, expected_bytes=1,
+            cluster_count=8, target_clusters=(), collect_carving_ranges=True,
+            carving_range_max_bytes=1024,
+        )
+
+        self.assertEqual(result["_contentCarvingRanges"], ((0, 1024),))
+        self.assertEqual(result["_contentCarvingRangeCapBytes"], 1024)
+        self.assertTrue(result["_contentCarvingRangesTruncated"])
+
     def test_bitmap_scan_classifies_orphan_runs_without_rejecting_allocated_clusters(self):
         volume = SimpleNamespace(partition_offset=0, cluster_size=512)
         bitmap = SimpleNamespace(file_size=2, resident_data=b"\x25\x00", data_runs=())
