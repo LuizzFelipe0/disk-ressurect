@@ -183,8 +183,11 @@ class ClusterAllocationEvidence:
 class FreeClusterRangeCollector:
     """Retain a bounded prefix of free-cluster byte ranges for content carving."""
 
-    def __init__(self, volume_start, cluster_size, cluster_count, *, max_bytes=1024 * 1024 * 1024,
-                 max_ranges=8192):
+    DEFAULT_MAX_BYTES = 1024 * 1024 * 1024
+    DEFAULT_MAX_RANGES = 8192
+
+    def __init__(self, volume_start, cluster_size, cluster_count, *, max_bytes=DEFAULT_MAX_BYTES,
+                 max_ranges=DEFAULT_MAX_RANGES):
         self.volume_start = int(volume_start)
         self.cluster_size = int(cluster_size)
         self.cluster_count = max(0, int(cluster_count))
@@ -229,6 +232,7 @@ class FreeClusterRangeCollector:
         return {
             "ranges": tuple(self.ranges),
             "retainedBytes": self._retained_bytes,
+            "rangeCapBytes": self.max_bytes,
             "truncated": self.truncated,
         }
 
