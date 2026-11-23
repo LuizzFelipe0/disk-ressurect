@@ -212,7 +212,7 @@ class DiskValidationAuditor:
 
     def validate(
         self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
-        orphan_scan_volume=None,
+        orphan_scan_volume=None, content_carving_range_budget_bytes=None,
     ):
         physical_disk = next(
             (item for item in self.disk_enumerator.list_disks() if item.number == int(disk_number)),
@@ -307,6 +307,7 @@ class DiskValidationAuditor:
                         progress_callback=progress_callback,
                         precomputed_orphans=(orphan_stream.finish() if retain_orphans
                             and orphan_stream is not None else None),
+                        content_carving_range_budget_bytes=content_carving_range_budget_bytes,
                     )
                     if retain_orphans:
                         check, orphan_records, carving_ranges, uncertain_ranges = checked
@@ -466,7 +467,7 @@ class DiskValidationAuditor:
     @staticmethod
     def _validate_ntfs_volume(
         disk, volume, boot_offsets, retain_orphans=False, progress_callback=None,
-        precomputed_orphans=None,
+        precomputed_orphans=None, content_carving_range_budget_bytes=None,
     ):
         sector_size = int(volume.bytes_per_sector)
         cluster_size = int(volume.cluster_size)
@@ -563,6 +564,7 @@ class DiskValidationAuditor:
             expected_bitmap_bytes, cluster_count, target_clusters,
             orphan_records=orphans,
             collect_carving_ranges=retain_orphans,
+            carving_range_max_bytes=content_carving_range_budget_bytes,
         )
         for item in bitmap_stats.get("orphanDataAllocation", ()):
             record = orphans.get(int(item["recordId"]))
@@ -604,6 +606,9 @@ class DiskValidationAuditor:
             "expectedBitmapBytes": expected_bitmap_bytes,
             "bitmapAllocation": bitmap_stats,
             "contentCarvingRangesTruncated": carving_ranges_truncated,
+            "contentCarvingRangeCapBytes": int(content_carving_range_budget_bytes
+                if content_carving_range_budget_bytes is not None
+                else FreeClusterRangeCollector.DEFAULT_MAX_BYTES),
             "orphanedFileRecordCount": len(orphans),
         }
         return (check, orphans, content_carving_ranges, uncertain_ranges) if retain_orphans else check
@@ -611,7 +616,7 @@ class DiskValidationAuditor:
     @staticmethod
     def _scan_bitmap(
         disk, volume, bitmap_record, expected_bytes, cluster_count, target_clusters,
-        orphan_records=None, collect_carving_ranges=False,
+        orphan_records=None, collect_carving_ranges=False, carving_range_max_bytes=None,
     ):
         selected = {cluster for cluster in target_clusters if 0 <= cluster < cluster_count}
         selected_ordered = sorted(selected)
@@ -621,6 +626,8 @@ class DiskValidationAuditor:
         orphan_evidence = ClusterAllocationEvidence(orphan_records, cluster_count)
         free_range_collector = FreeClusterRangeCollector(
             int(volume.partition_offset), int(volume.cluster_size), cluster_count,
+            max_bytes=(FreeClusterRangeCollector.DEFAULT_MAX_BYTES
+                if carving_range_max_bytes is None else int(carving_range_max_bytes)),
         ) if collect_carving_ranges else None
         remaining = int(getattr(bitmap_record, "file_size", 0)) if bitmap_record else 0
         if bitmap_record and bitmap_record.resident_data is not None:
@@ -692,6 +699,7 @@ class DiskValidationAuditor:
             carving = free_range_collector.finish()
             result["_contentCarvingRanges"] = carving["ranges"]
             result["_contentCarvingRangesTruncated"] = carving["truncated"]
+            result["_contentCarvingRangeCapBytes"] = carving["rangeCapBytes"]
             result["_uncertainContentCarvingRanges"] = orphan_evidence.uncertain_content_ranges(
                 int(volume.partition_offset), int(volume.cluster_size),
             )
