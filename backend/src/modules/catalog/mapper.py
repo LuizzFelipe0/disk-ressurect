@@ -38,6 +38,8 @@ class CatalogMapper:
             disk_validation=disk_validation,
             content_carving=getattr(snapshot, "content_carving_summary", None),
             low_confidence_carving=getattr(snapshot, "low_confidence_carving_summary", None),
+            recycle_bin_recovery=getattr(snapshot, "recycle_bin_summary", None),
+            usn_journal_evidence=getattr(snapshot, "usn_journal_summary", None),
         )
 
     @staticmethod
@@ -60,6 +62,10 @@ class CatalogMapper:
                 else getattr(node.record, "cluster_allocation_status", None)
             ),
             metadata_consistent=getattr(node.record, "is_metadata_consistent", None),
+            recovery_source=getattr(node.record, "recovery_source", None),
+            original_path=getattr(node.record, "original_path", None),
+            deletion_timestamp_utc=getattr(node.record, "deletion_timestamp_utc", None),
+            original_size_bytes=getattr(node.record, "recycle_bin_original_size_bytes", None),
         )
 
     @staticmethod
