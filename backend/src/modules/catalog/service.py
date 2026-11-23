@@ -1,5 +1,4 @@
 import os
-import hashlib
 import copy
 
 from disk.platform import disk_reader_factory
@@ -8,16 +7,15 @@ from modules.catalog.models import RecoveryCatalogSnapshot
 from disk.access.ports import DiskReaderFactory
 from disk.deep_scan.ghost_mft_carver import GhostMFTCarver
 from disk.deep_scan.content_carver import RawContentCarver
-from modules.catalog.carved_content_record import CarvedContentRecord
+from modules.catalog.carved_candidate_catalog import CarvedCandidateCatalog
 from modules.catalog.content_validation import CatalogContentValidator
 from ntfs.cluster_allocation import ClusterAllocationEvidence
-from ntfs.artifact_sources import (
-    RecycleBinRecoveryHelper,
-    UsnJournalEvidenceScanner,
-    has_path_component,
-)
+from ntfs.artifact_models import has_path_component
 from ntfs.file_content_reader import NTFSFileContentReader
 from ntfs.tree_builder import FileNode, TreeBuilder
+from ntfs.recycle_bin import RecycleBinRecoveryHelper
+from ntfs.usn_journal import UsnJournalEvidenceScanner
+from ntfs.usn_mft_correlator import UsnMftCorrelator
 
 
 class CatalogService:
@@ -89,169 +87,30 @@ class CatalogService:
                 recycle_bin_summary = self._add_recycle_bin_aliases(
                     builder, evidence_reader,
                 )
-                usn_journal_summary = self._scan_usn_journal(
+                usn_journal_summary, usn_delete_events = self._scan_usn_journal(
                     builder.nodes.values(), evidence_reader,
                 )
+                usn_journal_summary.update(UsnMftCorrelator().correlate(
+                    usn_delete_events,
+                    builder,
+                    content_validator,
+                    Extractor.supported_extensions(),
+                ))
                 if precomputed_carving_ranges is not None:
-                    def report_carving_progress(completed, total):
-                        if phase_callback is not None:
-                            phase_callback("content_carving", completed, total)
-
-                    carver_options = {}
-                    if carving_options is not None:
-                        carver_options = {
-                            "max_scan_bytes": int(carving_options.scan_budget_gib) * 1024**3,
-                            "max_files": int(carving_options.max_files),
-                        }
-                    carving = RawContentCarver(disk, **carver_options).scan(
-                        precomputed_carving_ranges,
-                        progress_callback=report_carving_progress if phase_callback is not None else None,
-                        resume_checkpoint=carving_checkpoint,
-                        checkpoint_callback=carving_checkpoint_callback,
-                        ranges_truncated=bool(carving_ranges_truncated),
+                    (content_carving_summary, low_confidence_carving_summary) = (
+                        self._scan_content_carving(
+                            disk,
+                            builder,
+                            precomputed_carving_ranges,
+                            carving_ranges_truncated,
+                            carving_options,
+                            carving_checkpoint,
+                            carving_checkpoint_callback,
+                            precomputed_uncertain_carving_ranges,
+                            uncertain_carving_ranges_truncated,
+                            phase_callback,
+                        )
                     )
-                    retained_content_digests = set()
-                    retained_content_offsets = set()
-                    for candidate in carving.files:
-                        retained_content_digests.add(hashlib.sha256(candidate.data).digest())
-                        retained_content_offsets.add(int(candidate.offset))
-                        synthetic_id = -(int(disk.size) + int(candidate.offset) + 1)
-                        while synthetic_id in builder.nodes:
-                            synthetic_id -= 1
-                        record = CarvedContentRecord(
-                            index=synthetic_id,
-                            offset=int(candidate.offset),
-                            name=f"Carved_{int(candidate.offset):016X}{candidate.extension}",
-                            resident_data=candidate.data,
-                        )
-                        node = FileNode(record, is_orphaned=True, is_content_carved=True)
-                        node.full_path = os.path.join(
-                            "Lost_Files_DeepScan", "ContentCarving", record.name,
-                        )
-                        builder.nodes[synthetic_id] = node
-                        builder.root_nodes.append(node)
-                    content_carving_summary = {
-                        "filesFound": len(carving.files),
-                        "filesFoundByExtension": {
-                            item.extension: item.files_found for item in carving.format_stats
-                        },
-                        "candidatesExaminedByExtension": {
-                            item.extension: item.candidates_examined for item in carving.format_stats
-                        },
-                        "candidateBytesReadByExtension": {
-                            item.extension: item.candidate_bytes_read for item in carving.format_stats
-                        },
-                        "candidateLimitReachedByExtension": {
-                            item.extension: item.candidate_limit_reached for item in carving.format_stats
-                        },
-                        "fileSizeLimitReachedByExtension": {
-                            item.extension: item.file_size_limit_reached for item in carving.format_stats
-                        },
-                        "decodedDataLimitReachedByExtension": {
-                            item.extension: item.decoded_data_limit_reached for item in carving.format_stats
-                        },
-                        "candidateReadCapBytes": carving.candidate_read_cap_bytes,
-                        "candidateReadCapBytesPerFormat": carving.candidate_read_cap_bytes_per_format,
-                        "maxFileBytes": carving.max_file_bytes,
-                        "maxDecodedPngBytes": carving.max_decoded_png_bytes,
-                        "scanByteCap": carving.max_scan_bytes,
-                        "scanBudgetGiB": (carving_options.scan_budget_gib
-                            if carving_options is not None else 1),
-                        "rangeCollectionCapBytes": (carving_options.scan_budget_gib * 1024**3
-                            if carving_options is not None else 1024**3),
-                        "rangeBytesRetained": sum(
-                            end - start for start, end in precomputed_carving_ranges
-                        ),
-                        "retainedBytesCap": carving.max_total_file_bytes,
-                        "fileCountCap": carving.max_files,
-                        "formatsAttempted": [item.extension for item in carving.format_stats],
-                        "validationScope": "contiguous_structure_and_signature",
-                        "bytesScanned": carving.bytes_scanned,
-                        "cumulativeBytesScanned": carving.cumulative_bytes_scanned,
-                        "resumeAvailable": carving.checkpoint is not None,
-                        "candidateRestoreBytesRead": carving.candidate_restore_bytes_read,
-                        "scanLimitReached": carving.scan_limit_reached,
-                        "candidateBytesRead": carving.candidate_bytes_read,
-                        "candidateLimitReached": carving.candidate_limit_reached,
-                        "fileCountLimitReached": carving.file_count_limit_reached,
-                        "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
-                        "rangeCount": len(precomputed_carving_ranges),
-                        "rangeCollectionTruncated": bool(carving_ranges_truncated),
-                            "confidence": "trusted_free_space",
-                    }
-                    if precomputed_uncertain_carving_ranges is not None:
-                        low_confidence_carving_summary = {}
-                        truncation = uncertain_carving_ranges_truncated or {}
-                        for key, allocation_status, folder_name, phase_name in (
-                            ("bitmapUnobserved", "bitmap_unobserved", "BitmapUnobserved",
-                                "content_carving_unobserved"),
-                            ("possiblyReused", "possibly_reused", "PossiblyReused",
-                                "content_carving_reused"),
-                        ):
-                            ranges = tuple(precomputed_uncertain_carving_ranges.get(key, ()))
-                            def report_low_confidence_progress(completed, total, phase=phase_name):
-                                if phase_callback is not None:
-                                    phase_callback(phase, completed, total)
-
-                            low_carver = RawContentCarver(
-                                disk,
-                                max_scan_bytes=self.LOW_CONFIDENCE_MAX_SCAN_BYTES,
-                                max_candidate_read_bytes=self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES,
-                                max_candidate_read_bytes_per_format=(
-                                    self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES_PER_FORMAT
-                                ),
-                                max_file_bytes=self.LOW_CONFIDENCE_MAX_FILE_BYTES,
-                                max_total_file_bytes=self.LOW_CONFIDENCE_MAX_TOTAL_FILE_BYTES,
-                                max_files=self.LOW_CONFIDENCE_MAX_FILES,
-                            )
-                            low_carving = low_carver.scan(
-                                ranges,
-                                progress_callback=report_low_confidence_progress
-                                if phase_callback is not None else None,
-                            )
-                            added = 0
-                            for candidate in low_carving.files:
-                                digest = hashlib.sha256(candidate.data).digest()
-                                if (digest in retained_content_digests
-                                        or int(candidate.offset) in retained_content_offsets):
-                                    continue
-                                retained_content_digests.add(digest)
-                                retained_content_offsets.add(int(candidate.offset))
-                                synthetic_id = -(int(disk.size) + int(candidate.offset) + 1)
-                                while synthetic_id in builder.nodes:
-                                    synthetic_id -= 1
-                                record = CarvedContentRecord(
-                                    index=synthetic_id,
-                                    offset=int(candidate.offset),
-                                    name=f"Carved_{int(candidate.offset):016X}{candidate.extension}",
-                                    resident_data=candidate.data,
-                                    cluster_allocation_status=allocation_status,
-                                    catalog_content_validation_reason=(
-                                        "Contiguous format structure passed validation; allocation "
-                                        "is unknown or may describe current/reused data"
-                                    ),
-                                )
-                                node = FileNode(record, is_orphaned=True, is_content_carved=True)
-                                node.full_path = os.path.join(
-                                    "Lost_Files_DeepScan", "LowConfidence", folder_name, record.name,
-                                )
-                                builder.nodes[synthetic_id] = node
-                                builder.root_nodes.append(node)
-                                added += 1
-                            low_confidence_carving_summary[key] = self._carving_summary(
-                                low_carving,
-                                ranges,
-                                bool(truncation.get(key, False)),
-                                confidence="low",
-                                allocation_status=allocation_status,
-                                catalog_items_added=added,
-                            )
-                            low_confidence_carving_summary[key]["rangeBytesRetained"] = sum(
-                                end - start for start, end in ranges
-                            )
-                            low_confidence_carving_summary[key]["rangeCollectionCapBytes"] = (
-                                ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
-                            )
                 nodes = builder.nodes
             return RecoveryCatalogSnapshot(
                 catalog=RecoveryCatalog(nodes, builder.root_nodes),
@@ -265,6 +124,130 @@ class CatalogService:
             )
         finally:
             disk.close()
+
+    def _scan_content_carving(
+        self, disk, builder, ranges, ranges_truncated, options, checkpoint,
+        checkpoint_callback, uncertain_ranges, uncertain_ranges_truncated,
+        phase_callback,
+    ):
+        """Run trusted and bounded low-confidence carving passes for one volume."""
+        carver_options = {}
+        if options is not None:
+            carver_options = {
+                "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
+                "max_files": int(options.max_files),
+                "max_total_file_bytes": int(
+                    getattr(options, "max_retained_mib", 128)
+                ) * 1024**2,
+            }
+        carving = RawContentCarver(disk, **carver_options).scan(
+            ranges,
+            progress_callback=self._phase_progress(phase_callback, "content_carving"),
+            resume_checkpoint=checkpoint,
+            checkpoint_callback=checkpoint_callback,
+            ranges_truncated=bool(ranges_truncated),
+        )
+        candidate_catalog = CarvedCandidateCatalog(builder, disk.size)
+        candidate_catalog.add(carving.files, ("Lost_Files_DeepScan", "ContentCarving"))
+        budget_gib = options.scan_budget_gib if options is not None else 1
+        retained_budget_mib = (
+            getattr(options, "max_retained_mib", 128) if options is not None else 128
+        )
+        trusted_summary = {
+            "filesFound": len(carving.files),
+            **self._format_metrics(carving),
+            "candidateReadCapBytes": carving.candidate_read_cap_bytes,
+            "candidateReadCapBytesPerFormat": carving.candidate_read_cap_bytes_per_format,
+            "maxFileBytes": carving.max_file_bytes,
+            "maxDecodedPngBytes": carving.max_decoded_png_bytes,
+            "scanByteCap": carving.max_scan_bytes,
+            "scanBudgetGiB": budget_gib,
+            "rangeCollectionCapBytes": budget_gib * 1024**3,
+            "retainedBudgetMiB": retained_budget_mib,
+            "rangeBytesRetained": sum(end - start for start, end in ranges),
+            "retainedBytesCap": carving.max_total_file_bytes,
+            "fileCountCap": carving.max_files,
+            "bytesScanned": carving.bytes_scanned,
+            "cumulativeBytesScanned": carving.cumulative_bytes_scanned,
+            "resumeAvailable": carving.checkpoint is not None,
+            "candidateRestoreBytesRead": carving.candidate_restore_bytes_read,
+            "scanLimitReached": carving.scan_limit_reached,
+            "candidateBytesRead": carving.candidate_bytes_read,
+            "candidateLimitReached": carving.candidate_limit_reached,
+            "fileCountLimitReached": carving.file_count_limit_reached,
+            "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
+            "rangeCount": len(ranges),
+            "rangeCollectionTruncated": bool(ranges_truncated),
+            "confidence": "trusted_free_space",
+        }
+        low_confidence_summary = None
+        if uncertain_ranges is not None:
+            low_confidence_summary = self._scan_low_confidence_ranges(
+                disk,
+                candidate_catalog,
+                uncertain_ranges,
+                uncertain_ranges_truncated or {},
+                phase_callback,
+            )
+        return trusted_summary, low_confidence_summary
+
+    def _scan_low_confidence_ranges(
+        self, disk, candidate_catalog, uncertain_ranges, truncation, phase_callback,
+    ):
+        summary = {}
+        passes = (
+            ("bitmapUnobserved", "bitmap_unobserved", "BitmapUnobserved",
+             "content_carving_unobserved"),
+            ("possiblyReused", "possibly_reused", "PossiblyReused",
+             "content_carving_reused"),
+        )
+        for key, allocation_status, folder_name, phase_name in passes:
+            ranges = tuple(uncertain_ranges.get(key, ()))
+            low_carver = RawContentCarver(
+                disk,
+                max_scan_bytes=self.LOW_CONFIDENCE_MAX_SCAN_BYTES,
+                max_candidate_read_bytes=self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES,
+                max_candidate_read_bytes_per_format=(
+                    self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES_PER_FORMAT
+                ),
+                max_file_bytes=self.LOW_CONFIDENCE_MAX_FILE_BYTES,
+                max_total_file_bytes=self.LOW_CONFIDENCE_MAX_TOTAL_FILE_BYTES,
+                max_files=self.LOW_CONFIDENCE_MAX_FILES,
+            )
+            low_carving = low_carver.scan(
+                ranges,
+                progress_callback=self._phase_progress(phase_callback, phase_name),
+            )
+            added = candidate_catalog.add(
+                low_carving.files,
+                ("Lost_Files_DeepScan", "LowConfidence", folder_name),
+                allocation_status=allocation_status,
+            )
+            summary[key] = self._carving_summary(
+                low_carving,
+                ranges,
+                bool(truncation.get(key, False)),
+                confidence="low",
+                allocation_status=allocation_status,
+                catalog_items_added=added,
+            )
+            summary[key]["rangeBytesRetained"] = sum(
+                end - start for start, end in ranges
+            )
+            summary[key]["rangeCollectionCapBytes"] = (
+                ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
+            )
+        return summary
+
+    @staticmethod
+    def _phase_progress(phase_callback, phase_name):
+        if phase_callback is None:
+            return None
+
+        def report(completed, total):
+            phase_callback(phase_name, completed, total)
+
+        return report
 
     @staticmethod
     def supported_extensions():
@@ -405,11 +388,11 @@ class CatalogService:
                 "malformedRecords": 0,
                 "limitReached": False,
                 "errorCount": 1,
-            }
+            }, ()
 
         scans = [item.scan for item in evidence if item.scan is not None]
         inconclusive = any(item.status != "complete" for item in evidence)
-        return {
+        summary = {
             "status": "inconclusive" if inconclusive else "complete",
             "inconclusive": inconclusive,
             "journalCount": sum(item.journal_node is not None for item in evidence),
@@ -428,14 +411,16 @@ class CatalogService:
             ),
             "errorCount": sum(item.status in {"read_error", "invalid_stream"} for item in evidence),
         }
+        delete_events = tuple(
+            artifact for item in evidence for artifact in item.events
+            if artifact.indicates_delete
+        )
+        return summary, delete_events
 
     @staticmethod
-    def _carving_summary(
-        carving, ranges, range_collection_truncated, *, confidence, allocation_status,
-        catalog_items_added,
-    ):
+    def _format_metrics(carving):
+        """Build the shared per-format diagnostics for every carving tier."""
         return {
-            "filesFound": len(carving.files),
             "filesFoundByExtension": {
                 item.extension: item.files_found for item in carving.format_stats
             },
@@ -456,6 +441,16 @@ class CatalogService:
             },
             "formatsAttempted": [item.extension for item in carving.format_stats],
             "validationScope": "contiguous_structure_and_signature",
+        }
+
+    @staticmethod
+    def _carving_summary(
+        carving, ranges, range_collection_truncated, *, confidence, allocation_status,
+        catalog_items_added,
+    ):
+        return {
+            "filesFound": len(carving.files),
+            **CatalogService._format_metrics(carving),
             "confidence": confidence,
             "allocationStatus": allocation_status,
             "catalogItemsAdded": catalog_items_added,
