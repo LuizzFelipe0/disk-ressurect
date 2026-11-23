@@ -91,6 +91,42 @@ def validate_additional_candidate(data: bytes) -> AdditionalFormatCandidate | No
     return _validate_iso_bmff(data)
 
 
+def is_plausible_office_local_header(data: bytes) -> bool:
+    """Reject obvious ZIP false positives before reading a full candidate.
+
+    This checks only the bounded local header. The central directory remains
+    the authority for accepting an OOXML file.
+    """
+    data = bytes(data)
+    if len(data) < 30 or not data.startswith(ZIP_LOCAL_FILE_HEADER):
+        return False
+    version_needed = int.from_bytes(data[4:6], "little")
+    flags = int.from_bytes(data[6:8], "little")
+    compression = int.from_bytes(data[8:10], "little")
+    compressed_size = int.from_bytes(data[18:22], "little")
+    uncompressed_size = int.from_bytes(data[22:26], "little")
+    name_length = int.from_bytes(data[26:28], "little")
+    extra_length = int.from_bytes(data[28:30], "little")
+    name_end = 30 + name_length
+    header_end = name_end + extra_length
+    if (version_needed < 10 or version_needed > 63 or flags & (0x1 | 0x40)
+            or compression not in (0, 8) or compressed_size == 0xFFFFFFFF
+            or uncompressed_size == 0xFFFFFFFF or not 1 <= name_length <= 1024
+            or extra_length > 4096 or header_end > len(data)):
+        return False
+    try:
+        name = data[30:name_end].decode("utf-8" if flags & 0x800 else "cp437")
+    except UnicodeDecodeError:
+        return False
+    normalized = name.replace("\\", "/")
+    if (not normalized or normalized.startswith("/") or "\x00" in normalized
+            or any(part == ".." for part in normalized.split("/"))):
+        return False
+    return normalized in _OOXML_SHARED_REQUIRED or normalized.startswith((
+        "_rels/", "docProps/", "word/", "xl/", "ppt/", "customXml/", "customUI/",
+    ))
+
+
 def _validate_ooxml(data: bytes) -> AdditionalFormatCandidate | None:
     if not data.startswith(ZIP_LOCAL_FILE_HEADER):
         return None
