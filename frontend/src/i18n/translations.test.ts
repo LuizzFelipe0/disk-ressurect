@@ -7,9 +7,15 @@ describe("application translations", () => {
     for (const language of languages) {
       if (language !== "en-US") expect(translate(language, "recoverSelected")).not.toBe("Recover selected");
       expect(translate(language, "sourceDisk")).toBeTruthy();
+      expect(translate(language, "openFilters")).toBeTruthy();
+      expect(translate(language, "filterSections")).toBeTruthy();
+      expect(translate(language, "selectionActions")).toBeTruthy();
       expect(translate(language, "includeOrphaned")).toBeTruthy();
       expect(translate(language, "carvingScanBudget")).toBeTruthy();
       expect(translate(language, "carvingMaxFiles")).toBeTruthy();
+      expect(translate(language, "carvingRetainedBudget")).toBeTruthy();
+      expect(translate(language, "usnMftCorrelationLimitReached")).toBeTruthy();
+      expect(translate(language, "usnMftRecoverySourceLabel")).toBeTruthy();
       expect(translate(language, "recycleBinRecoveryHeading")).toBeTruthy();
       expect(translate(language, "usnJournalEvidenceHeading")).toBeTruthy();
       expect(translate(language, "recycleBinSourceLabel")).toBeTruthy();
