@@ -60,10 +60,10 @@ class DiskInventory:
 
     def validate_disk(
         self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
-        orphan_scan_volume=None,
+        orphan_scan_volume=None, content_carving_range_budget_bytes=None,
     ):
         """Read and audit the entire physical disk without modifying its contents."""
         return DiskValidationAuditor(self.enumerator, self.disk_factory).validate(
             int(disk_number), progress_callback, retain_orphans_for_offset,
-            orphan_scan_volume,
+            orphan_scan_volume, content_carving_range_budget_bytes,
         )
