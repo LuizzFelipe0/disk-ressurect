@@ -8,13 +8,18 @@ describe("application translations", () => {
       if (language !== "en-US") expect(translate(language, "recoverSelected")).not.toBe("Recover selected");
       expect(translate(language, "sourceDisk")).toBeTruthy();
       expect(translate(language, "includeOrphaned")).toBeTruthy();
+      expect(translate(language, "carvingScanBudget")).toBeTruthy();
+      expect(translate(language, "carvingMaxFiles")).toBeTruthy();
+      expect(translate(language, "recycleBinRecoveryHeading")).toBeTruthy();
+      expect(translate(language, "usnJournalEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "recycleBinSourceLabel")).toBeTruthy();
       expect(translate(language, "orphanedEntriesCount", { count: 2 })).toContain("2");
       expect(translate(language, "loadingContents", { name: "Photos" })).toContain("Photos");
       for (const key of ["includeOrphaned", "orphanedDeleted", "partitionLabel", "catalogItems", "statusScanningOrphans"] as const) {
         expect(translate(language, key)).not.toMatch(/MFT|NTFS/i);
       }
       expect(translate(language, "orphanScanWarning")).toBeTruthy();
-      expect(translate(language, "orphanScanWarning")).toMatch(/864 MiB|864 Mio/);
+      expect(translate(language, "orphanScanWarning")).toMatch(/64 GiB|64 Gio/);
       expect(translate(language, "orphanRecordAllocationSummary", {
         free: 9910, allocated: 0, mixed: 2, unknown: 921,
       })).toContain("9910");
