@@ -11,8 +11,11 @@ import zlib
 
 from disk.deep_scan.carving_checkpoint import CarvedCandidateReference, CarvingCheckpoint
 from disk.deep_scan.additional_format_validators import (
+    MAX_ISO_BMFF_BOXES,
     ZIP_END_OF_CENTRAL_DIRECTORY,
     ZIP_LOCAL_FILE_HEADER,
+    AdditionalFormatCandidate,
+    is_plausible_office_local_header,
     validate_additional_candidate,
 )
 
@@ -600,9 +603,28 @@ class RawContentCarver:
 
     def _read_office_zip(self, offset, range_end, byte_budget):
         """Read one bounded ZIP candidate; its family budget is shared by OOXML."""
-        content = bytearray()
-        cursor = offset
-        bytes_read = 0
+        if byte_budget < 30:
+            partial = self._read_candidate_bytes(offset, byte_budget, range_end, byte_budget)
+            if partial is None:
+                return None, 0, "candidate_budget"
+            return None, len(partial), "candidate_budget"
+        fixed_header = self._read_candidate_bytes(offset, 30, range_end, byte_budget)
+        if fixed_header is None:
+            return None, 0, "candidate_budget" if byte_budget < 30 else None
+        name_length = int.from_bytes(fixed_header[26:28], "little")
+        extra_length = int.from_bytes(fixed_header[28:30], "little")
+        variable_length = name_length + extra_length
+        bytes_read = len(fixed_header)
+        variable_header = self._read_candidate_bytes(
+            offset + bytes_read, variable_length, range_end, byte_budget - bytes_read,
+        )
+        if variable_header is None:
+            return None, bytes_read, None
+        bytes_read += len(variable_header)
+        content = bytearray(fixed_header + variable_header)
+        if not is_plausible_office_local_header(content):
+            return None, bytes_read, None
+        cursor = offset + len(content)
         while (cursor < range_end and len(content) < self.max_file_bytes
                and bytes_read < byte_budget):
             request_size = min(
@@ -636,6 +658,7 @@ class RawContentCarver:
         cursor = offset
         bytes_read = 0
         saw_ftyp = saw_mdat = saw_movie_metadata = False
+        box_count = 0
         while cursor < range_end and len(content) < self.max_file_bytes and bytes_read < byte_budget:
             if bytes_read + 8 > byte_budget:
                 return None, bytes_read, "candidate_budget"
@@ -668,9 +691,14 @@ class RawContentCarver:
                 return None, bytes_read, None
             box_type = header[4:8]
             if is_first_box:
-                saw_ftyp = box_type == b"ftyp"
+                if box_type != b"ftyp" or box_size < 16 or (box_size - 16) % 4 != 0:
+                    return None, bytes_read, None
+                saw_ftyp = True
             saw_mdat |= box_type == b"mdat"
             saw_movie_metadata |= box_type in (b"moov", b"moof")
+            box_count += 1
+            if box_count > MAX_ISO_BMFF_BOXES:
+                return None, bytes_read, None
             payload_size = box_size - header_size
             if len(content) + payload_size > self.max_file_bytes:
                 return None, bytes_read, "file_size"
@@ -683,9 +711,7 @@ class RawContentCarver:
             cursor += payload_size
             bytes_read += payload_size
             if saw_ftyp and saw_mdat and saw_movie_metadata:
-                candidate = validate_additional_candidate(content)
-                if candidate is not None and candidate.extension == ".mp4":
-                    return bytes(content[:candidate.size_bytes]), bytes_read, None
+                return bytes(content), bytes_read, None
         if len(content) >= self.max_file_bytes:
             return None, bytes_read, "file_size"
         if bytes_read >= byte_budget:
