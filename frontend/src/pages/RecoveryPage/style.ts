@@ -66,6 +66,16 @@ export const OrphanScanControls = styled.div`
   p { margin: 4px 0 0 24px; color: ${brandColors.textTertiary}; font-size: 11px; }
 `;
 
+export const CarvingBudgetControls = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin: 10px 0 0 24px;
+  > div { flex: 0 1 220px; min-width: 190px; }
+  > div > div { width: 100%; }
+`;
+
 export const DestinationRow = styled.div`
   display: flex;
   align-items: end;
