@@ -148,15 +148,33 @@ afterEach(() => {
 });
 
 describe("RecoveryPage audit details", () => {
+  it("keeps selection actions visible and disabled until a catalog is available", () => {
+    const catalog = recovery.catalog;
+    recovery.catalog = null as never;
+    render(<RecoveryPage />);
+    recovery.catalog = catalog;
+
+    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
+    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
+    for (const name of ["Selecionar tudo", "Limpar seleção", "Recuperar selecionados"]) {
+      expect((within(foundFilesHeader!).getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
   it("opens the filter drawer with file type, size and selection controls", async () => {
     render(<RecoveryPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Filtros" }));
+    const filterTrigger = screen.getByRole("button", { name: "Filtros" });
+    expect(filterTrigger.closest("header")).not.toBeNull();
+    fireEvent.click(filterTrigger);
     const dialog = await screen.findByRole("dialog", { name: "Filtros" });
-    expect(within(dialog).getByRole("navigation", { name: "Seções de filtros" })).toBeTruthy();
-    expect(within(dialog).getAllByText("Tipos de arquivo").length).toBeGreaterThan(1);
-    expect(within(dialog).getAllByText("Tamanho mínimo").length).toBeGreaterThan(1);
-    expect(within(dialog).getByRole("button", { name: "Recuperar selecionados" })).toBeTruthy();
+    expect(within(dialog).queryByRole("navigation")).toBeNull();
+    expect(within(dialog).getAllByText("Tipos de arquivo")).toHaveLength(1);
+    expect(within(dialog).getAllByText("Tamanho mínimo")).toHaveLength(1);
+    expect(within(dialog).queryByRole("button", { name: "Recuperar selecionados" })).toBeNull();
+    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
+    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
+    expect(within(foundFilesHeader!).getByRole("button", { name: "Recuperar selecionados" })).toBeTruthy();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());

@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Card, DropdownCheckbox, Footer as BelagioFooter, Header, Input, LanguageToggle, Select, Sidebar, type SiteLanguage } from "belagio-styles-lib";
+import { Button, Card, DropdownCheckbox, Footer as BelagioFooter, Header, Input, LanguageToggle, Select, type SiteLanguage } from "belagio-styles-lib";
 import logo from "../../assets/disk-ressurect-logo.png";
 import filterIcon from "../../assets/filter.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
@@ -36,11 +36,11 @@ import {
   FormControl,
   FormControlCaption,
   FilterBackdrop,
+  HeaderActions,
   FilterPanel,
   FilterPanelContent,
   FilterPanelHeading,
   FilterSection,
-  FilterTriggerRow,
   OrphanScanControls,
   PreviewBody,
   PreviewPane,
@@ -59,7 +59,6 @@ export const RecoveryPage: React.FC = () => {
   const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(128);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
-  const [activeFilterSection, setActiveFilterSection] = React.useState("file-types");
   const filterTriggerRef = React.useRef<HTMLSpanElement>(null);
   const filtersWereOpen = React.useRef(false);
   const auditTriggerRef = React.useRef<HTMLSpanElement>(null);
@@ -156,10 +155,15 @@ export const RecoveryPage: React.FC = () => {
   return (
     <PageLayout lang={language}>
       <PageHeader>
-        <Header icon={logo} title="Disk-Ressurect" actions={<LanguageToggle value={language} size="sm" onChange={(next) => {
-          setLanguage(next);
-          window.localStorage.setItem("disk-ressurect:language", next);
-        }} aria-label="Idioma / Language / Idioma / Langue / 语言" />} />
+        <Header icon={logo} title="Disk-Ressurect" actions={<HeaderActions>
+          <span ref={filterTriggerRef}><Button className="brand-button--ghost" variant="ghost" size="sm"
+            aria-haspopup="dialog" aria-expanded={filtersOpen} aria-controls="recovery-filter-panel"
+            onClick={() => setFiltersOpen(true)}><img src={filterIcon} alt="" />{t("openFilters")}</Button></span>
+          <LanguageToggle value={language} size="sm" onChange={(next) => {
+            setLanguage(next);
+            window.localStorage.setItem("disk-ressurect:language", next);
+          }} aria-label="Idioma / Language / Idioma / Langue / 语言" />
+        </HeaderActions>} />
       </PageHeader>
 
       <PageContent id="recovery-page-content">
@@ -232,23 +236,25 @@ export const RecoveryPage: React.FC = () => {
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
       </DestinationRow></Card>
 
-      <FilterTriggerRow><span ref={filterTriggerRef}><Button className="brand-button--ghost" variant="ghost" size="md"
-        aria-haspopup="dialog" aria-expanded={filtersOpen} aria-controls="recovery-filter-panel"
-        onClick={() => setFiltersOpen(true)}><img src={filterIcon} alt="" />{t("openFilters")}</Button></span></FilterTriggerRow>
-
       <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
         <BrowserHeading>
           <div><h2>{t("foundFiles")}</h2>
             <p>{catalogSummary}</p>
           </div>
           <AuditActions>
+            {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
+            <SelectionActions>
+              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>{t("selectAll")}</Button>
+              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>{t("clearSelection")}</Button>
+              <Button className="brand-button--success" variant="success" size="md" disabled={recovery.busy || !recovery.catalog || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
+                onClick={() => void recovery.recover()}>{t("recoverSelected")}</Button>
+            </SelectionActions>
             {(validation || contentCarving || lowConfidenceCarving
               || recycleBinRecovery || usnJournalEvidence) && <span ref={auditTriggerRef}>
               <Button className="brand-button--ghost" variant="ghost" size="md"
                 aria-haspopup="dialog" aria-controls="disk-audit-overlay"
                 onClick={() => setAuditOpen(true)}>{t("diskAuditDetails")}</Button>
             </span>}
-            {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
           </AuditActions>
         </BrowserHeading>
         {recovery.catalog && <SearchBox><Input
@@ -297,26 +303,11 @@ export const RecoveryPage: React.FC = () => {
         if (event.target === event.currentTarget) setFiltersOpen(false);
       }}>
         <FilterPanel id="recovery-filter-panel" role="dialog" aria-modal="true" aria-labelledby="filter-panel-title">
-          <Sidebar
-            items={[
-              { id: "file-types", label: t("fileTypes") },
-              { id: "minimum-size", label: t("minimumSize") },
-              { id: "selection-actions", label: t("selectionActions") },
-            ]}
-            activeItem={activeFilterSection}
-            onItemSelect={(id) => {
-              setActiveFilterSection(id);
-              document.getElementById(`filter-section-${id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-            }}
-            brand={{ title: t("openFilters") }}
-            sectionLabel={t("filterSections")}
-            navigationLabel={t("filterSections")}
-          />
           <FilterPanelContent>
             <FilterPanelHeading><h2 id="filter-panel-title">{t("openFilters")}</h2>
               <Button className="brand-button--ghost" variant="ghost" size="md" onClick={() => setFiltersOpen(false)}>{t("closeDetails")}</Button>
             </FilterPanelHeading>
-            <FilterSection id="filter-section-file-types"><FormControlCaption>{t("fileTypes")}</FormControlCaption>
+            <FilterSection>
               <DropdownCheckbox label={t("fileTypes")} placeholder={t("allFileTypes")}
                 options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
                 value={recovery.extensions} disabled={recovery.busy}
@@ -326,7 +317,7 @@ export const RecoveryPage: React.FC = () => {
                 onClick={() => recovery.availableExtensions.forEach((extension) =>
                   recovery.setExtensionSelected(extension, !allExtensionsSelected))}>{t("allTypes")}</Button>
             </FilterSection>
-            <FilterSection id="filter-section-minimum-size"><FormControlCaption>{t("minimumSize")}</FormControlCaption>
+            <FilterSection>
               <DropdownCheckbox label={t("minimumSize")} placeholder={t("anySize")} value={[String(recovery.minimumSizeKb)]}
                 disabled={recovery.busy} options={[
                   { value: "0", label: t("anySize") },
@@ -335,15 +326,6 @@ export const RecoveryPage: React.FC = () => {
                   { value: "100", label: "100 KB" },
                   { value: "1024", label: "1 MB" },
                 ]} onChange={(values) => recovery.setMinimumSizeKb(getMinimumSizeKb(values))} />
-            </FilterSection>
-            <FilterSection id="filter-section-selection-actions" aria-label={t("selectionActions")}>
-              <FormControlCaption>{t("selectionActions")}</FormControlCaption>
-              <SelectionActions>
-                <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>{t("selectAll")}</Button>
-                <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>{t("clearSelection")}</Button>
-                <Button className="brand-button--success" variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
-                  onClick={() => void recovery.recover()}>{t("recoverSelected")}</Button>
-              </SelectionActions>
             </FilterSection>
           </FilterPanelContent>
         </FilterPanel>

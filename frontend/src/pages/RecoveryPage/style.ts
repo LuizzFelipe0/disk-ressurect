@@ -14,7 +14,7 @@ export const PageContent = styled.div`
   width: min(1440px, 100%);
   min-height: 0;
   flex: 1;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 10px;
   margin: 0 auto;
   padding: 10px 24px;
@@ -97,8 +97,6 @@ export const SelectionActions = styled.div`
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  margin-left: auto;
-  @media (max-width: 980px) { margin-left: 0; }
 `;
 
 export const BrowserSection = styled.div`
@@ -125,6 +123,8 @@ export const PreviewPane = styled.section`
   min-height: 0;
   overflow: hidden;
   > div { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; }
+  /* Card applies header spacing inline; add one spacing step to align its divider with Found Files. */
+  > div > div:first-child { padding-bottom: 32px !important; }
 `;
 
 export const PreviewBody = styled.div`
@@ -144,8 +144,10 @@ export const PreviewBody = styled.div`
 
 export const BrowserHeading = styled.div`
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  gap: 10px;
   padding-bottom: 8px;
   border-bottom: 1px solid ${brandColors.border};
   h2 { margin: 0; font-size: 15px; }
@@ -180,10 +182,11 @@ export const ActionRow = styled.div`
   gap: 8px;
 `;
 
-export const FilterTriggerRow = styled.div`
+export const HeaderActions = styled.div`
   display: flex;
-  justify-content: flex-end;
-  button { display: inline-flex; align-items: center; gap: 8px; }
+  align-items: center;
+  gap: 10px;
+  > span button { display: inline-flex; align-items: center; gap: 8px; }
   img { width: 18px; height: 18px; object-fit: contain; }
 `;
 
@@ -197,19 +200,19 @@ export const FilterBackdrop = styled.div`
 `;
 
 export const FilterPanel = styled.section`
-  display: grid;
-  width: min(720px, 96vw);
+  display: flex;
+  width: min(520px, 96vw);
   height: 100%;
-  grid-template-columns: 230px minmax(0, 1fr);
   background: #fff;
   box-shadow: -12px 0 36px rgba(0, 0, 0, .18);
   overflow: hidden;
-  > aside { height: 100%; }
-  @media (max-width: 620px) { grid-template-columns: 1fr; > aside { display: none; } }
 `;
 
 export const FilterPanelContent = styled.div`
+  display: flex;
   min-width: 0;
+  width: 100%;
+  flex-direction: column;
   overflow-y: auto;
   padding: 24px;
 `;
