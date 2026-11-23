@@ -12,6 +12,7 @@ from modules.disk_discovery.service import DiskDiscoveryService
 from disk.models import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
+from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
 from modules.commands.controller import RecoveryCommandHandler
 from modules.catalog.service import CatalogService
 
@@ -77,16 +78,23 @@ class FakeCatalogService:
     def __init__(self, workflow):
         self.workflow = workflow
         self.include_orphaned = False
+        self.carving_options = None
+        self.carving_checkpoint = None
 
     def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
               precomputed_orphans=None, precomputed_carving_ranges=None,
               carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
-              uncertain_carving_ranges_truncated=None):
+              uncertain_carving_ranges_truncated=None, carving_options=None,
+              carving_checkpoint=None, carving_checkpoint_callback=None):
         self.include_orphaned = include_orphaned
+        self.carving_options = carving_options
+        self.carving_checkpoint = carving_checkpoint
         self.precomputed_carving_ranges = precomputed_carving_ranges
         self.carving_ranges_truncated = carving_ranges_truncated
         self.precomputed_uncertain_carving_ranges = precomputed_uncertain_carving_ranges
         self.phase_callback = phase_callback
+        if precomputed_carving_ranges is not None and carving_checkpoint_callback is not None:
+            carving_checkpoint_callback(None)
         callback = None
         if progress_callback is not None:
             callback = lambda event: progress_callback(event.completed, event.total)
@@ -104,6 +112,7 @@ class FakeCatalogService:
 class FakeRepository:
     def __init__(self):
         self.entries = {}
+        self.carving_entries = {}
 
     def load(self, disk):
         return self.entries.get(disk.number)
@@ -112,6 +121,17 @@ class FakeRepository:
         result = CachedDeepScan("2026-01-01T00:00:00+00:00", tuple(volumes))
         self.entries[disk.number] = result
         return result
+
+    def load_carving_checkpoint(self, disk, volume):
+        return self.carving_entries.get((disk.number, volume.partition_offset))
+
+    def save_carving_checkpoint(self, disk, volume, checkpoint):
+        key = (disk.number, volume.partition_offset)
+        if checkpoint is None:
+            self.carving_entries.pop(key, None)
+        else:
+            self.carving_entries[key] = checkpoint
+        return checkpoint
 
 
 def make_handler(inventory=None, workflow=None, repository=None):
@@ -222,7 +242,7 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
         class AuditedInventory(FakeInventory):
             def validate_disk(self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
-                              orphan_scan_volume=None):
+                              orphan_scan_volume=None, content_carving_range_budget_bytes=None):
                 order.append("audit")
                 if progress_callback:
                     progress_callback(100, 100, "Reading physical disk | 100/100 bytes")
@@ -254,7 +274,8 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
             def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
                       precomputed_orphans=None, precomputed_carving_ranges=None,
                       carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
-                      uncertain_carving_ranges_truncated=None):
+                      uncertain_carving_ranges_truncated=None, carving_options=None,
+                      carving_checkpoint=None, carving_checkpoint_callback=None):
                 order.append("catalog")
                 if phase_callback:
                     phase_callback("linking", 1, 1)
@@ -265,19 +286,27 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
                 return super().build(volume, progress_callback, include_orphaned,
                     phase_callback, precomputed_orphans, precomputed_carving_ranges,
                     carving_ranges_truncated, precomputed_uncertain_carving_ranges,
-                    uncertain_carving_ranges_truncated)
+                    uncertain_carving_ranges_truncated, carving_options,
+                    carving_checkpoint, carving_checkpoint_callback)
 
         inventory = AuditedInventory()
         workflow = FakeWorkflow()
+        repository = FakeRepository()
+        volume = make_volume()
+        checkpoint = CarvingCheckpoint(
+            "b" * 64, 0, 8192, inventory.list_disks()[0].size_bytes, 512, "profile-v1",
+        )
+        repository.save_carving_checkpoint(inventory.list_disks()[0], volume, checkpoint)
         handler = RecoveryCommandHandler(
-            DiskDiscoveryService(inventory, FakeRepository()),
+            DiskDiscoveryService(inventory, repository),
             OrderedCatalogService(workflow), workflow,
         )
-        handler.session.volumes["1:4096"] = make_volume()
+        handler.session.volumes["1:4096"] = volume
         events = []
 
         catalog = handler.dispatch("scan_catalog", {
             "volumeId": "1:4096", "includeOrphaned": True,
+            "carvingOptions": {"scanBudgetGiB": 16, "maxFiles": 512},
         }, events.append)
 
         self.assertEqual(order, ["audit", "catalog"])
@@ -290,6 +319,10 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         self.assertEqual(handler.catalog_service.precomputed_orphans, {})
         self.assertEqual(handler.catalog_service.precomputed_carving_ranges, ((8192, 12288),))
         self.assertTrue(handler.catalog_service.carving_ranges_truncated)
+        self.assertEqual(handler.catalog_service.carving_options.scan_budget_gib, 16)
+        self.assertEqual(handler.catalog_service.carving_options.max_files, 512)
+        self.assertEqual(handler.catalog_service.carving_checkpoint, checkpoint)
+        self.assertIsNone(repository.load_carving_checkpoint(inventory.list_disks()[0], volume))
         self.assertTrue(any(
             event.get("payload", {}).get("stage") == "disk-validation"
             for event in events
@@ -298,6 +331,60 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
             event.get("payload", {}).get("message") == "Organizing file and folder records…"
             for event in events
         ))
+
+    def test_interrupted_carving_persists_latest_checkpoint_for_the_same_volume(self):
+        inventory = FakeInventory()
+        source_disk = inventory.list_disks()[0]
+        volume = make_volume()
+        repository = FakeRepository()
+
+        class AuditedInventory(FakeInventory):
+            def validate_disk(self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
+                              orphan_scan_volume=None, content_carving_range_budget_bytes=None):
+                size = source_disk.size_bytes
+                return {
+                    "disk": source_disk,
+                    "coverage": SimpleNamespace(
+                        bytes_read=size, bytes_requested=size, bytes_read_total=size,
+                        issues=(), intervals_as_objects=lambda: (),
+                    ),
+                    "capacity_mismatch": False,
+                    "unsupported_filesystems": (),
+                    "ntfs_checks": (),
+                    "partition_table_checks": ({"valid": True},),
+                    "mbr_signature_found": True,
+                    "partitions": (),
+                    "filesystem_signatures": (),
+                    "orphan_records_by_partition": {volume.partition_offset: {}},
+                    "content_carving_ranges_by_partition": {
+                        volume.partition_offset: ((8192, 12288),),
+                    },
+                }
+
+        checkpoint = CarvingCheckpoint(
+            "c" * 64, 0, 9216, source_disk.size_bytes, 512, "profile-v2",
+        )
+
+        class InterruptingCatalogService(FakeCatalogService):
+            def build(self, *args, carving_checkpoint_callback=None, **kwargs):
+                carving_checkpoint_callback(checkpoint)
+                raise OSError("Simulated carving interruption")
+
+        workflow = FakeWorkflow()
+        handler = RecoveryCommandHandler(
+            DiskDiscoveryService(AuditedInventory([volume]), repository),
+            InterruptingCatalogService(workflow), workflow,
+        )
+        handler.session.volumes["1:4096"] = volume
+
+        with self.assertRaisesRegex(OSError, "Simulated carving interruption"):
+            handler.dispatch("scan_catalog", {
+                "volumeId": "1:4096", "includeOrphaned": True,
+            }, lambda _event: None)
+
+        self.assertEqual(
+            repository.load_carving_checkpoint(source_disk, volume), checkpoint,
+        )
 
     def test_extraction_contract_preserves_exclusions_inside_checked_folders(self):
         first = make_node(2, "one.jpg", False, "Photos/one.jpg", size=2048)
