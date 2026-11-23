@@ -103,7 +103,9 @@ describe("useRecoveryController backend lifecycle", () => {
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
 
-    const carvingOptions = { scanBudgetGiB: 16 as const, maxFiles: 512 as const };
+    const carvingOptions = {
+      scanBudgetGiB: 16 as const, maxFiles: 2048 as const, maxRetainedMiB: 256 as const,
+    };
     await act(async () => { await result.current.buildCatalog(true, carvingOptions); });
 
     expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, carvingOptions);
