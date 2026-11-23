@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 import re
 from typing import Callable, Iterable
 import zlib
+
+from disk.deep_scan.carving_checkpoint import CarvedCandidateReference, CarvingCheckpoint
+from disk.deep_scan.additional_format_validators import (
+    ZIP_END_OF_CENTRAL_DIRECTORY,
+    ZIP_LOCAL_FILE_HEADER,
+    validate_additional_candidate,
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,9 @@ class ContentCarveResult:
     max_scan_bytes: int = 0
     max_total_file_bytes: int = 0
     max_files: int = 0
+    checkpoint: CarvingCheckpoint | None = None
+    candidate_restore_bytes_read: int = 0
+    cumulative_bytes_scanned: int = 0
 
 
 @dataclass(frozen=True)
@@ -53,7 +64,7 @@ class FormatCarveStats:
 
 
 class RawContentCarver:
-    """Find bounded contiguous JPEG, PNG and PDF candidates in disk ranges.
+    """Find bounded contiguous candidates for supported formats in disk ranges.
 
     The algorithm does not infer filenames or reconstruct fragmented files. Both
     the byte scan and retained output are bounded to keep disk reads and memory
@@ -67,8 +78,37 @@ class RawContentCarver:
         (".jpg", SIGNATURE),
         (".png", b"\x89PNG\r\n\x1a\n"),
         (".pdf", b"%PDF-"),
+        (".office_zip", ZIP_LOCAL_FILE_HEADER),
+        (".mp4", b"ftyp"),
     )
-    SIGNATURES_BY_EXTENSION = dict(FORMAT_SIGNATURES)
+    SIGNATURE_OFFSETS = {".mp4": 4}
+    EXTENSIONS_BY_FAMILY = {
+        ".jpg": (".jpg",),
+        ".png": (".png",),
+        ".pdf": (".pdf",),
+        ".office_zip": (".docx", ".docm", ".xlsx", ".xlsm"),
+        ".mp4": (".mp4",),
+    }
+    SIGNATURES_BY_EXTENSION = {
+        ".jpg": SIGNATURE,
+        ".png": b"\x89PNG\r\n\x1a\n",
+        ".pdf": b"%PDF-",
+        ".docx": ZIP_LOCAL_FILE_HEADER,
+        ".docm": ZIP_LOCAL_FILE_HEADER,
+        ".xlsx": ZIP_LOCAL_FILE_HEADER,
+        ".xlsm": ZIP_LOCAL_FILE_HEADER,
+        ".mp4": b"ftyp",
+    }
+    FAMILY_BY_EXTENSION = {
+        ".jpg": ".jpg",
+        ".png": ".png",
+        ".pdf": ".pdf",
+        ".docx": ".office_zip",
+        ".docm": ".office_zip",
+        ".xlsx": ".office_zip",
+        ".xlsm": ".office_zip",
+        ".mp4": ".mp4",
+    }
     DEFAULT_CHUNK_SIZE = 1024 * 1024
     DEFAULT_MAX_SCAN_BYTES = 1024 * 1024 * 1024
     DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -108,6 +148,9 @@ class RawContentCarver:
         ranges: Iterable[tuple[int, int]],
         *,
         progress_callback: Callable[[int, int], None] | None = None,
+        resume_checkpoint: CarvingCheckpoint | None = None,
+        checkpoint_callback: Callable[[CarvingCheckpoint | None], None] | None = None,
+        ranges_truncated: bool = False,
     ) -> ContentCarveResult:
         """Scan half-open physical disk intervals and return validated files.
 
@@ -116,32 +159,72 @@ class RawContentCarver:
         when the configured raw-byte budget prevented full range coverage.
         """
         merged_ranges = self._merge_ranges(ranges, int(self.disk.size))
-        range_bytes = sum(end - start for start, end in merged_ranges)
-        scan_target = min(range_bytes, self.max_scan_bytes)
-        scan_limit_reached = range_bytes > self.max_scan_bytes
+        disk_size = int(self.disk.size)
+        bytes_per_sector = int(getattr(self.disk, "bytes_per_sector", 512) or 512)
+        range_fingerprint = self._range_fingerprint(merged_ranges, disk_size)
+        scan_profile = self._scan_profile()
+        if not self._checkpoint_matches(
+            resume_checkpoint, merged_ranges, disk_size, bytes_per_sector,
+            range_fingerprint, scan_profile,
+        ):
+            resume_checkpoint = None
+
+        if resume_checkpoint is not None:
+            range_index, next_offset = self._resume_position(
+                merged_ranges, resume_checkpoint.next_offset,
+            )
+        else:
+            range_index = 0
+            next_offset = merged_ranges[0][0] if merged_ranges else 0
+        remaining_bytes = self._remaining_bytes(merged_ranges, range_index, next_offset)
+        scan_target = min(remaining_bytes, self.max_scan_bytes)
+        scan_limit_reached = remaining_bytes > self.max_scan_bytes
         completed = 0
+        cumulative_bytes_scanned = resume_checkpoint.bytes_scanned if resume_checkpoint else 0
         retained_bytes = 0
         candidate_bytes_read = 0
+        candidate_restore_bytes_read = 0
         candidate_limit_reached = False
         file_count_limit_reached = False
         retained_bytes_limit_reached = False
         files: list[CarvedContent] = []
         seen_content: set[bytes] = set()
         seen_offsets: set[tuple[str, int]] = set()
+        if resume_checkpoint is not None:
+            files, candidate_restore_bytes_read = self._restore_candidates(
+                resume_checkpoint.candidates, merged_ranges,
+            )
+            retained_bytes = sum(len(item.data) for item in files)
+            seen_content.update(hashlib.sha256(item.data).digest() for item in files)
+            seen_offsets.update((item.extension, item.offset) for item in files)
         candidates_by_extension = {extension: 0 for extension, _ in self.FORMAT_SIGNATURES}
         bytes_by_extension = {extension: 0 for extension, _ in self.FORMAT_SIGNATURES}
         candidate_limits_by_extension = {extension: False for extension, _ in self.FORMAT_SIGNATURES}
         file_size_limits_by_extension = {extension: False for extension, _ in self.FORMAT_SIGNATURES}
         decoded_size_limits_by_extension = {extension: False for extension, _ in self.FORMAT_SIGNATURES}
 
-        for range_start, range_end in merged_ranges:
-            cursor = range_start
-            carry = b""
+        stop_scan = False
+        cursor_checkpoint = None
+        initial_carry = (
+            resume_checkpoint.signature_carry
+            if (resume_checkpoint is not None and range_index < len(merged_ranges)
+                and merged_ranges[range_index][0] <= resume_checkpoint.next_offset
+                < merged_ranges[range_index][1]
+                and next_offset == resume_checkpoint.next_offset)
+            else b""
+        )
+        for index in range(range_index, len(merged_ranges)):
+            range_start, range_end = merged_ranges[index]
+            cursor = max(range_start, next_offset) if index == range_index else range_start
+            carry = initial_carry if index == range_index else b""
+            if cursor >= range_end:
+                continue
             while cursor < range_end and completed < self.max_scan_bytes:
                 request_size = min(self.chunk_size, range_end - cursor,
                                    self.max_scan_bytes - completed)
                 if request_size <= 0:
                     break
+                chunk_start = cursor
                 data = bytes(self.disk.read_at(cursor, request_size))
                 if len(data) != request_size:
                     raise OSError(
@@ -152,90 +235,187 @@ class RawContentCarver:
                 combined = carry + data
                 buffer_start = cursor - len(carry)
                 pos = 0
-                if len(files) >= self.max_files:
-                    file_count_limit_reached = True
-                if retained_bytes >= self.max_total_file_bytes:
-                    retained_bytes_limit_reached = True
-                while not file_count_limit_reached and not retained_bytes_limit_reached:
+                stop_offset = None
+                while True:
+                    if len(files) >= self.max_files:
+                        file_count_limit_reached = True
+                        stop_offset = buffer_start + pos
+                        break
+                    if retained_bytes >= self.max_total_file_bytes:
+                        retained_bytes_limit_reached = True
+                        stop_offset = buffer_start + pos
+                        break
                     found = self._find_next_signature(combined, pos)
                     if found is None:
                         break
-                    extension, pos = found
+                    family, pos = found
                     candidate_offset = buffer_start + pos
-                    pos += len(self.SIGNATURES_BY_EXTENSION[extension])
-                    candidate_key = (extension, candidate_offset)
+                    pos += 1
+                    candidate_key = (family, candidate_offset)
                     if candidate_key in seen_offsets:
                         continue
                     seen_offsets.add(candidate_key)
                     if candidate_bytes_read >= self.max_candidate_read_bytes:
                         candidate_limit_reached = True
+                        stop_offset = candidate_offset
                         break
                     format_remaining = min(
-                        self.max_candidate_read_bytes_per_format - bytes_by_extension[extension],
+                        self.max_candidate_read_bytes_per_format - bytes_by_extension[family],
                         self.max_candidate_read_bytes - candidate_bytes_read,
                     )
                     if format_remaining <= 0:
-                        candidate_limits_by_extension[extension] = True
+                        candidate_limits_by_extension[family] = True
                         continue
-                    candidates_by_extension[extension] += 1
+                    candidates_by_extension[family] += 1
                     candidate, bytes_read, limit_reason = self._read_candidate(
-                        extension,
+                        family,
                         candidate_offset,
                         range_end,
                         format_remaining,
                     )
                     candidate_bytes_read += bytes_read
-                    bytes_by_extension[extension] += bytes_read
-                    file_size_limits_by_extension[extension] |= limit_reason == "file_size"
-                    decoded_size_limits_by_extension[extension] |= limit_reason == "decoded_data"
-                    candidate_limits_by_extension[extension] |= limit_reason == "candidate_budget"
+                    bytes_by_extension[family] += bytes_read
+                    file_size_limits_by_extension[family] |= limit_reason == "file_size"
+                    decoded_size_limits_by_extension[family] |= limit_reason == "decoded_data"
+                    candidate_limits_by_extension[family] |= limit_reason == "candidate_budget"
                     if candidate is not None:
                         digest = hashlib.sha256(candidate).digest()
                         if digest in seen_content:
                             continue
                         if retained_bytes + len(candidate) > self.max_total_file_bytes:
                             retained_bytes_limit_reached = True
+                            stop_offset = candidate_offset
                             break
                         if digest not in seen_content:
                             seen_content.add(digest)
+                            if family in (".office_zip", ".mp4"):
+                                candidate_result = validate_additional_candidate(candidate)
+                                if candidate_result is None:
+                                    continue
+                                extension = candidate_result.extension
+                            else:
+                                extension = family
                             files.append(CarvedContent(candidate_offset, extension, candidate))
                             retained_bytes += len(candidate)
+                            pos = max(pos, candidate_offset - buffer_start + len(candidate))
                             if len(files) >= self.max_files:
                                 file_count_limit_reached = True
+                                signature_offset = self.SIGNATURE_OFFSETS.get(family, 0)
+                                stop_offset = candidate_offset + signature_offset + len(
+                                    dict(self.FORMAT_SIGNATURES)[family]
+                                )
                                 break
                             if retained_bytes >= self.max_total_file_bytes:
                                 retained_bytes_limit_reached = True
                                 break
                     if candidate_bytes_read >= self.max_candidate_read_bytes:
                         candidate_limit_reached = True
+                        stop_offset = candidate_offset if candidate is None else buffer_start + pos
                         break
 
-                max_signature_size = max(len(signature) for _, signature in self.FORMAT_SIGNATURES)
-                carry = combined[-(max_signature_size - 1):]
+                max_signature_span = max(
+                    self.SIGNATURE_OFFSETS.get(family, 0) + len(signature)
+                    for family, signature in self.FORMAT_SIGNATURES
+                )
+                carry = combined[-(max_signature_span - 1):]
                 cursor += request_size
-                completed += request_size
+                if stop_offset is None:
+                    completed += request_size
+                else:
+                    completed += max(0, min(request_size, stop_offset - chunk_start))
                 if progress_callback is not None:
                     progress_callback(completed, scan_target)
+                if stop_offset is not None:
+                    resume_offset = max(range_start, stop_offset)
+                    cursor_checkpoint = self._make_checkpoint(
+                        merged_ranges, index, resume_offset, b"", range_fingerprint, scan_profile,
+                        disk_size, bytes_per_sector, cumulative_bytes_scanned + completed, files,
+                    )
+                    stop_scan = True
+                    break
+                if cursor < range_end and completed < self.max_scan_bytes:
+                    cursor_checkpoint = self._make_checkpoint(
+                        merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
+                        disk_size, bytes_per_sector, cumulative_bytes_scanned + completed, files,
+                    )
+                    if checkpoint_callback is not None:
+                        checkpoint_callback(cursor_checkpoint)
                 if candidate_limit_reached or retained_bytes_limit_reached:
+                    if cursor_checkpoint is None:
+                        if cursor < range_end:
+                            cursor_checkpoint = self._make_checkpoint(
+                                merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
+                                disk_size, bytes_per_sector,
+                                cumulative_bytes_scanned + completed, files,
+                            )
+                        elif index + 1 < len(merged_ranges):
+                            cursor_checkpoint = self._make_checkpoint(
+                                merged_ranges, index + 1, merged_ranges[index + 1][0], b"",
+                                range_fingerprint, scan_profile, disk_size, bytes_per_sector,
+                                cumulative_bytes_scanned + completed, files,
+                            )
+                    stop_scan = True
                     break
 
+            if stop_scan:
+                break
+            if cursor >= range_end:
+                next_range_index = index + 1
+                if next_range_index < len(merged_ranges):
+                    cursor_checkpoint = self._make_checkpoint(
+                        merged_ranges, next_range_index, merged_ranges[next_range_index][0], b"",
+                        range_fingerprint, scan_profile, disk_size, bytes_per_sector,
+                        cumulative_bytes_scanned + completed, files,
+                    )
+                else:
+                    cursor_checkpoint = None
             if completed >= self.max_scan_bytes:
+                if cursor < range_end:
+                    cursor_checkpoint = self._make_checkpoint(
+                        merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
+                        disk_size, bytes_per_sector,
+                        cumulative_bytes_scanned + completed, files,
+                    )
+                elif index + 1 < len(merged_ranges):
+                    cursor_checkpoint = self._make_checkpoint(
+                        merged_ranges, index + 1, merged_ranges[index + 1][0], b"",
+                        range_fingerprint, scan_profile, disk_size, bytes_per_sector,
+                        cumulative_bytes_scanned + completed, files,
+                    )
                 break
-            if candidate_limit_reached or retained_bytes_limit_reached:
-                break
+
+        if (cursor_checkpoint is None and range_index < len(merged_ranges)
+                and completed == 0 and not stop_scan):
+            final_index = min(range_index, len(merged_ranges) - 1)
+            final_offset = max(merged_ranges[final_index][0], next_offset)
+            cursor_checkpoint = self._make_checkpoint(
+                merged_ranges, final_index, final_offset, initial_carry,
+                range_fingerprint, scan_profile, disk_size, bytes_per_sector,
+                cumulative_bytes_scanned, files,
+            )
+
+        if cursor_checkpoint is None and ranges_truncated and merged_ranges:
+            cursor_checkpoint = self._make_checkpoint(
+                merged_ranges, len(merged_ranges), merged_ranges[-1][1], b"",
+                range_fingerprint, scan_profile, disk_size, bytes_per_sector,
+                cumulative_bytes_scanned + completed, files,
+            )
+
+        if checkpoint_callback is not None:
+            checkpoint_callback(cursor_checkpoint)
 
         return ContentCarveResult(
             tuple(files), completed, scan_limit_reached, candidate_bytes_read, candidate_limit_reached,
             file_count_limit_reached, retained_bytes_limit_reached,
             tuple(FormatCarveStats(
-                extension,
-                candidates_by_extension[extension],
-                sum(item.extension == extension for item in files),
-                bytes_by_extension[extension],
-                candidate_limits_by_extension[extension],
-                file_size_limits_by_extension[extension],
-                decoded_size_limits_by_extension[extension],
-            ) for extension, _ in self.FORMAT_SIGNATURES),
+                family,
+                candidates_by_extension[family],
+                sum(item.extension in self.EXTENSIONS_BY_FAMILY[family] for item in files),
+                bytes_by_extension[family],
+                candidate_limits_by_extension[family],
+                file_size_limits_by_extension[family],
+                decoded_size_limits_by_extension[family],
+            ) for family, _ in self.FORMAT_SIGNATURES),
             self.max_candidate_read_bytes,
             self.max_candidate_read_bytes_per_format,
             self.max_file_bytes,
@@ -243,28 +423,285 @@ class RawContentCarver:
             self.max_scan_bytes,
             self.max_total_file_bytes,
             self.max_files,
+            cursor_checkpoint,
+            candidate_restore_bytes_read,
+            cumulative_bytes_scanned + completed,
+        )
+
+    def _restore_candidates(self, references, ranges):
+        restored = []
+        bytes_read_total = 0
+        for reference in references:
+            range_end = next((end for start, end in ranges
+                              if start <= reference.offset < end), None)
+            if range_end is None or reference.extension not in self.SIGNATURES_BY_EXTENSION:
+                continue
+            original_max_file_bytes = self.max_file_bytes
+            self.max_file_bytes = max(self.max_file_bytes, reference.size_bytes + self.chunk_size)
+            try:
+                candidate, bytes_read, _ = self._read_candidate(
+                    reference.extension,
+                    reference.offset,
+                    range_end,
+                    max(reference.size_bytes + self.chunk_size, self.max_candidate_read_bytes),
+                )
+            finally:
+                self.max_file_bytes = original_max_file_bytes
+            bytes_read_total += bytes_read
+            if (candidate is not None and len(candidate) == reference.size_bytes
+                    and hashlib.sha256(candidate).hexdigest() == reference.sha256):
+                restored.append(CarvedContent(reference.offset, reference.extension, candidate))
+        return restored, bytes_read_total
+
+    @classmethod
+    def _range_fingerprint(cls, ranges, disk_size):
+        payload = json.dumps(
+            {"diskSize": disk_size, "ranges": ranges}, separators=(",", ":"),
+        ).encode("ascii")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _processed_ranges(ranges, range_index, next_offset):
+        """Return only normalized intervals whose scan positions are consumed."""
+        processed = list(ranges[:min(range_index, len(ranges))])
+        if range_index < len(ranges):
+            start, end = ranges[range_index]
+            clipped_end = min(end, max(start, next_offset))
+            if clipped_end > start:
+                processed.append((start, clipped_end))
+        return tuple(processed)
+
+    @staticmethod
+    def _prefix_ranges_through_offset(ranges, next_offset):
+        """Clip a normalized range set to the physical scan cursor."""
+        prefix = []
+        for start, end in ranges:
+            if start >= next_offset:
+                break
+            clipped_end = min(end, next_offset)
+            if clipped_end > start:
+                prefix.append((start, clipped_end))
+            if end >= next_offset:
+                break
+        return tuple(prefix)
+
+    @staticmethod
+    def _resume_position(ranges, next_offset):
+        """Map a saved physical cursor into a possibly expanded range set."""
+        for index, (start, end) in enumerate(ranges):
+            if start <= next_offset < end:
+                return index, next_offset
+            if start >= next_offset:
+                return index, start
+        return len(ranges), 0
+
+    @classmethod
+    def _scan_profile(cls):
+        payload = json.dumps(
+            [(family, signature.hex(), cls.SIGNATURE_OFFSETS.get(family, 0))
+             for family, signature in cls.FORMAT_SIGNATURES],
+            separators=(",", ":"),
+        ).encode("ascii")
+        return hashlib.sha256(b"raw-carver-structure-v1:" + payload).hexdigest()
+
+    @staticmethod
+    def _remaining_bytes(ranges, range_index, next_offset):
+        if range_index >= len(ranges):
+            return 0
+        first_start, first_end = ranges[range_index]
+        total = max(0, first_end - max(first_start, next_offset))
+        return total + sum(end - start for start, end in ranges[range_index + 1:])
+
+    @classmethod
+    def _checkpoint_matches(cls, checkpoint, ranges, disk_size, bytes_per_sector,
+                            range_fingerprint, scan_profile):
+        if checkpoint is None:
+            return False
+        if (not isinstance(checkpoint, CarvingCheckpoint)
+                or checkpoint.scan_profile != scan_profile
+                or checkpoint.disk_size != disk_size
+                or checkpoint.bytes_per_sector != bytes_per_sector
+                or checkpoint.next_offset > disk_size):
+            return False
+        if checkpoint.processed_range_fingerprint:
+            prefix = cls._prefix_ranges_through_offset(ranges, checkpoint.next_offset)
+            if cls._range_fingerprint(prefix, disk_size) != checkpoint.processed_range_fingerprint:
+                return False
+        else:
+            if (checkpoint.range_fingerprint != range_fingerprint
+                    or checkpoint.range_index > len(ranges)):
+                return False
+            if checkpoint.range_index < len(ranges):
+                start, end = ranges[checkpoint.range_index]
+                if not start <= checkpoint.next_offset <= end:
+                    return False
+            elif checkpoint.next_offset != 0:
+                return False
+        return all(
+            item.extension in cls.SIGNATURES_BY_EXTENSION
+            and item.offset + item.size_bytes <= disk_size
+            and item.size_bytes <= cls.DEFAULT_MAX_FILE_BYTES
+            and any(start <= item.offset < end for start, end in ranges)
+            for item in checkpoint.candidates
+        )
+
+    @classmethod
+    def _make_checkpoint(cls, ranges, range_index, next_offset, carry, range_fingerprint,
+                         scan_profile, disk_size, bytes_per_sector, bytes_scanned, files):
+        references = tuple(CarvedCandidateReference(
+            offset=item.offset,
+            extension=item.extension,
+            size_bytes=len(item.data),
+            sha256=hashlib.sha256(item.data).hexdigest(),
+        ) for item in files)
+        return CarvingCheckpoint(
+            range_fingerprint=range_fingerprint,
+            range_index=range_index,
+            next_offset=next_offset,
+            disk_size=disk_size,
+            bytes_per_sector=bytes_per_sector,
+            scan_profile=scan_profile,
+            candidates=references,
+            bytes_scanned=bytes_scanned,
+            signature_carry=carry,
+            processed_range_fingerprint=cls._range_fingerprint(
+                cls._processed_ranges(ranges, range_index, next_offset), disk_size,
+            ),
         )
 
     @classmethod
     def _find_next_signature(cls, data, start):
         candidates = []
-        for extension, signature in cls.FORMAT_SIGNATURES:
-            position = data.find(signature, start)
-            if position >= 0:
-                candidates.append((position, extension))
+        for family, signature in cls.FORMAT_SIGNATURES:
+            signature_offset = cls.SIGNATURE_OFFSETS.get(family, 0)
+            position = data.find(signature, start + signature_offset)
+            if position >= signature_offset:
+                candidate_position = position - signature_offset
+                if candidate_position >= start:
+                    candidates.append((candidate_position, family))
         if not candidates:
             return None
-        position, extension = min(candidates)
-        return extension, position
+        position, family = min(candidates)
+        return family, position
 
     def _read_candidate(self, extension, offset, range_end, byte_budget):
+        family = self.FAMILY_BY_EXTENSION.get(extension, extension)
         if extension == ".jpg":
             return self._read_jpeg(offset, range_end, byte_budget)
         if extension == ".png":
             return self._read_png(offset, range_end, byte_budget)
         if extension == ".pdf":
             return self._read_pdf(offset, range_end, byte_budget)
+        if family == ".office_zip":
+            return self._read_office_zip(offset, range_end, byte_budget)
+        if family == ".mp4":
+            return self._read_mp4(offset, range_end, byte_budget)
         return None, 0, None
+
+    def _read_office_zip(self, offset, range_end, byte_budget):
+        """Read one bounded ZIP candidate; its family budget is shared by OOXML."""
+        content = bytearray()
+        cursor = offset
+        bytes_read = 0
+        while (cursor < range_end and len(content) < self.max_file_bytes
+               and bytes_read < byte_budget):
+            request_size = min(
+                self.chunk_size, range_end - cursor,
+                self.max_file_bytes - len(content), byte_budget - bytes_read,
+            )
+            if request_size <= 0:
+                break
+            data = bytes(self.disk.read_at(cursor, request_size))
+            if len(data) != request_size:
+                raise OSError(
+                    f"Short OOXML candidate read at {cursor:#x}: {len(data)} of {request_size} bytes"
+                )
+            content.extend(data)
+            bytes_read += request_size
+            cursor += request_size
+            if ZIP_END_OF_CENTRAL_DIRECTORY in content[-(22 + 65535):]:
+                candidate = validate_additional_candidate(content)
+                if (candidate is not None
+                        and candidate.extension in self.EXTENSIONS_BY_FAMILY[".office_zip"]):
+                    return bytes(content[:candidate.size_bytes]), bytes_read, None
+        if len(content) >= self.max_file_bytes:
+            return None, bytes_read, "file_size"
+        if bytes_read >= byte_budget:
+            return None, bytes_read, "candidate_budget"
+        return None, bytes_read, None
+
+    def _read_mp4(self, offset, range_end, byte_budget):
+        """Read complete ISO-BMFF boxes; do not infer MP4 media decoding."""
+        content = bytearray()
+        cursor = offset
+        bytes_read = 0
+        saw_ftyp = saw_mdat = saw_movie_metadata = False
+        while cursor < range_end and len(content) < self.max_file_bytes and bytes_read < byte_budget:
+            if bytes_read + 8 > byte_budget:
+                return None, bytes_read, "candidate_budget"
+            is_first_box = bytes_read == 0
+            header = self._read_candidate_bytes(cursor, 8, range_end, byte_budget - bytes_read)
+            if header is None:
+                return None, bytes_read, None
+            content.extend(header)
+            cursor += 8
+            bytes_read += 8
+            size32 = int.from_bytes(header[:4], "big")
+            header_size = 8
+            if size32 == 1:
+                if bytes_read + 8 > byte_budget:
+                    return None, bytes_read, "candidate_budget"
+                extended_size = self._read_candidate_bytes(cursor, 8, range_end, byte_budget - bytes_read)
+                if extended_size is None:
+                    return None, bytes_read, None
+                content.extend(extended_size)
+                cursor += 8
+                bytes_read += 8
+                box_size = int.from_bytes(extended_size, "big")
+                header_size = 16
+            elif size32 == 0:
+                # A zero-size box extends to an EOF the range does not encode.
+                return None, bytes_read, "file_size"
+            else:
+                box_size = size32
+            if box_size < header_size:
+                return None, bytes_read, None
+            box_type = header[4:8]
+            if is_first_box:
+                saw_ftyp = box_type == b"ftyp"
+            saw_mdat |= box_type == b"mdat"
+            saw_movie_metadata |= box_type in (b"moov", b"moof")
+            payload_size = box_size - header_size
+            if len(content) + payload_size > self.max_file_bytes:
+                return None, bytes_read, "file_size"
+            if bytes_read + payload_size > byte_budget:
+                return None, bytes_read, "candidate_budget"
+            payload = self._read_candidate_bytes(cursor, payload_size, range_end, byte_budget - bytes_read)
+            if payload is None:
+                return None, bytes_read, None
+            content.extend(payload)
+            cursor += payload_size
+            bytes_read += payload_size
+            if saw_ftyp and saw_mdat and saw_movie_metadata:
+                candidate = validate_additional_candidate(content)
+                if candidate is not None and candidate.extension == ".mp4":
+                    return bytes(content[:candidate.size_bytes]), bytes_read, None
+        if len(content) >= self.max_file_bytes:
+            return None, bytes_read, "file_size"
+        if bytes_read >= byte_budget:
+            return None, bytes_read, "candidate_budget"
+        return None, bytes_read, None
+
+    def _read_candidate_bytes(self, offset, size, range_end, byte_budget):
+        if (size < 0 or offset + size > range_end or size > byte_budget
+                or offset + size > int(self.disk.size)):
+            return None
+        data = bytes(self.disk.read_at(offset, size))
+        if len(data) != size:
+            raise OSError(
+                f"Short candidate read at {offset:#x}: received {len(data)} of {size} bytes"
+            )
+        return data
 
     def _read_jpeg(self, offset: int, range_end: int, byte_budget: int):
         if offset < 0 or offset + len(self.SIGNATURE) > range_end:
