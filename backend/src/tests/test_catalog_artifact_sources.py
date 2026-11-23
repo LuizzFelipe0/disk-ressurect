@@ -217,6 +217,52 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
         self.assertEqual(1, snapshot.usn_journal_summary["deletedEvents"])
         self.assertNotIn("events", snapshot.usn_journal_summary)
 
+    def test_usn_deletion_matches_exact_mft_generation_and_adds_validated_alias(self):
+        nodes, roots, _index, _content = _catalog_nodes(
+            original_size=12, extension="txt",
+        )
+        deleted_data = b"\xff\xd8\xff\xe0\x00\x04\x00\x00"
+        deleted_record = _record(
+            "damaged-name.tmp", len(deleted_data), content=deleted_data, index=11,
+        )
+        deleted_record.sequence_number = 4
+        deleted_record.is_allocated = False
+        deleted_record.is_valid = True
+        deleted_node = FileNode(deleted_record)
+        nodes[11] = deleted_node
+        roots.append(deleted_node)
+
+        snapshot, _ = self._build(nodes=nodes, roots=roots)
+
+        aliases = [node for node in snapshot.catalog.nodes.values()
+                   if getattr(node.record, "recovery_source", None) == "usn_journal_mft"]
+        self.assertEqual(len(aliases), 1)
+        self.assertEqual(aliases[0].record.name, "deleted.jpg")
+        self.assertEqual("Lost_Files_DeepScan/USNJournal/deleted.jpg",
+                         aliases[0].full_path.replace("\\", "/"))
+        self.assertEqual("damaged-name.tmp", deleted_record.name)
+        self.assertEqual(1, snapshot.usn_journal_summary["matchedDeletedMftRecords"])
+        self.assertEqual(1, snapshot.usn_journal_summary["signatureMatchedRecords"])
+        self.assertEqual(1, snapshot.usn_journal_summary["aliasesAdded"])
+
+    def test_usn_reference_to_reused_mft_slot_does_not_create_alias(self):
+        nodes, roots, _index, _content = _catalog_nodes(
+            original_size=12, extension="txt",
+        )
+        reused_record = _record(
+            "current.jpg", 8, content=b"\xff\xd8\xff\xe0\x00\x04\x00\x00", index=11,
+        )
+        reused_record.sequence_number = 99
+        reused_record.is_valid = True
+        reused_record.is_metadata_consistent = True
+        nodes[11] = FileNode(reused_record)
+        roots.append(nodes[11])
+
+        snapshot, _ = self._build(nodes=nodes, roots=roots)
+
+        self.assertEqual(1, snapshot.usn_journal_summary["staleReferences"])
+        self.assertEqual(0, snapshot.usn_journal_summary["aliasesAdded"])
+
     def test_incomplete_usn_stream_does_not_break_catalog(self):
         nodes, roots, _index, _content = _catalog_nodes(journal_stream_complete=False)
         snapshot, _ = self._build(nodes=nodes, roots=roots)
