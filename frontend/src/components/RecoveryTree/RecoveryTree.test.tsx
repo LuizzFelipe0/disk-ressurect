@@ -95,6 +95,22 @@ describe("RecoveryTree", () => {
     expect(screen.getByText("Raw-carved file candidate")).toBeTruthy();
   });
 
+  it("labels a Recycle Bin recovery alias and exposes its original path", () => {
+    render(<RecoveryTree {...makeProps({ roots: [{
+      ...file,
+      name: "Recovered_0123456789ab_report.pdf",
+      path: "Lost_Files_DeepScan/RecycleBin/Recovered_0123456789ab_report.pdf",
+      recoverySource: "recycle_bin",
+      originalPath: "C:\\Users\\sample\\Documents\\report.pdf",
+      deletionTimestampUtc: "2026-11-20T10:30:00+00:00",
+    }] })} />);
+
+    screen.getByText("Recovered_0123456789ab_report.pdf");
+    expect(screen.getByText("Recovered through Recycle Bin metadata")).toBeTruthy();
+    expect(screen.getByTitle(/Original path/).getAttribute("title"))
+      .toContain("C:\\Users\\sample\\Documents\\report.pdf");
+  });
+
   it("labels low-confidence carving allocation statuses", () => {
     render(<RecoveryTree {...makeProps({ roots: [
       { ...file, name: "Possible_current.jpg", isContentCarved: true, clusterAllocationStatus: "bitmap_unobserved" },
