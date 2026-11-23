@@ -134,6 +134,19 @@ class RawContentCarverTests(unittest.TestCase):
         self.assertEqual(stats[".office_zip"].files_found, 1)
         self.assertGreater(stats[".office_zip"].candidate_bytes_read, 0)
 
+    def test_rejects_false_office_header_before_reading_a_large_candidate(self):
+        disk = FakeDisk(size=4096)
+        disk.data[128:132] = b"PK\x03\x04"
+
+        result = RawContentCarver(disk).scan([(0, disk.size)])
+
+        stats = {item.extension: item for item in result.format_stats}
+        self.assertEqual(result.files, ())
+        self.assertEqual(stats[".office_zip"].candidates_examined, 1)
+        self.assertEqual(stats[".office_zip"].candidate_bytes_read, 30)
+        self.assertFalse(stats[".office_zip"].candidate_limit_reached)
+        self.assertFalse(stats[".office_zip"].file_size_limit_reached)
+
     def test_detects_docm_xlsx_and_xlsm_extensions_from_ooxml_members(self):
         variants = (
             ("word/document.xml", ("word/vbaProject.bin",), ".docm"),
@@ -427,6 +440,25 @@ class RawContentCarverTests(unittest.TestCase):
         self.assertTrue(scan_reads)
         self.assertNotIn(0, [offset for offset, _ in disk.reads])
         self.assertGreater(resumed.candidate_restore_bytes_read, 0)
+
+    def test_raising_candidate_limit_resumes_after_saved_candidates_without_duplicates(self):
+        disk = FakeDisk(size=8192)
+        images = [jpeg(b"first"), jpeg(b"second"), jpeg(b"third")]
+        offsets = (512, 2048, 4096)
+        for offset, image in zip(offsets, images):
+            disk.data[offset:offset + len(image)] = image
+
+        first = RawContentCarver(disk, max_files=2).scan([(0, disk.size)])
+        self.assertEqual([item.offset for item in first.files], list(offsets[:2]))
+        self.assertTrue(first.file_count_limit_reached)
+
+        resumed = RawContentCarver(disk, max_files=4).scan(
+            [(0, disk.size)], resume_checkpoint=first.checkpoint,
+        )
+
+        self.assertEqual([item.offset for item in resumed.files], list(offsets))
+        self.assertEqual(3, len({item.offset for item in resumed.files}))
+        self.assertIsNone(resumed.checkpoint)
 
     def test_resume_profile_and_range_fingerprint_reject_stale_cursor(self):
         disk = FakeDisk(size=4096)
