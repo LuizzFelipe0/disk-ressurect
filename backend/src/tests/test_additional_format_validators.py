@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from disk.deep_scan.additional_format_validators import (
     ADDITIONAL_SIGNATURES,
     find_additional_signatures,
+    is_plausible_office_local_header,
     validate_additional_candidate,
 )
 
@@ -65,6 +66,20 @@ class AdditionalFormatValidatorTests(unittest.TestCase):
         with zipfile.ZipFile(stream, "w") as archive:
             archive.writestr("notes.txt", b"not an Office document")
         self.assertIsNone(validate_additional_candidate(stream.getvalue()))
+
+    def test_local_header_prefilter_accepts_office_member_and_rejects_generic_zip(self):
+        def first_local_header(archive):
+            name_length = int.from_bytes(archive[26:28], "little")
+            extra_length = int.from_bytes(archive[28:30], "little")
+            return archive[:30 + name_length + extra_length]
+
+        office = first_local_header(office_archive())
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("notes.txt", b"not an Office file")
+        generic = first_local_header(stream.getvalue())
+        self.assertTrue(is_plausible_office_local_header(office))
+        self.assertFalse(is_plausible_office_local_header(generic))
 
     def test_rejects_ooxml_with_corrupt_central_directory_or_truncation(self):
         candidate = bytearray(office_archive())
