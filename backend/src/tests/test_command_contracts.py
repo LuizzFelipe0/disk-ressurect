@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.commands.controller import RecoveryCommandHandler
 from modules.commands.dto import CommandRequestDto, ProgressEventDto
-from modules.catalog.dto import VolumeSelectionRequestDto
+from modules.catalog.dto import CarvingOptionsDto, VolumeSelectionRequestDto
 from modules.disk_discovery.dto import PartitionScanRequestDto
 from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto
@@ -54,12 +54,33 @@ class CommandContractTests(unittest.TestCase):
             PartitionScanRequestDto.from_payload({"diskNumber": 1, "resume": True})
 
     def test_catalog_request_keeps_legacy_default_and_validates_orphan_scan_flag(self):
-        self.assertFalse(VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096"}).include_orphaned)
+        default_request = VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096"})
+        self.assertFalse(default_request.include_orphaned)
+        self.assertEqual(default_request.carving_options, CarvingOptionsDto())
         self.assertTrue(VolumeSelectionRequestDto.from_payload({
             "volumeId": "0:4096", "includeOrphaned": True,
         }).include_orphaned)
         with self.assertRaisesRegex(ValueError, "includeOrphaned must be a boolean"):
             VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096", "includeOrphaned": "yes"})
+
+    def test_catalog_request_validates_bounded_carving_options(self):
+        request = VolumeSelectionRequestDto.from_payload({
+            "volumeId": "0:4096", "includeOrphaned": True,
+            "carvingOptions": {"scanBudgetGiB": 16, "maxFiles": 512},
+        })
+        self.assertEqual(request.carving_options, CarvingOptionsDto(16, 512))
+        for invalid in (
+            {"scanBudgetGiB": 0},
+            {"scanBudgetGiB": 128},
+            {"scanBudgetGiB": True},
+            {"maxFiles": 4096},
+            {"maxFiles": "512"},
+            {"unknown": 1},
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                VolumeSelectionRequestDto.from_payload({
+                    "volumeId": "0:4096", "carvingOptions": invalid,
+                })
 
     def test_recovery_request_rejects_invalid_filters_and_ids(self):
         with self.assertRaisesRegex(ValueError, "selectedNodeIds"):
