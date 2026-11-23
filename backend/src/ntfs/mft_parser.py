@@ -1,6 +1,22 @@
 import struct
+from dataclasses import dataclass, replace
 
 from ntfs.attributes import AttributeParser
+
+
+@dataclass(frozen=True)
+class NTFSDataStream:
+    """One named ``$DATA`` stream parsed from this MFT record only."""
+
+    name: str
+    file_size: int
+    allocated_size: int
+    resident_data: bytes | None
+    data_runs: tuple[tuple[int | None, int], ...]
+    is_resident: bool
+    is_complete: bool
+    incomplete_reasons: tuple[str, ...] = ()
+
 
 class MFTRecord:
     """Parses a single NTFS MFT Record."""
@@ -31,6 +47,11 @@ class MFTRecord:
         self.allocated_size = 0
         self.resident_data = None
         self.data_is_complete = True
+        # Keys are case-folded stream names. These descriptors never merge
+        # extension-record attributes; ambiguous/incomplete streams remain
+        # explicitly unusable until an ATTRIBUTE_LIST resolver exists.
+        self.named_data_streams: dict[str, NTFSDataStream] = {}
+        self.has_attribute_list = False
         self._filename_priority = -1
 
         if (
@@ -121,18 +142,130 @@ class MFTRecord:
             if atype == 0x30: # $FILE_NAME
                 self._parse_file_name(curr, alen)
             elif atype == 0x20: # $ATTRIBUTE_LIST may point to additional data extents.
+                self.has_attribute_list = True
                 self.data_is_complete = False
             elif atype == 0x80: # $DATA
-                name_length = self.raw_data[curr + 9]
-                if name_length == 0:
+                attribute_name = self._parse_attribute_name(curr, alen)
+                if not attribute_name:
                     data_attributes += 1
                     if data_attributes > 1:
                         self.data_is_complete = False
                     self._parse_data(curr, alen)
+                else:
+                    self._parse_named_data(curr, alen, attribute_name)
             curr += alen
         if not terminated:
             raise ValueError("MFT record has no attribute terminator")
+        self._finalize_named_data_streams()
         self.is_metadata_consistent = not self.metadata_warnings
+
+    def _parse_attribute_name(self, curr, attr_len):
+        name_length = self.raw_data[curr + 9]
+        if name_length == 0:
+            return ""
+        name_offset = struct.unpack_from("<H", self.raw_data, curr + 10)[0]
+        non_resident = self.raw_data[curr + 8]
+        minimum_name_offset = 64 if non_resident else 24
+        name_end = name_offset + name_length * 2
+        if name_offset < minimum_name_offset or name_end > attr_len:
+            raise ValueError("Invalid named MFT attribute bounds")
+        try:
+            name = bytes(self.raw_data[curr + name_offset:curr + name_end]).decode(
+                "utf-16le", errors="strict",
+            )
+        except UnicodeDecodeError as exc:
+            raise ValueError("MFT attribute name is not valid UTF-16LE") from exc
+        if not name or "\x00" in name:
+            raise ValueError("MFT attribute name is empty or contains a NUL")
+        return name
+
+    def _parse_named_data(self, curr, attr_len, name):
+        """Keep one attribute descriptor; duplicate names are conservative."""
+        key = name.casefold()
+        if key in self.named_data_streams:
+            previous = self.named_data_streams[key]
+            reasons = tuple(dict.fromkeys(
+                (*previous.incomplete_reasons, "duplicate_named_data_attributes")
+            ))
+            self.named_data_streams[key] = replace(
+                previous, is_complete=False, incomplete_reasons=reasons,
+            )
+            return
+
+        non_resident = self.raw_data[curr + 8]
+        if non_resident not in (0, 1):
+            raise ValueError("Invalid named $DATA residency flag")
+        if non_resident:
+            if attr_len < 64:
+                raise ValueError("Truncated named non-resident $DATA attribute")
+            lowest_vcn = struct.unpack_from("<Q", self.raw_data, curr + 16)[0]
+            highest_vcn = struct.unpack_from("<Q", self.raw_data, curr + 24)[0]
+            allocated_size = struct.unpack_from("<Q", self.raw_data, curr + 40)[0]
+            file_size = struct.unpack_from("<Q", self.raw_data, curr + 48)[0]
+            runlist_offset = struct.unpack_from("<H", self.raw_data, curr + 32)[0]
+            if runlist_offset < 64 or runlist_offset >= attr_len:
+                raise ValueError("Invalid named $DATA runlist offset")
+            runs = tuple(AttributeParser.parse_runlist(
+                self.raw_data[curr + runlist_offset:curr + attr_len]
+            ))
+            described_clusters = sum(cluster_count for _lcn, cluster_count in runs)
+            reasons = []
+            if lowest_vcn != 0:
+                reasons.append("stream_starts_after_first_vcn")
+            if highest_vcn < lowest_vcn or described_clusters != highest_vcn - lowest_vcn + 1:
+                reasons.append("runlist_does_not_cover_declared_vcn_range")
+            self.named_data_streams[key] = NTFSDataStream(
+                name=name,
+                file_size=file_size,
+                allocated_size=allocated_size,
+                resident_data=None,
+                data_runs=runs,
+                is_resident=False,
+                is_complete=not reasons,
+                incomplete_reasons=tuple(reasons),
+            )
+            return
+
+        if attr_len < 24:
+            raise ValueError("Truncated named resident $DATA attribute")
+        file_size = struct.unpack_from("<I", self.raw_data, curr + 16)[0]
+        content_offset = struct.unpack_from("<H", self.raw_data, curr + 20)[0]
+        content_end = content_offset + file_size
+        if content_offset < 24 or content_end > attr_len:
+            raise ValueError("Invalid named resident $DATA content bounds")
+        content = bytes(self.raw_data[curr + content_offset:curr + content_end])
+        self.named_data_streams[key] = NTFSDataStream(
+            name=name,
+            file_size=file_size,
+            allocated_size=file_size,
+            resident_data=content,
+            data_runs=(),
+            is_resident=True,
+            is_complete=True,
+        )
+
+    def _finalize_named_data_streams(self):
+        if not self.named_data_streams:
+            return
+        reasons = []
+        if self.has_attribute_list:
+            reasons.append("attribute_list_may_reference_missing_stream_extents")
+        if self.is_extension_record:
+            reasons.append("extension_record_requires_base_record_resolution")
+        if not reasons:
+            return
+        for key, stream in tuple(self.named_data_streams.items()):
+            self.named_data_streams[key] = replace(
+                stream,
+                is_complete=False,
+                incomplete_reasons=tuple(dict.fromkeys(
+                    (*stream.incomplete_reasons, *reasons)
+                )),
+            )
+
+    def get_named_data_stream(self, name):
+        """Return a named stream descriptor using NTFS case-insensitive lookup."""
+        return self.named_data_streams.get(str(name).casefold())
 
     def _parse_file_name(self, curr, attr_len):
         if attr_len < 0x18:
