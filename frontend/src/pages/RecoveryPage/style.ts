@@ -92,28 +92,6 @@ export const SearchBox = styled.div`
   margin: 8px 0 4px;
 `;
 
-export const FileTypesControls = styled.div`
-  display: flex;
-  align-items: end;
-  gap: 8px;
-  min-width: 0;
-  flex: 1 1 320px;
-  > :first-child { min-width: 0; flex: 1; }
-`;
-
-export const MinimumSizeControl = styled.div`
-  flex: 0 1 220px;
-  min-width: 190px;
-  > div { width: 100%; }
-`;
-
-export const Toolbar = styled.div`
-  display: flex;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
-`;
-
 export const SelectionActions = styled.div`
   display: flex;
   flex-wrap: wrap;
@@ -200,4 +178,60 @@ export const ActionRow = styled.div`
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+`;
+
+export const FilterTriggerRow = styled.div`
+  display: flex;
+  justify-content: flex-end;
+  button { display: inline-flex; align-items: center; gap: 8px; }
+  img { width: 18px; height: 18px; object-fit: contain; }
+`;
+
+export const FilterBackdrop = styled.div`
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(13, 18, 24, .48);
+`;
+
+export const FilterPanel = styled.section`
+  display: grid;
+  width: min(720px, 96vw);
+  height: 100%;
+  grid-template-columns: 230px minmax(0, 1fr);
+  background: #fff;
+  box-shadow: -12px 0 36px rgba(0, 0, 0, .18);
+  overflow: hidden;
+  > aside { height: 100%; }
+  @media (max-width: 620px) { grid-template-columns: 1fr; > aside { display: none; } }
+`;
+
+export const FilterPanelContent = styled.div`
+  min-width: 0;
+  overflow-y: auto;
+  padding: 24px;
+`;
+
+export const FilterPanelHeading = styled.div`
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 26px;
+  h2 { margin: 0; color: ${brandColors.ink}; font-size: 20px; }
+`;
+
+export const FilterSection = styled.section`
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  padding: 0 0 24px;
+  margin: 0 0 24px;
+  border-bottom: 1px solid ${brandColors.border};
+  scroll-margin-top: 24px;
+  > span { flex-basis: 100%; color: ${brandColors.ink}; font-size: 14px; font-weight: 700; }
+  > :not(span) { flex: 1 1 200px; min-width: 0; }
 `;
