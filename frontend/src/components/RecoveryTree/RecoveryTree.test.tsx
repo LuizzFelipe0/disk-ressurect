@@ -77,6 +77,14 @@ describe("RecoveryTree", () => {
     expect(screen.getByText("Found outside the list")).toBeTruthy();
   });
 
+  it("labels records recovered by exact USN and MFT evidence", () => {
+    render(<RecoveryTree {...makeProps({
+      roots: [{ ...file, recoverySource: "usn_journal_mft" }],
+    })} />);
+
+    expect(screen.getByText("Recovered using USN and MFT evidence")).toBeTruthy();
+  });
+
   it("shows signature and cluster allocation evidence for orphan candidates", () => {
     render(<RecoveryTree {...makeProps({
       roots: [{ ...file, isDeleted: true, isOrphaned: true,
