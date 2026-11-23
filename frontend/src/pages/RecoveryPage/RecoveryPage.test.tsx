@@ -148,20 +148,40 @@ afterEach(() => {
 });
 
 describe("RecoveryPage audit details", () => {
-  it("lets users raise the bounded carving search and candidate-count budgets", () => {
+  it("opens the filter drawer with file type, size and selection controls", async () => {
+    render(<RecoveryPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Filtros" }));
+    const dialog = await screen.findByRole("dialog", { name: "Filtros" });
+    expect(within(dialog).getByRole("navigation", { name: "Seções de filtros" })).toBeTruthy();
+    expect(within(dialog).getAllByText("Tipos de arquivo").length).toBeGreaterThan(1);
+    expect(within(dialog).getAllByText("Tamanho mínimo").length).toBeGreaterThan(1);
+    expect(within(dialog).getByRole("button", { name: "Recuperar selecionados" })).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
+  });
+
+  it("lets users raise bounded carving, candidate-count and retained-memory budgets", () => {
     render(<RecoveryPage />);
 
     const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
     const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
+    const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
     expect((scanBudget as HTMLSelectElement).disabled).toBe(true);
     expect((maxFiles as HTMLSelectElement).disabled).toBe(true);
+    expect((retainedBudget as HTMLSelectElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista"));
     fireEvent.change(scanBudget, { target: { value: "4" } });
     fireEvent.change(maxFiles, { target: { value: "512" } });
+    fireEvent.change(maxFiles, { target: { value: "2048" } });
+    fireEvent.change(retainedBudget, { target: { value: "256" } });
     fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
 
-    expect(recovery.buildCatalog).toHaveBeenCalledWith(true, { scanBudgetGiB: 4, maxFiles: 512 });
+    expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
+      scanBudgetGiB: 4, maxFiles: 2048, maxRetainedMiB: 256,
+    });
   });
 
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
