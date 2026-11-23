@@ -7,6 +7,7 @@ import { ErrorNotice } from "../../components/ErrorNotice";
 import { RecoveryTree } from "../../components/RecoveryTree";
 import { RecoveryStatusPanel } from "../../components/RecoveryStatusPanel";
 import { DiskAuditOverlay } from "../../components/DiskAuditOverlay";
+import type { CarvingOptions } from "../../types/recovery";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
 import { translate, translateError, translateStatus } from "../../i18n/translations";
 import {
@@ -17,6 +18,7 @@ import {
 import {
   ActionRow,
   AuditActions,
+  CarvingBudgetControls,
   BrowserFrame,
   BrowserHeading,
   BrowserSection,
@@ -48,6 +50,8 @@ export const RecoveryPage: React.FC = () => {
     return saved === "en-US" || saved === "es-ES" || saved === "fr-FR" || saved === "zh-CN" ? saved : "pt-BR";
   });
   const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
+  const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(1);
+  const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(256);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const auditTriggerRef = React.useRef<HTMLSpanElement>(null);
   const auditWasOpen = React.useRef(false);
@@ -69,6 +73,8 @@ export const RecoveryPage: React.FC = () => {
   const validation = recovery.catalog?.diskValidation;
   const contentCarving = recovery.catalog?.contentCarving;
   const lowConfidenceCarving = recovery.catalog?.lowConfidenceCarving;
+  const recycleBinRecovery = recovery.catalog?.recycleBinRecovery;
+  const usnJournalEvidence = recovery.catalog?.usnJournalEvidence;
   const lowConfidenceTiers = lowConfidenceCarving ? [
     { key: "bitmapUnobserved" as const, summary: lowConfidenceCarving.bitmapUnobserved },
     { key: "possiblyReused" as const, summary: lowConfidenceCarving.possiblyReused },
@@ -88,6 +94,10 @@ export const RecoveryPage: React.FC = () => {
     summary.fileSizeLimitReachedByExtension,
     summary.decodedDataLimitReachedByExtension,
   ].some((flags) => Object.values(flags ?? {}).some(Boolean));
+
+  const carvingFormatLabel = (family: string) => family === ".office_zip"
+    ? "OOXML (.docx, .docm, .xlsx, .xlsm)"
+    : family;
 
   const renderFormatDiagnostics = (summary: NonNullable<typeof contentCarving>) => {
     const names = Array.from(new Set([
@@ -110,7 +120,7 @@ export const RecoveryPage: React.FC = () => {
       ].filter(Boolean).join(", ");
       return <li key={extension}>
         {t("carvingFormatStats", {
-          extension,
+          extension: carvingFormatLabel(extension),
           files: summary.filesFoundByExtension?.[extension] ?? 0,
           candidates: summary.candidatesExaminedByExtension?.[extension] ?? 0,
           bytes: (summary.candidateBytesReadByExtension?.[extension] ?? 0).toLocaleString(language),
@@ -150,13 +160,35 @@ export const RecoveryPage: React.FC = () => {
           ]} /></FormControl>
         <ActionRow>
           <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
-            onClick={() => void recovery.buildCatalog(includeOrphaned)}>{t("buildCatalog")}</Button>
+            onClick={() => void recovery.buildCatalog(includeOrphaned, {
+              scanBudgetGiB,
+              maxFiles: maxCarvedFiles,
+            })}>{t("buildCatalog")}</Button>
         </ActionRow>
       </FormGrid>
       <OrphanScanControls>
         <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
           onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
         <p>{t("orphanScanWarning")}</p>
+        <CarvingBudgetControls>
+          <FormControl><FormControlCaption>{t("carvingScanBudget")}</FormControlCaption>
+            <Select aria-label={t("carvingScanBudget")} value={String(scanBudgetGiB)} disabled={recovery.busy || !includeOrphaned}
+              onChange={(value) => setScanBudgetGiB(Number(value) as CarvingOptions["scanBudgetGiB"])} options={[
+                { value: "1", label: t("carvingBudget1") },
+                { value: "4", label: t("carvingBudget4") },
+                { value: "16", label: t("carvingBudget16") },
+                { value: "64", label: t("carvingBudget64") },
+              ]} />
+          </FormControl>
+          <FormControl><FormControlCaption>{t("carvingMaxFiles")}</FormControlCaption>
+            <Select aria-label={t("carvingMaxFiles")} value={String(maxCarvedFiles)} disabled={recovery.busy || !includeOrphaned}
+              onChange={(value) => setMaxCarvedFiles(Number(value) as CarvingOptions["maxFiles"])} options={[
+                { value: "256", label: t("carvingFiles256") },
+                { value: "512", label: t("carvingFiles512") },
+                { value: "1024", label: t("carvingFiles1024") },
+              ]} />
+          </FormControl>
+        </CarvingBudgetControls>
       </OrphanScanControls></Card>
 
       <Card size="sm" variant="flat"><DestinationRow>
@@ -199,7 +231,8 @@ export const RecoveryPage: React.FC = () => {
             <p>{catalogSummary}</p>
           </div>
           <AuditActions>
-            {(validation || contentCarving || lowConfidenceCarving) && <span ref={auditTriggerRef}>
+            {(validation || contentCarving || lowConfidenceCarving
+              || recycleBinRecovery || usnJournalEvidence) && <span ref={auditTriggerRef}>
               <Button className="brand-button--ghost" variant="ghost" size="md"
                 aria-haspopup="dialog" aria-controls="disk-audit-overlay"
                 onClick={() => setAuditOpen(true)}>{t("diskAuditDetails")}</Button>
@@ -320,7 +353,7 @@ export const RecoveryPage: React.FC = () => {
             files: contentCarving.fileCountCap ?? "—",
           })}</p>}
           {contentCarving.formatsAttempted !== undefined && <p>{t("carvingFormatsAttempted", {
-            formats: contentCarving.formatsAttempted.join(", ") || "—",
+            formats: contentCarving.formatsAttempted.map(carvingFormatLabel).join(", ") || "—",
           })}</p>}
           {contentCarving.validationScope && <p>{t("carvingValidationScope", {
             scope: contentCarving.validationScope === "contiguous_structure_and_signature"
@@ -328,6 +361,33 @@ export const RecoveryPage: React.FC = () => {
               : contentCarving.validationScope,
           })}</p>}
           {renderFormatDiagnostics(contentCarving)}
+        </section>}
+        {recycleBinRecovery && <section aria-label={t("recycleBinRecoveryHeading")}>
+          <h3>{t("recycleBinRecoveryHeading")}</h3>
+          <ValidationNotice role="status" $inconclusive={recycleBinRecovery.inconclusive}>
+            {t("recycleBinRecoverySummary", {
+              aliases: recycleBinRecovery.aliasesAdded,
+              paired: recycleBinRecovery.pairedCount,
+              indexes: recycleBinRecovery.indexCount,
+              missing: recycleBinRecovery.missingContentCount,
+              mismatched: recycleBinRecovery.metadataMismatchCount,
+            })}
+          </ValidationNotice>
+          <p>{t("recycleBinRecoveryInterpretation")}</p>
+        </section>}
+        {usnJournalEvidence && <section aria-label={t("usnJournalEvidenceHeading")}>
+          <h3>{t("usnJournalEvidenceHeading")}</h3>
+          <ValidationNotice role="status" $inconclusive={usnJournalEvidence.inconclusive}>
+            {t("usnJournalEvidenceSummary", {
+              journals: usnJournalEvidence.journalCount,
+              streams: usnJournalEvidence.streamCount,
+              records: usnJournalEvidence.parsedRecords,
+              deleted: usnJournalEvidence.deletedEvents,
+              bytes: usnJournalEvidence.bytesRead.toLocaleString(language),
+            })}
+            {usnJournalEvidence.limitReached && ` ${t("usnJournalLimitReached")}`}
+          </ValidationNotice>
+          <p>{t("usnJournalEvidenceInterpretation")}</p>
         </section>}
         {lowConfidenceTiers.length > 0 && <>
           <p>{t("lowConfidenceRecoveryInterpretation")}</p>
