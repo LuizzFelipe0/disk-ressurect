@@ -1,4 +1,5 @@
 export type {
+  CarvingOptions,
   BackendRuntimeStatus,
   CatalogInfo,
   CatalogNode,
