@@ -15,9 +15,26 @@ class DiskDiscoveryService:
             for disk in self.inventory.list_disks()
         ]
 
+    def get_disk(self, disk_number):
+        disk = next(
+            (item for item in self.inventory.list_disks() if int(item.number) == int(disk_number)),
+            None,
+        )
+        if disk is None:
+            raise ValueError(f"Physical disk {disk_number} is no longer available")
+        return disk
+
+    def load_carving_checkpoint(self, disk, volume):
+        loader = getattr(self.scan_repository, "load_carving_checkpoint", None)
+        return loader(disk, volume) if loader is not None else None
+
+    def save_carving_checkpoint(self, disk, volume, checkpoint):
+        saver = getattr(self.scan_repository, "save_carving_checkpoint", None)
+        return saver(disk, volume, checkpoint) if saver is not None else None
+
     def validate_disk(
         self, disk_number: int, progress_callback=None, retain_orphans_for_offset=None,
-        orphan_scan_volume: NTFSVolume | None = None,
+        orphan_scan_volume: NTFSVolume | None = None, content_carving_range_budget_bytes=None,
     ):
         validator = getattr(self.inventory, "validate_disk", None)
         if validator is None:
@@ -26,15 +43,11 @@ class DiskDiscoveryService:
             return validator(disk_number, progress_callback)
         return validator(
             disk_number, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
+            content_carving_range_budget_bytes=content_carving_range_budget_bytes,
         )
 
     def scan_partitions(self, disk_number: int, deep_scan: bool, progress_callback=None, resume=False):
-        disk = next(
-            (item for item in self.inventory.list_disks() if item.number == disk_number),
-            None,
-        )
-        if disk is None:
-            raise ValueError(f"Physical disk {disk_number} is no longer available")
+        disk = self.get_disk(disk_number)
         if not deep_scan:
             return tuple(self.inventory.list_ntfs_volumes(disk_number, progress_callback)), None
 
