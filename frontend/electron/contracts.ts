@@ -21,7 +21,8 @@ export interface VolumeInfo {
 
 export interface CarvingOptions {
   scanBudgetGiB: 1 | 4 | 16 | 64;
-  maxFiles: 256 | 512 | 1024;
+  maxFiles: 256 | 512 | 1024 | 2048 | 4096;
+  maxRetainedMiB: 128 | 256 | 512;
 }
 
 export interface CatalogNode {
@@ -128,6 +129,15 @@ export interface UsnJournalEvidenceSummary {
   malformedRecords: number;
   limitReached: boolean;
   errorCount: number;
+  matchedMftRecords?: number;
+  matchedDeletedMftRecords?: number;
+  staleReferences?: number;
+  unmatchedReferences?: number;
+  signatureMatchedRecords?: number;
+  signatureMismatches?: number;
+  incompleteRecords?: number;
+  aliasesAdded?: number;
+  correlationLimitReached?: boolean;
 }
 
 export interface DiskValidationSummary {
