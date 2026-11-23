@@ -1,6 +1,7 @@
 import React from "react";
-import { Button, Card, DropdownCheckbox, Footer as BelagioFooter, Header, Input, LanguageToggle, Select, type SiteLanguage } from "belagio-styles-lib";
+import { Button, Card, DropdownCheckbox, Footer as BelagioFooter, Header, Input, LanguageToggle, Select, Sidebar, type SiteLanguage } from "belagio-styles-lib";
 import logo from "../../assets/disk-ressurect-logo.png";
+import filterIcon from "../../assets/filter.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorNotice } from "../../components/ErrorNotice";
@@ -31,12 +32,15 @@ import {
   SearchBox,
   SelectionActions,
   SelectionSummary,
-  Toolbar,
   DestinationInput,
-  FileTypesControls,
   FormControl,
   FormControlCaption,
-  MinimumSizeControl,
+  FilterBackdrop,
+  FilterPanel,
+  FilterPanelContent,
+  FilterPanelHeading,
+  FilterSection,
+  FilterTriggerRow,
   OrphanScanControls,
   PreviewBody,
   PreviewPane,
@@ -52,7 +56,12 @@ export const RecoveryPage: React.FC = () => {
   const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
   const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(1);
   const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(256);
+  const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(128);
   const [auditOpen, setAuditOpen] = React.useState(false);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [activeFilterSection, setActiveFilterSection] = React.useState("file-types");
+  const filterTriggerRef = React.useRef<HTMLSpanElement>(null);
+  const filtersWereOpen = React.useRef(false);
   const auditTriggerRef = React.useRef<HTMLSpanElement>(null);
   const auditWasOpen = React.useRef(false);
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
@@ -86,6 +95,20 @@ export const RecoveryPage: React.FC = () => {
     }
     auditWasOpen.current = auditOpen;
   }, [auditOpen]);
+  React.useEffect(() => {
+    if (!filtersOpen) {
+      if (filtersWereOpen.current) filterTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      filtersWereOpen.current = false;
+      return;
+    }
+    filtersWereOpen.current = true;
+    document.getElementById("recovery-filter-panel")?.querySelector<HTMLButtonElement>("button")?.focus();
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFiltersOpen(false);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [filtersOpen]);
   const validationCoverage = validation?.sizeBytes
     ? Math.min(100, Math.floor((validation.bytesRead / validation.sizeBytes) * 100))
     : 0;
@@ -163,6 +186,7 @@ export const RecoveryPage: React.FC = () => {
             onClick={() => void recovery.buildCatalog(includeOrphaned, {
               scanBudgetGiB,
               maxFiles: maxCarvedFiles,
+              maxRetainedMiB: maxCarvedRetainedMiB,
             })}>{t("buildCatalog")}</Button>
         </ActionRow>
       </FormGrid>
@@ -186,6 +210,16 @@ export const RecoveryPage: React.FC = () => {
                 { value: "256", label: t("carvingFiles256") },
                 { value: "512", label: t("carvingFiles512") },
                 { value: "1024", label: t("carvingFiles1024") },
+                { value: "2048", label: t("carvingFiles2048") },
+                { value: "4096", label: t("carvingFiles4096") },
+              ]} />
+          </FormControl>
+          <FormControl><FormControlCaption>{t("carvingRetainedBudget")}</FormControlCaption>
+            <Select aria-label={t("carvingRetainedBudget")} value={String(maxCarvedRetainedMiB)} disabled={recovery.busy || !includeOrphaned}
+              onChange={(value) => setMaxCarvedRetainedMiB(Number(value) as CarvingOptions["maxRetainedMiB"])} options={[
+                { value: "128", label: t("carvingRetained128") },
+                { value: "256", label: t("carvingRetained256") },
+                { value: "512", label: t("carvingRetained512") },
               ]} />
           </FormControl>
         </CarvingBudgetControls>
@@ -198,32 +232,9 @@ export const RecoveryPage: React.FC = () => {
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
       </DestinationRow></Card>
 
-      <Card size="sm" variant="flat"><Toolbar>
-        <FileTypesControls>
-          <DropdownCheckbox label={t("fileTypes")} placeholder={t("allFileTypes")}
-            options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
-            value={recovery.extensions} disabled={recovery.busy}
-            onChange={(values) => getExtensionSelectionUpdates(recovery.availableExtensions, values).forEach(({ extension, checked }) =>
-              recovery.setExtensionSelected(extension, checked))} />
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.availableExtensions.length}
-            onClick={() => recovery.availableExtensions.forEach((extension) =>
-              recovery.setExtensionSelected(extension, !allExtensionsSelected))}>{t("allTypes")}</Button>
-        </FileTypesControls>
-        <MinimumSizeControl><DropdownCheckbox label={t("minimumSize")} placeholder={t("anySize")} value={[String(recovery.minimumSizeKb)]}
-          disabled={recovery.busy} options={[
-            { value: "0", label: t("anySize") },
-            { value: "5", label: "5 KB" },
-            { value: "25", label: "25 KB" },
-            { value: "100", label: "100 KB" },
-            { value: "1024", label: "1 MB" },
-          ]} onChange={(values) => recovery.setMinimumSizeKb(getMinimumSizeKb(values))} /></MinimumSizeControl>
-        <SelectionActions>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>{t("selectAll")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>{t("clearSelection")}</Button>
-          <Button className="brand-button--success" variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
-            onClick={() => void recovery.recover()}>{t("recoverSelected")}</Button>
-        </SelectionActions>
-      </Toolbar></Card>
+      <FilterTriggerRow><span ref={filterTriggerRef}><Button className="brand-button--ghost" variant="ghost" size="md"
+        aria-haspopup="dialog" aria-expanded={filtersOpen} aria-controls="recovery-filter-panel"
+        onClick={() => setFiltersOpen(true)}><img src={filterIcon} alt="" />{t("openFilters")}</Button></span></FilterTriggerRow>
 
       <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
         <BrowserHeading>
@@ -281,6 +292,62 @@ export const RecoveryPage: React.FC = () => {
         </PreviewBody>
         </Card>
       </PreviewPane></BrowserFrame>
+
+      {filtersOpen && <FilterBackdrop onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setFiltersOpen(false);
+      }}>
+        <FilterPanel id="recovery-filter-panel" role="dialog" aria-modal="true" aria-labelledby="filter-panel-title">
+          <Sidebar
+            items={[
+              { id: "file-types", label: t("fileTypes") },
+              { id: "minimum-size", label: t("minimumSize") },
+              { id: "selection-actions", label: t("selectionActions") },
+            ]}
+            activeItem={activeFilterSection}
+            onItemSelect={(id) => {
+              setActiveFilterSection(id);
+              document.getElementById(`filter-section-${id}`)?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+            }}
+            brand={{ title: t("openFilters") }}
+            sectionLabel={t("filterSections")}
+            navigationLabel={t("filterSections")}
+          />
+          <FilterPanelContent>
+            <FilterPanelHeading><h2 id="filter-panel-title">{t("openFilters")}</h2>
+              <Button className="brand-button--ghost" variant="ghost" size="md" onClick={() => setFiltersOpen(false)}>{t("closeDetails")}</Button>
+            </FilterPanelHeading>
+            <FilterSection id="filter-section-file-types"><FormControlCaption>{t("fileTypes")}</FormControlCaption>
+              <DropdownCheckbox label={t("fileTypes")} placeholder={t("allFileTypes")}
+                options={recovery.availableExtensions.map((extension) => ({ value: extension, label: extension }))}
+                value={recovery.extensions} disabled={recovery.busy}
+                onChange={(values) => getExtensionSelectionUpdates(recovery.availableExtensions, values).forEach(({ extension, checked }) =>
+                  recovery.setExtensionSelected(extension, checked))} />
+              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.availableExtensions.length}
+                onClick={() => recovery.availableExtensions.forEach((extension) =>
+                  recovery.setExtensionSelected(extension, !allExtensionsSelected))}>{t("allTypes")}</Button>
+            </FilterSection>
+            <FilterSection id="filter-section-minimum-size"><FormControlCaption>{t("minimumSize")}</FormControlCaption>
+              <DropdownCheckbox label={t("minimumSize")} placeholder={t("anySize")} value={[String(recovery.minimumSizeKb)]}
+                disabled={recovery.busy} options={[
+                  { value: "0", label: t("anySize") },
+                  { value: "5", label: "5 KB" },
+                  { value: "25", label: "25 KB" },
+                  { value: "100", label: "100 KB" },
+                  { value: "1024", label: "1 MB" },
+                ]} onChange={(values) => recovery.setMinimumSizeKb(getMinimumSizeKb(values))} />
+            </FilterSection>
+            <FilterSection id="filter-section-selection-actions" aria-label={t("selectionActions")}>
+              <FormControlCaption>{t("selectionActions")}</FormControlCaption>
+              <SelectionActions>
+                <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>{t("selectAll")}</Button>
+                <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>{t("clearSelection")}</Button>
+                <Button className="brand-button--success" variant="success" size="md" disabled={recovery.busy || !recovery.selectedIds.size || !recovery.extensions.length || !recovery.outputDirectory.trim()}
+                  onClick={() => void recovery.recover()}>{t("recoverSelected")}</Button>
+              </SelectionActions>
+            </FilterSection>
+          </FilterPanelContent>
+        </FilterPanel>
+      </FilterBackdrop>}
 
       {auditOpen && <DiskAuditOverlay
         id="disk-audit-overlay"
@@ -386,7 +453,16 @@ export const RecoveryPage: React.FC = () => {
               bytes: usnJournalEvidence.bytesRead.toLocaleString(language),
             })}
             {usnJournalEvidence.limitReached && ` ${t("usnJournalLimitReached")}`}
+            {usnJournalEvidence.correlationLimitReached && ` ${t("usnMftCorrelationLimitReached")}`}
           </ValidationNotice>
+          <p>{t("usnMftCorrelationSummary", {
+            matched: usnJournalEvidence.matchedMftRecords ?? 0,
+            deleted: usnJournalEvidence.matchedDeletedMftRecords ?? 0,
+            validated: usnJournalEvidence.signatureMatchedRecords ?? 0,
+            aliases: usnJournalEvidence.aliasesAdded ?? 0,
+            stale: usnJournalEvidence.staleReferences ?? 0,
+            missing: usnJournalEvidence.unmatchedReferences ?? 0,
+          })}</p>
           <p>{t("usnJournalEvidenceInterpretation")}</p>
         </section>}
         {lowConfidenceTiers.length > 0 && <>
