@@ -306,7 +306,7 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
         catalog = handler.dispatch("scan_catalog", {
             "volumeId": "1:4096", "includeOrphaned": True,
-            "carvingOptions": {"scanBudgetGiB": 16, "maxFiles": 512},
+            "carvingOptions": {"scanBudgetGiB": 16, "maxFiles": 2048, "maxRetainedMiB": 256},
         }, events.append)
 
         self.assertEqual(order, ["audit", "catalog"])
@@ -320,7 +320,8 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         self.assertEqual(handler.catalog_service.precomputed_carving_ranges, ((8192, 12288),))
         self.assertTrue(handler.catalog_service.carving_ranges_truncated)
         self.assertEqual(handler.catalog_service.carving_options.scan_budget_gib, 16)
-        self.assertEqual(handler.catalog_service.carving_options.max_files, 512)
+        self.assertEqual(handler.catalog_service.carving_options.max_files, 2048)
+        self.assertEqual(handler.catalog_service.carving_options.max_retained_mib, 256)
         self.assertEqual(handler.catalog_service.carving_checkpoint, checkpoint)
         self.assertIsNone(repository.load_carving_checkpoint(inventory.list_disks()[0], volume))
         self.assertTrue(any(
