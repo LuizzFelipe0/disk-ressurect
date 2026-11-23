@@ -91,6 +91,18 @@ const { recovery } = vi.hoisted(() => ({
           rangeBytesRetained: 0, rangeCollectionCapBytes: 134217728,
         },
       },
+      recycleBinRecovery: {
+        status: "inconclusive", inconclusive: true, indexCount: 3, aliasesAdded: 1,
+        pairedCount: 2, missingContentCount: 1, ambiguousContentCount: 0,
+        metadataMismatchCount: 0, invalidIndexCount: 0, readErrorCount: 0,
+        limitedIndexCount: 0, incompleteContentCount: 0, unsupportedExtensionCount: 1,
+        directoryContentCount: 0,
+      },
+      usnJournalEvidence: {
+        status: "inconclusive", inconclusive: true, journalCount: 1, streamCount: 1,
+        bytesRead: 1024, recordsExamined: 4, parsedRecords: 3, deletedEvents: 1,
+        malformedRecords: 1, limitReached: true, errorCount: 0,
+      },
     },
     preview: null,
     previewLoading: false,
@@ -136,6 +148,22 @@ afterEach(() => {
 });
 
 describe("RecoveryPage audit details", () => {
+  it("lets users raise the bounded carving search and candidate-count budgets", () => {
+    render(<RecoveryPage />);
+
+    const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
+    const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
+    expect((scanBudget as HTMLSelectElement).disabled).toBe(true);
+    expect((maxFiles as HTMLSelectElement).disabled).toBe(true);
+
+    fireEvent.click(screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista"));
+    fireEvent.change(scanBudget, { target: { value: "4" } });
+    fireEvent.change(maxFiles, { target: { value: "512" } });
+    fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
+
+    expect(recovery.buildCatalog).toHaveBeenCalledWith(true, { scanBudgetGiB: 4, maxFiles: 512 });
+  });
+
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
     render(<RecoveryPage />);
 
@@ -155,6 +183,10 @@ describe("RecoveryPage audit details", () => {
     expect(within(dialog).getByText(/\.jpg: 0 candidato\(s\) encontrado\(s\), 12 candidato\(s\) examinado\(s\)/)).toBeTruthy();
     expect(within(dialog).getByText(/Limites atingidos neste formato: leitura de candidatos/)).toBeTruthy();
     expect(within(dialog).getByText(/Candidatos encontrados por carving de baixa confiança/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Recuperação pela Lixeira do Windows" })).toBeTruthy();
+    expect(within(dialog).getByText(/1 atalho\(s\) de recuperação adicionado/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Evidências do diário USN do NTFS" })).toBeTruthy();
+    expect(within(dialog).getByText(/1 eventos de exclusão/)).toBeTruthy();
     expect(within(dialog).getByRole("heading", { name: "Bitmap não observado; os dados podem ser atuais" })).toBeTruthy();
     expect(within(dialog).getAllByText(/lê até 16\.777\.216 bytes de candidatos por formato e 50\.331\.648 no total/)).toHaveLength(2);
 
