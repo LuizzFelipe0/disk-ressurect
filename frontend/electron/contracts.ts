@@ -19,6 +19,11 @@ export interface VolumeInfo {
   scanSavedAt?: string;
 }
 
+export interface CarvingOptions {
+  scanBudgetGiB: 1 | 4 | 16 | 64;
+  maxFiles: 256 | 512 | 1024;
+}
+
 export interface CatalogNode {
   id: string;
   name: string;
@@ -34,6 +39,10 @@ export interface CatalogNode {
   contentValidation?: "signature_match" | "signature_mismatch" | "format_structure_match" | "unavailable" | "incomplete_metadata" | "invalid_size" | "unsupported";
   clusterAllocationStatus?: "free" | "allocated" | "mixed" | "partially_observed" | "unavailable" | "no_non_sparse_runs" | "bitmap_unobserved" | "possibly_reused";
   metadataConsistent?: boolean;
+  recoverySource?: "recycle_bin" | string;
+  originalPath?: string;
+  deletionTimestampUtc?: string;
+  originalSizeBytes?: number;
 }
 
 export interface ContentCarvingSummary {
@@ -84,8 +93,41 @@ export interface CatalogInfo {
   diskValidation?: DiskValidationSummary;
   contentCarving?: ContentCarvingSummary;
   lowConfidenceCarving?: LowConfidenceCarvingSummary;
+  recycleBinRecovery?: RecycleBinRecoverySummary;
+  usnJournalEvidence?: UsnJournalEvidenceSummary;
   availableExtensions: string[];
   roots: CatalogNode[];
+}
+
+export interface RecycleBinRecoverySummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  indexCount: number;
+  aliasesAdded: number;
+  pairedCount: number;
+  missingContentCount: number;
+  ambiguousContentCount: number;
+  metadataMismatchCount: number;
+  invalidIndexCount: number;
+  readErrorCount: number;
+  limitedIndexCount: number;
+  incompleteContentCount: number;
+  unsupportedExtensionCount: number;
+  directoryContentCount: number;
+}
+
+export interface UsnJournalEvidenceSummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  journalCount: number;
+  streamCount: number;
+  bytesRead: number;
+  recordsExamined: number;
+  parsedRecords: number;
+  deletedEvents: number;
+  malformedRecords: number;
+  limitReached: boolean;
+  errorCount: number;
 }
 
 export interface DiskValidationSummary {
@@ -143,7 +185,7 @@ export interface PrivilegeStatus {
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
   listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
-  scanCatalog(volumeId: string, includeOrphaned?: boolean): Promise<CatalogInfo>;
+  scanCatalog(volumeId: string, includeOrphaned?: boolean, carvingOptions?: CarvingOptions): Promise<CatalogInfo>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;
