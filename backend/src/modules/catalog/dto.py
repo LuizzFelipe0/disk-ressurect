@@ -7,9 +7,11 @@ class CarvingOptionsDto:
 
     scan_budget_gib: int = 1
     max_files: int = 256
+    max_retained_mib: int = 128
 
     SCAN_BUDGETS_GIB = (1, 4, 16, 64)
-    FILE_COUNT_LIMITS = (256, 512, 1024)
+    FILE_COUNT_LIMITS = (256, 512, 1024, 2048, 4096)
+    RETAINED_BUDGETS_MIB = (128, 256, 512)
 
     @classmethod
     def from_payload(cls, payload):
@@ -22,11 +24,15 @@ class CarvingOptionsDto:
         max_files = payload.get("maxFiles", 256)
         if (isinstance(max_files, bool) or not isinstance(max_files, int)
                 or max_files not in cls.FILE_COUNT_LIMITS):
-            raise ValueError("carvingOptions.maxFiles must be one of 256, 512 or 1024")
-        unknown = set(payload) - {"scanBudgetGiB", "maxFiles"}
+            raise ValueError("carvingOptions.maxFiles must be one of 256, 512, 1024, 2048 or 4096")
+        max_retained_mib = payload.get("maxRetainedMiB", 128)
+        if (isinstance(max_retained_mib, bool) or not isinstance(max_retained_mib, int)
+                or max_retained_mib not in cls.RETAINED_BUDGETS_MIB):
+            raise ValueError("carvingOptions.maxRetainedMiB must be one of 128, 256 or 512")
+        unknown = set(payload) - {"scanBudgetGiB", "maxFiles", "maxRetainedMiB"}
         if unknown:
             raise ValueError("carvingOptions contains unsupported fields")
-        return cls(scan_budget_gib, max_files)
+        return cls(scan_budget_gib, max_files, max_retained_mib)
 
 
 @dataclass(frozen=True)
