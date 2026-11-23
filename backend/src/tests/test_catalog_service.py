@@ -161,7 +161,7 @@ class CatalogServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.content_carving_summary["filesFound"], 1)
         self.assertEqual(snapshot.content_carving_summary["bytesScanned"], 4096)
         self.assertEqual(snapshot.content_carving_summary["filesFoundByExtension"], {
-            ".jpg": 1, ".png": 0, ".pdf": 0,
+            ".jpg": 1, ".png": 0, ".pdf": 0, ".office_zip": 0, ".mp4": 0,
         })
         self.assertEqual(snapshot.content_carving_summary["validationScope"],
             "contiguous_structure_and_signature")
@@ -185,6 +185,46 @@ class CatalogServiceTests(unittest.TestCase):
             with open(recovered_path, "rb") as recovered_file:
                 self.assertEqual(recovered_file.read(), candidate)
         self.assertEqual(summary.recovered_count, 1)
+
+    def test_catalog_forwards_resume_checkpoint_and_checkpoint_callback(self):
+        volume = NTFSVolume(3, 1, 0, 8192, 512, 4096, 1024, 0, 0, ())
+        disk = FakeDisk(3)
+        candidate = jpeg()
+        disk.data[4096:4096 + len(candidate)] = candidate
+        saved_checkpoints = []
+        options = SimpleNamespace(scan_budget_gib=1, max_files=10)
+
+        snapshot = CatalogService(lambda _number: disk).build(
+            volume,
+            include_orphaned=True,
+            precomputed_orphans={},
+            precomputed_carving_ranges=((4096, 8192),),
+            carving_options=options,
+            carving_checkpoint_callback=saved_checkpoints.append,
+        )
+
+        self.assertEqual(snapshot.content_carving_summary["filesFound"], 1)
+        self.assertEqual(saved_checkpoints[-1], None)
+        self.assertFalse(snapshot.content_carving_summary["resumeAvailable"])
+
+    def test_preserves_checkpoint_when_audited_free_ranges_were_truncated(self):
+        volume = NTFSVolume(3, 1, 0, 8192, 512, 4096, 1024, 0, 0, ())
+        disk = FakeDisk(3)
+        saved_checkpoints = []
+
+        snapshot = CatalogService(lambda _number: disk).build(
+            volume,
+            include_orphaned=True,
+            precomputed_orphans={},
+            precomputed_carving_ranges=((4096, 8192),),
+            carving_ranges_truncated=True,
+            carving_checkpoint_callback=saved_checkpoints.append,
+        )
+
+        self.assertTrue(snapshot.content_carving_summary["rangeCollectionTruncated"])
+        self.assertTrue(snapshot.content_carving_summary["resumeAvailable"])
+        self.assertIsNotNone(saved_checkpoints[-1])
+        self.assertEqual(saved_checkpoints[-1].next_offset, 8192)
 
     def test_keeps_bitmap_unobserved_candidates_separate_and_deduplicates_lower_tiers(self):
         volume = NTFSVolume(3, 1, 0, 16384, 512, 4096, 1024, 0, 0, ())
