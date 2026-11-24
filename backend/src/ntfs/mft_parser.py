@@ -47,6 +47,9 @@ class MFTRecord:
         self.allocated_size = 0
         self.resident_data = None
         self.data_is_complete = True
+        self.data_extent_resolution = "not_checked"
+        self.data_extent_resolution_reason = None
+        self.data_extent_count = 0
         # Keys are case-folded stream names. These descriptors never merge
         # extension-record attributes; ambiguous/incomplete streams remain
         # explicitly unusable until an ATTRIBUTE_LIST resolver exists.
