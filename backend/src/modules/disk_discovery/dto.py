@@ -109,6 +109,8 @@ class DiscoveredDiskDto(DiskDto):
 @dataclass(frozen=True)
 class DiskValidationDto(DiskDto):
     coverage_status: str
+    evidence_freshness: str
+    evidence_scanned_at: str | None
     assessment: str
     bytes_requested: int
     bytes_read: int
@@ -127,6 +129,8 @@ class DiskValidationDto(DiskDto):
         return {
             **self.identity_dict(),
             "coverageStatus": self.coverage_status,
+            "evidenceFreshness": self.evidence_freshness,
+            "evidenceScannedAt": self.evidence_scanned_at,
             "assessment": self.assessment,
             "bytesRequested": self.bytes_requested,
             "bytesRead": self.bytes_read,
