@@ -40,6 +40,7 @@ class VolumeSelectionRequestDto:
     volume_id: str
     include_orphaned: bool = False
     carving_options: CarvingOptionsDto = CarvingOptionsDto()
+    force_fresh_validation: bool = False
 
     @classmethod
     def from_payload(cls, payload):
@@ -49,8 +50,11 @@ class VolumeSelectionRequestDto:
         include_orphaned = payload.get("includeOrphaned", False)
         if not isinstance(include_orphaned, bool):
             raise ValueError("includeOrphaned must be a boolean")
+        force_fresh_validation = payload.get("forceFreshValidation", False)
+        if not isinstance(force_fresh_validation, bool):
+            raise ValueError("forceFreshValidation must be a boolean")
         carving_options = CarvingOptionsDto.from_payload(payload.get("carvingOptions", {}))
-        return cls(value, include_orphaned, carving_options)
+        return cls(value, include_orphaned, carving_options, force_fresh_validation)
 
 
 @dataclass(frozen=True)
@@ -109,6 +113,9 @@ class CatalogNodeDto:
     original_path: str | None = None
     deletion_timestamp_utc: str | None = None
     original_size_bytes: int | None = None
+    data_extent_resolution: str | None = None
+    data_extent_resolution_reason: str | None = None
+    data_extent_count: int | None = None
 
     def to_dict(self):
         result = {
@@ -137,6 +144,12 @@ class CatalogNodeDto:
             result["deletionTimestampUtc"] = self.deletion_timestamp_utc
         if self.original_size_bytes is not None:
             result["originalSizeBytes"] = self.original_size_bytes
+        if self.data_extent_resolution is not None:
+            result["dataExtentResolution"] = self.data_extent_resolution
+        if self.data_extent_resolution_reason is not None:
+            result["dataExtentResolutionReason"] = self.data_extent_resolution_reason
+        if self.data_extent_count is not None:
+            result["dataExtentCount"] = self.data_extent_count
         if self.ancestor_ids is not None:
             result["ancestorIds"] = list(self.ancestor_ids)
         return result
@@ -155,6 +168,7 @@ class CatalogDto:
     low_confidence_carving: dict | None = None
     recycle_bin_recovery: dict | None = None
     usn_journal_evidence: dict | None = None
+    ntfs_log_file_evidence: dict | None = None
 
     def to_dict(self):
         result = {
@@ -175,6 +189,8 @@ class CatalogDto:
             result["recycleBinRecovery"] = self.recycle_bin_recovery
         if self.usn_journal_evidence is not None:
             result["usnJournalEvidence"] = self.usn_journal_evidence
+        if self.ntfs_log_file_evidence is not None:
+            result["ntfsLogFileEvidence"] = self.ntfs_log_file_evidence
         return result
 
 
