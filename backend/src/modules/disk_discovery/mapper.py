@@ -6,7 +6,10 @@ class DiskDiscoveryMapper:
     def validation(report):
         disk = report["disk"]
         coverage = report["coverage"]
-        is_complete = coverage.bytes_read == int(disk.size_bytes) and not coverage.issues
+        cached_snapshot_used = bool(report.get("validation_snapshot_used", False))
+        is_complete = (not cached_snapshot_used
+                       and coverage.bytes_read == int(disk.size_bytes)
+                       and not coverage.issues)
         unsupported = tuple(report["unsupported_filesystems"])
         assessment = "inconclusive" if not is_complete or report["capacity_mismatch"] else "evidence_collected"
         ntfs_checks = tuple(report["ntfs_checks"])
@@ -40,7 +43,10 @@ class DiskDiscoveryMapper:
             model=disk.model,
             size_bytes=disk.size_bytes,
             serial_number=disk.serial_number,
-            coverage_status="complete" if is_complete else "incomplete",
+            coverage_status=("cached_snapshot" if cached_snapshot_used else
+                "complete" if is_complete else "incomplete"),
+            evidence_freshness=("cached_snapshot" if cached_snapshot_used else "fresh"),
+            evidence_scanned_at=report.get("validation_snapshot_scanned_at"),
             assessment=assessment,
             bytes_requested=coverage.bytes_requested,
             bytes_read=coverage.bytes_read,
@@ -54,7 +60,10 @@ class DiskDiscoveryMapper:
             unsupported_filesystems=unsupported,
             filesystem_signatures=tuple(report["filesystem_signatures"]),
             interpretation=(
-                "This audit does not prove the disk contains no recoverable data. "
+                ("Physical read coverage is a historical cached snapshot from "
+                 f"{report.get('validation_snapshot_scanned_at')}; it was not re-read now. "
+                 if cached_snapshot_used else "")
+                + "This audit does not prove the disk contains no recoverable data. "
                 + ("Review partition and NTFS findings and scan supported file systems."
                     if assessment == "evidence_collected"
                     else "Some disk areas or structures could not be fully validated; treat the result as inconclusive.")
