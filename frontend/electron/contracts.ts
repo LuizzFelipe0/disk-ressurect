@@ -44,6 +44,9 @@ export interface CatalogNode {
   originalPath?: string;
   deletionTimestampUtc?: string;
   originalSizeBytes?: number;
+  dataExtentResolution?: "resolved" | "inconclusive";
+  dataExtentResolutionReason?: string;
+  dataExtentCount?: number;
 }
 
 export interface ContentCarvingSummary {
@@ -96,6 +99,7 @@ export interface CatalogInfo {
   lowConfidenceCarving?: LowConfidenceCarvingSummary;
   recycleBinRecovery?: RecycleBinRecoverySummary;
   usnJournalEvidence?: UsnJournalEvidenceSummary;
+  ntfsLogFileEvidence?: NtfsLogFileEvidenceSummary;
   availableExtensions: string[];
   roots: CatalogNode[];
 }
@@ -140,8 +144,26 @@ export interface UsnJournalEvidenceSummary {
   correlationLimitReached?: boolean;
 }
 
+export interface NtfsLogFileEvidenceSummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  logFileCount: number;
+  bytesRead: number;
+  pagesExamined: number;
+  restartPages: number;
+  recordPages: number;
+  malformedPages: number;
+  currentLsns: string[];
+  limitReached: boolean;
+  errorCount: number;
+  reason?: string | null;
+  recoveryClaim: "structural_evidence_only";
+}
+
 export interface DiskValidationSummary {
-  coverageStatus: "complete" | "incomplete" | "unavailable";
+  coverageStatus: "complete" | "incomplete" | "cached_snapshot" | "unavailable";
+  evidenceFreshness?: "fresh" | "cached_snapshot";
+  evidenceScannedAt?: string | null;
   assessment: "evidence_collected" | "inconclusive";
   bytesRead: number;
   sizeBytes: number;
@@ -195,7 +217,10 @@ export interface PrivilegeStatus {
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
   listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
-  scanCatalog(volumeId: string, includeOrphaned?: boolean, carvingOptions?: CarvingOptions): Promise<CatalogInfo>;
+  scanCatalog(
+    volumeId: string, includeOrphaned?: boolean, carvingOptions?: CarvingOptions,
+    forceFreshValidation?: boolean,
+  ): Promise<CatalogInfo>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;
