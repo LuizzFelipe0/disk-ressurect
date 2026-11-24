@@ -25,11 +25,13 @@ class JsonDeepScanRepository:
     """Store complete NTFS volume metadata keyed by physical disk identity."""
 
     VERSION = 2
+    MAX_VALIDATION_SNAPSHOT_BYTES = 32 * 1024 * 1024
 
     def __init__(self, path=None):
         self.path = Path(path) if path else None
         self._memory = {}
         self._carving_memory = {}
+        self._validation_memory = {}
 
     @staticmethod
     def disk_key(disk):
@@ -123,6 +125,70 @@ class JsonDeepScanRepository:
             disk_entries[volume_key] = self._serialize_carving_checkpoint(checkpoint)
         self._write_document(document)
         return checkpoint
+
+    def load_validation_snapshot(self, disk):
+        """Load the last bounded full-disk scan snapshot for this disk identity."""
+        key = self.disk_key(disk)
+        if self.path is None:
+            snapshot = self._validation_memory.get(key)
+        else:
+            snapshot = self._read_document().get("validation", {}).get(key)
+        if not isinstance(snapshot, dict):
+            return None
+        try:
+            identity_matches = (
+                snapshot.get("version") == 1
+                and snapshot.get("identity") == self._disk_identity(disk)
+                and int(snapshot.get("diskSize", -1)) == int(disk.size_bytes)
+            )
+        except (TypeError, ValueError, OverflowError):
+            identity_matches = False
+        if not identity_matches:
+            return None
+        try:
+            if len(json.dumps(snapshot, separators=(",", ":")).encode("utf-8")) > self.MAX_VALIDATION_SNAPSHOT_BYTES:
+                self.invalidate_validation_snapshot(disk)
+                return None
+        except (TypeError, ValueError):
+            self.invalidate_validation_snapshot(disk)
+            return None
+        return snapshot
+
+    def save_validation_snapshot(self, disk, snapshot):
+        """Persist only the compact scan evidence and revalidation references."""
+        if not isinstance(snapshot, dict):
+            raise TypeError("snapshot must be a JSON object")
+        key = self.disk_key(disk)
+        if (snapshot.get("version") != 1
+                or snapshot.get("identity") != self._disk_identity(disk)
+                or int(snapshot.get("diskSize", -1)) != int(disk.size_bytes)):
+            raise ValueError("Validation snapshot identity does not match the physical disk")
+        try:
+            encoded_size = len(json.dumps(snapshot, separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Validation snapshot must contain JSON-safe values") from exc
+        if encoded_size > self.MAX_VALIDATION_SNAPSHOT_BYTES:
+            self.invalidate_validation_snapshot(disk)
+            return None
+        if self.path is None:
+            self._validation_memory[key] = snapshot
+            return snapshot
+        document = self._read_document()
+        document["version"] = self.VERSION
+        document.setdefault("validation", {})[key] = snapshot
+        self._write_document(document)
+        return snapshot
+
+    def invalidate_validation_snapshot(self, disk):
+        """Remove evidence after identity, layout or metadata revalidation fails."""
+        key = self.disk_key(disk)
+        if self.path is None:
+            self._validation_memory.pop(key, None)
+            return
+        document = self._read_document()
+        validation = document.setdefault("validation", {})
+        if validation.pop(key, None) is not None:
+            self._write_document(document)
 
     @staticmethod
     def _carving_volume_key(volume):
@@ -222,7 +288,7 @@ class JsonDeepScanRepository:
 
     def _read_document(self):
         if self.path is None:
-            return {"version": self.VERSION, "disks": {}, "carving": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
         descriptor = None
         try:
             if sys.platform.startswith("linux") and os.open in os.supports_dir_fd:
@@ -237,27 +303,41 @@ class JsonDeepScanRepository:
                 finally:
                     os.close(directory_fd)
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                    return {"version": self.VERSION, "disks": {}, "carving": {}}
+                    return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
                 with os.fdopen(descriptor, "r", encoding="utf-8") as cache_file:
                     descriptor = None
                     document = json.load(cache_file)
             else:
                 if not self.path.exists():
-                    return {"version": self.VERSION, "disks": {}, "carving": {}}
+                    return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
                 with self.path.open("r", encoding="utf-8") as cache_file:
                     document = json.load(cache_file)
         except (OSError, json.JSONDecodeError):
-            return {"version": self.VERSION, "disks": {}, "carving": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
         finally:
             if descriptor is not None:
                 os.close(descriptor)
         if (not isinstance(document, dict) or document.get("version") not in (1, self.VERSION)
                 or not isinstance(document.get("disks"), dict)):
-            return {"version": self.VERSION, "disks": {}, "carving": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
         if not isinstance(document.get("carving", {}), dict):
             document["carving"] = {}
+        if not isinstance(document.get("validation", {}), dict):
+            document["validation"] = {}
         document["version"] = self.VERSION
         return document
+
+    @staticmethod
+    def _disk_identity(disk):
+        serial = str(getattr(disk, "serial_number", "") or "").strip().casefold()
+        identity = {
+            "model": str(getattr(disk, "model", "") or "").strip().casefold(),
+            "sizeBytes": int(disk.size_bytes),
+            "serialNumber": serial,
+        }
+        if not serial:
+            identity["number"] = int(disk.number)
+        return identity
 
     def _write_document(self, document):
         ensure_pkexec_user_owned_directory(self.path.parent)
