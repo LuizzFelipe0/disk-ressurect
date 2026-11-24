@@ -17,6 +17,15 @@ export interface VolumeInfo {
   estimatedSize: boolean;
   name: string;
   scanSavedAt?: string;
+  sourceId?: string;
+  sourceType?: "physical_disk" | "raw_image";
+}
+
+export interface RawImageSource {
+  sourceId: string;
+  sourceType: "raw_image";
+  displayName: string;
+  sizeBytes: number;
 }
 
 export interface CarvingOptions {
@@ -199,6 +208,7 @@ export interface ProgressInfo {
   completed: number;
   total: number;
   message: string;
+  operationId?: string;
 }
 
 export interface RecoveryResult {
@@ -217,10 +227,13 @@ export interface PrivilegeStatus {
 
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
-  listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
+  selectRawImage(): Promise<RawImageSource | null>;
+  listSourcePartitions(sourceId: string, deepScan: boolean, operationId?: string): Promise<VolumeInfo[]>;
+  listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean, operationId?: string): Promise<VolumeInfo[]>;
   scanCatalog(
     volumeId: string, includeOrphaned?: boolean, carvingOptions?: CarvingOptions,
     forceFreshValidation?: boolean,
+    operationId?: string,
   ): Promise<CatalogInfo>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;

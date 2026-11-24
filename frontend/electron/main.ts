@@ -288,22 +288,6 @@ function relaunchAsAdministrator() {
   return true;
 }
 
-async function requestAdministratorAtStartup() {
-  if (process.platform !== "win32" || isWindowsAdministrator()) return true;
-  const choice = await dialog.showMessageBox({
-    type: "question",
-    icon: getAppIcon(),
-    title: "Permission to read physical disks",
-    message: "Disk-Ressurect needs administrator permission to read physical disks.",
-    detail: "The source is accessed in read-only mode. Recovered files will only be written to the selected destination folder. Windows will display a User Account Control (UAC) prompt.",
-    buttons: ["Request permission from Windows", "Continue without disk access"],
-    defaultId: 0,
-    cancelId: 1,
-  });
-  if (choice.response === 0 && relaunchAsAdministrator()) return false;
-  return true;
-}
-
 async function requestLinuxDiskAccess() {
   if (process.platform !== "linux" || backend.hasElevatedAccess()) return true;
   const choice = await dialog.showMessageBox({
@@ -321,7 +305,6 @@ async function requestLinuxDiskAccess() {
 }
 
 app.whenReady().then(async () => {
-  if (!await requestAdministratorAtStartup()) return;
   backend = new PythonBackend();
   ipcMain.handle("backend:get-status", () => backend.getStatus());
   ipcMain.handle("backend:get-privileges", () => ({
@@ -357,6 +340,17 @@ app.whenReady().then(async () => {
     return { relaunched, cancelled: !relaunched };
   });
   ipcMain.handle("recovery:list-disks", () => backend.request("list_disks", {}));
+  ipcMain.handle("recovery:select-raw-image", async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      title: "Select a raw disk image",
+      properties: ["openFile"],
+      filters: [{ name: "Raw disk images", extensions: ["img", "raw", "dd", "bin"] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    return backend.request("register_raw_image", { path: result.filePaths[0] });
+  });
+  ipcMain.handle("recovery:list-source-partitions", (_event, payload) =>
+    backend.request("list_source_partitions", payload));
   ipcMain.handle("recovery:list-partitions", (_event, payload) => backend.request("list_partitions", payload));
   ipcMain.handle("recovery:scan-catalog", (_event, payload) => backend.request("scan_catalog", payload));
   ipcMain.handle("recovery:search-catalog", (_event, payload) => backend.request("search_catalog", payload));

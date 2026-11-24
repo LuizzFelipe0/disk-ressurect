@@ -10,6 +10,7 @@ import type {
   DiskInfo,
   ProgressInfo,
   VolumeInfo,
+  RawImageSource,
 } from "../types/recovery";
 import { isTreeNodeSelected, updateTreeSelection } from "../utils/selection";
 
@@ -32,6 +33,7 @@ export function useRecoveryController() {
   const [progress, setProgress] = useState<ProgressInfo | null>(null);
   const [partitionScanCanResume, setPartitionScanCanResume] = useState(false);
   const [disks, setDisks] = useState<DiskInfo[]>([]);
+  const [rawImage, setRawImage] = useState<RawImageSource | null>(null);
   const [selectedDiskNumber, setSelectedDiskNumber] = useState("");
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
@@ -55,6 +57,17 @@ export function useRecoveryController() {
   const initialLoadStarted = useRef(false);
   const catalogGeneration = useRef(0);
   const catalogBuildRequest = useRef(0);
+  const activeOperationId = useRef<string | null>(null);
+  const sourceGeneration = useRef(0);
+  const partitionRequestId = useRef(0);
+  const beginOperation = useCallback(() => {
+    const id = window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    activeOperationId.current = id;
+    return id;
+  }, []);
+  const finishOperation = useCallback((id: string) => {
+    if (activeOperationId.current === id) activeOperationId.current = null;
+  }, []);
 
   const clearCatalog = useCallback(() => {
     catalogGeneration.current += 1;
@@ -117,6 +130,7 @@ export function useRecoveryController() {
 
   useEffect(() => {
     const unsubscribe = recoveryService.onProgress((event) => {
+      if (event.operationId && event.operationId !== activeOperationId.current) return;
       setProgress(event);
       if (event.message) setStatus(event.message);
     });
@@ -190,6 +204,8 @@ export function useRecoveryController() {
     if (selectedDisk) window.localStorage.setItem(LAST_SELECTED_DISK_KEY, diskCacheIdentity(selectedDisk));
     else window.localStorage.removeItem(LAST_SELECTED_DISK_KEY);
     setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
+    setRawImage(null);
+    sourceGeneration.current += 1;
     setSelectedDiskNumber(diskNumber);
     setVolumes(savedPartitions);
     setSelectedVolumeId("");
@@ -204,15 +220,51 @@ export function useRecoveryController() {
     }
   }, [clearCatalog, disks]);
 
-  const findPartitions = useCallback(async (deepScan: boolean, resume = false) => {
-    if (!selectedDiskNumber) return;
-    if (!await ensureAdministrator()) return;
+  const selectRawImage = useCallback(async () => {
+    const requestGeneration = sourceGeneration.current;
     setBusy(true); setError("");
+    try {
+      const selected = await recoveryService.selectRawImage();
+      if (!selected || requestGeneration !== sourceGeneration.current) return;
+      sourceGeneration.current += 1;
+      setRawImage(selected);
+      setSelectedDiskNumber("");
+      setSelectedVolumeId("");
+      setVolumes([]);
+      setPartitionScanCanResume(false);
+      clearCatalog();
+      setStatus("Raw image selected. Search it for NTFS partitions.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setStatus("Unable to open the selected raw image.");
+    } finally { setBusy(false); }
+  }, [clearCatalog]);
+
+  const findPartitions = useCallback(async (deepScan: boolean, resume = false) => {
+    if (!selectedDiskNumber && !rawImage) return;
+    if (!rawImage && !await ensureAdministrator()) return;
+    setBusy(true); setError("");
+    const operationId = beginOperation();
+    const requestId = ++partitionRequestId.current;
+    const generation = sourceGeneration.current;
     if (!resume) setProgress(null);
     if (!resume) setPartitionScanCanResume(false);
     setStatus(resume ? "Resuming lost-partition scan…" : deepScan ? "Searching for lost NTFS partitions…" : "Scanning partitions…");
     try {
-      const foundVolumes = await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan, resume);
+      const foundVolumes = rawImage
+        ? await recoveryService.listSourcePartitions(rawImage.sourceId, deepScan, operationId)
+        : await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan, resume, operationId);
+      if (requestId !== partitionRequestId.current || generation !== sourceGeneration.current) return;
+      if (rawImage) {
+        setVolumes(foundVolumes);
+        setSelectedVolumeId(""); clearCatalog();
+        setStatus(foundVolumes.length
+          ? `${foundVolumes.length} NTFS volume(s) found in the selected image.`
+          : deepScan
+            ? "Deep scan found no readable NTFS volumes in the selected image."
+            : "No readable NTFS volumes were found in the selected image.");
+        return;
+      }
       const diskNumber = Number(selectedDiskNumber);
       const disk = disks.find((item) => item.number === diskNumber);
       const savedDeepScan = disk?.cachedPartitions ?? [];
@@ -233,6 +285,7 @@ export function useRecoveryController() {
         ? `${displayedVolumes.length} NTFS partition(s) found. Select one to build the catalog.`
         : "No readable NTFS partitions were found.");
     } catch (cause) {
+      if (requestId !== partitionRequestId.current || generation !== sourceGeneration.current) return;
       setError(cause instanceof Error ? cause.message : String(cause));
       setStatus("Partition search failed. The scan position has been saved when available.");
       if (deepScan) {
@@ -256,8 +309,11 @@ export function useRecoveryController() {
         }
       }
     }
-    finally { setBusy(false); }
-  }, [selectedDiskNumber, disks, clearCatalog, ensureAdministrator]);
+    finally {
+      if (requestId === partitionRequestId.current) setBusy(false);
+      finishOperation(operationId);
+    }
+  }, [selectedDiskNumber, rawImage, disks, clearCatalog, ensureAdministrator, beginOperation, finishOperation]);
 
   const selectVolume = useCallback((volumeId: string) => {
     setSelectedVolumeId(volumeId); clearCatalog();
@@ -270,10 +326,11 @@ export function useRecoveryController() {
     forceFreshValidation = false,
   ) => {
     if (!selectedVolumeId) return;
-    if (!await ensureAdministrator()) return;
+    if (!rawImage && !await ensureAdministrator()) return;
     clearCatalog();
     const generation = catalogGeneration.current;
     const requestId = ++catalogBuildRequest.current;
+    const operationId = beginOperation();
     setBusy(true); setError(""); setProgress(null);
     setStatus(includeOrphaned
       ? "Reading MFT metadata and searching for orphaned entries…"
@@ -281,9 +338,9 @@ export function useRecoveryController() {
     try {
       const result = includeOrphaned
         ? await recoveryService.scanCatalog(
-          selectedVolumeId, true, carvingOptions, forceFreshValidation,
+          selectedVolumeId, true, carvingOptions, forceFreshValidation, operationId,
         )
-        : await recoveryService.scanCatalog(selectedVolumeId);
+        : await recoveryService.scanCatalog(selectedVolumeId, false, undefined, false, operationId);
       if (generation !== catalogGeneration.current || requestId !== catalogBuildRequest.current) return;
       const parents = new Map<string, string | null>();
       result.roots.forEach((node) => parents.set(node.id, node.parentId ?? null));
@@ -298,8 +355,9 @@ export function useRecoveryController() {
       }
     } finally {
       if (requestId === catalogBuildRequest.current) setBusy(false);
+      finishOperation(operationId);
     }
-  }, [selectedVolumeId, ensureAdministrator, clearCatalog]);
+  }, [selectedVolumeId, rawImage, ensureAdministrator, clearCatalog, beginOperation, finishOperation]);
 
   const searchRequestId = useRef(0);
   useEffect(() => {
@@ -351,8 +409,10 @@ export function useRecoveryController() {
       return;
     }
     setLoadingFolderIds((current) => new Set(current).add(node.id)); setError("");
+    const generation = catalogGeneration.current;
     try {
       const children = await recoveryService.getChildren(node.id);
+      if (generation !== catalogGeneration.current) return;
       setChildrenById((current) => ({ ...current, [node.id]: children }));
       setParentById((current) => {
         const next = new Map(current);
@@ -361,7 +421,11 @@ export function useRecoveryController() {
       });
       setExpandedFolderIds((current) => new Set(current).add(node.id));
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setLoadingFolderIds((current) => { const next = new Set(current); next.delete(node.id); return next; }); }
+    finally {
+      if (generation === catalogGeneration.current) {
+        setLoadingFolderIds((current) => { const next = new Set(current); next.delete(node.id); return next; });
+      }
+    }
   }, [childrenById, expandedFolderIds]);
 
   const previewFile = useCallback(async (node: CatalogNode) => {
@@ -417,18 +481,19 @@ export function useRecoveryController() {
       setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
       return;
     }
-    if (!await ensureAdministrator()) return;
+    if (!rawImage && !await ensureAdministrator()) return;
     setBusy(true); setError(""); setProgress(null); setStatus("Recovering the selected items…");
+    const operationId = beginOperation();
     try {
       const result = await recoveryService.recover({
         selectedNodeIds: [...selectedIds], excludedNodeIds: [...excludedIds],
-        outputDirectory, extensions, minimumSizeKb,
+        outputDirectory, extensions, minimumSizeKb, operationId,
       });
       setStatus(`Completed: ${result.recoveredCount}/${result.candidateCount} files recovered.`);
       setProgress({ stage: "extract", completed: 1, total: 1, message: "Recovery completed." });
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Recovery failed."); }
-    finally { setBusy(false); }
-  }, [selectedIds, excludedIds, outputDirectory, extensions, minimumSizeKb, ensureAdministrator]);
+    finally { setBusy(false); finishOperation(operationId); }
+  }, [selectedIds, excludedIds, outputDirectory, extensions, minimumSizeKb, rawImage, ensureAdministrator, beginOperation, finishOperation]);
 
   const setExtensionSelected = useCallback((extension: string, checked: boolean) => {
     setExtensions((current) => checked
@@ -437,13 +502,13 @@ export function useRecoveryController() {
   }, []);
 
   return {
-    backendStatus, isAdministrator, busy, error, status, progress, disks, selectedDiskNumber, volumes,
+    backendStatus, isAdministrator, busy, error, status, progress, disks, rawImage, selectedDiskNumber, volumes,
     partitionScanCanResume,
     selectedVolumeId, catalog, childrenById, loadingFolderIds, expandedFolderIds,
     preview, previewLoading, previewFile,
     selectedIds, availableExtensions, extensions, minimumSizeKb, outputDirectory,
     searchQuery, searchResult, searchingCatalog,
-    refreshDisks, selectDisk, findPartitions, selectVolume, buildCatalog, toggleFolder,
+    refreshDisks, selectDisk, selectRawImage, findPartitions, selectVolume, buildCatalog, toggleFolder,
     toggleSelection, isSelected, selectAll, clearSelection, chooseOutputDirectory,
     recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory, setSearchQuery,
     ensureAdministrator,

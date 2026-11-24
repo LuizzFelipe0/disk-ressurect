@@ -64,7 +64,7 @@ describe("useRecoveryController backend lifecycle", () => {
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
     await act(async () => { await result.current.buildCatalog(); });
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096");
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", false, undefined, false, expect.any(String));
 
     act(() => result.current.setSearchQuery("trip"));
     await waitFor(() => expect(result.current.searchResult?.results).toEqual([match]));
@@ -93,7 +93,7 @@ describe("useRecoveryController backend lifecycle", () => {
 
     await act(async () => { await result.current.buildCatalog(true); });
 
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, false);
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, false, expect.any(String));
     expect(result.current.catalog?.diskValidation).toEqual(diskValidation);
   });
 
@@ -157,7 +157,7 @@ describe("useRecoveryController backend lifecycle", () => {
     };
     await act(async () => { await result.current.buildCatalog(true, carvingOptions); });
 
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, carvingOptions, false);
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, carvingOptions, false, expect.any(String));
   });
 
   it("forwards an explicit request for a fresh full-disk validation", async () => {
@@ -170,7 +170,7 @@ describe("useRecoveryController backend lifecycle", () => {
       await result.current.buildCatalog(true, undefined, true);
     });
 
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, true);
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, true, expect.any(String));
   });
 
   it("loads a preview for the chosen file and clears it when the source changes", async () => {
@@ -288,8 +288,8 @@ describe("useRecoveryController backend lifecycle", () => {
     listPartitions.mockResolvedValueOnce([]);
     await act(async () => { await result.current.findPartitions(true, true); });
 
-    expect(listPartitions).toHaveBeenNthCalledWith(1, 1, true, false);
-    expect(listPartitions).toHaveBeenNthCalledWith(2, 4, true, true);
+    expect(listPartitions).toHaveBeenNthCalledWith(1, 1, true, false, expect.any(String));
+    expect(listPartitions).toHaveBeenNthCalledWith(2, 4, true, true, expect.any(String));
     expect(result.current.partitionScanCanResume).toBe(false);
   });
 });

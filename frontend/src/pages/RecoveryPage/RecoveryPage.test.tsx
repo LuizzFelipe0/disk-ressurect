@@ -14,6 +14,7 @@ const { recovery } = vi.hoisted(() => ({
     progress: null,
     partitionScanCanResume: false,
     disks: [],
+    rawImage: null,
     selectedDiskNumber: "1",
     volumes: [],
     selectedVolumeId: "1:4096",
@@ -142,6 +143,7 @@ const { recovery } = vi.hoisted(() => ({
     toggleSelection: vi.fn(),
     previewFile: vi.fn(),
     ensureAdministrator: vi.fn(),
+    selectRawImage: vi.fn(),
   },
 }));
 
@@ -155,6 +157,12 @@ afterEach(() => {
 });
 
 describe("RecoveryPage audit details", () => {
+  it("offers raw image selection through the Electron file picker", () => {
+    render(<RecoveryPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Abrir imagem raw…" }));
+    expect(recovery.selectRawImage).toHaveBeenCalledOnce();
+  });
+
   it("keeps selection actions visible and disabled until a catalog is available", () => {
     const catalog = recovery.catalog;
     recovery.catalog = null as never;

@@ -23,6 +23,7 @@ class NTFSVolume:
     mft_fragments: tuple[tuple[int, int, int], ...]
     partition_name: str = ""
     partition_size_is_estimated: bool = False
+    source_id: str | None = None
 
     def fragments_as_dicts(self):
         return [

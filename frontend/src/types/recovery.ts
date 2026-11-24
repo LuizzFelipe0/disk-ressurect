@@ -9,6 +9,7 @@ export type {
   ProgressInfo,
   PrivilegeStatus,
   RecoveryResult,
+  RawImageSource,
   VolumeInfo,
 } from "../../electron/contracts";
 
@@ -20,4 +21,5 @@ export interface RecoveryOptions {
   outputDirectory: string;
   extensions: string[];
   minimumSizeKb: number;
+  operationId?: string;
 }

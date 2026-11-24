@@ -28,9 +28,12 @@ class PhysicalDiskEnumerator(Protocol):
 class StorageService:
     """Expose storage identities and positional readers without filesystem policy."""
 
-    def __init__(self, enumerator: PhysicalDiskEnumerator, reader_factory: BlockReaderFactory):
+    def __init__(self, enumerator: PhysicalDiskEnumerator, reader_factory: BlockReaderFactory,
+                 raw_image_source_factory=None):
         self.enumerator = enumerator
         self.reader_factory = reader_factory
+        self.raw_image_source_factory = raw_image_source_factory
+        self._registered_images = {}
 
     def list_sources(self):
         return tuple(disk.as_storage_source() for disk in self.enumerator.list_disks())
@@ -44,6 +47,20 @@ class StorageService:
         if disk is None:
             raise ValueError(f"Physical disk {disk_number} is no longer available")
         return disk.as_storage_source()
+
+    def register_raw_image(self, path):
+        """Register a user-selected image for this process session after a read-only open."""
+        if self.raw_image_source_factory is None:
+            raise RuntimeError("Raw image support is unavailable")
+        source = self.raw_image_source_factory(path)
+        self._registered_images[source.source_id] = source
+        return source
+
+    def get_source(self, source_id):
+        source = self._registered_images.get(str(source_id))
+        if source is None:
+            raise ValueError("Storage source is no longer registered; select it again")
+        return source
 
     def open_reader(self, source: StorageSource):
         if source.source_type == "physical_disk":

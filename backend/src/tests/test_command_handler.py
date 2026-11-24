@@ -20,6 +20,8 @@ from infrastructure.persistence.deep_scan_repository import JsonDeepScanReposito
 from modules.deep_scan.entities import CarvingCheckpoint
 from presentation.controller import RecoveryCommandHandler
 from modules.catalog.service import CatalogService
+from infrastructure.storage.factory import create_block_reader, raw_image_source_for_path
+from modules.storage.service import StorageService
 
 
 def make_node(index, name, is_directory, path, children=(), parent=None, size=0):
@@ -159,6 +161,44 @@ def make_handler(inventory=None, workflow=None, repository=None):
 
 
 class RecoveryCommandHandlerTests(unittest.TestCase):
+    def test_raw_image_is_registered_and_partition_discovery_is_session_scoped(self):
+        handler = make_handler()
+
+        class EmptyInventory:
+            @staticmethod
+            def list_disks():
+                return []
+
+        handler.storage_service = StorageService(
+            EmptyInventory(), create_block_reader, raw_image_source_for_path,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = os.path.join(directory, "disk.img")
+            with open(image_path, "wb") as image:
+                image.write(bytes(4096))
+
+            source = handler.dispatch("register_raw_image", {"path": image_path}, lambda _event: None)
+            volumes = handler.dispatch("list_source_partitions", {
+                "sourceId": source["sourceId"], "deepScan": False,
+            }, lambda _event: None)
+
+        self.assertEqual(source["sourceType"], "raw_image")
+        self.assertEqual(volumes, [])
+        with self.assertRaisesRegex(ValueError, "no longer registered"):
+            handler.storage_service.get_source("raw-image:unknown")
+
+    def test_progress_events_carry_the_frontend_operation_identity(self):
+        handler = make_handler(inventory=FakeInventory([make_volume()]))
+        emitted = []
+
+        handler.handle({
+            "id": "request-1", "operation": "list_partitions",
+            "payload": {"diskNumber": 1, "operationId": "operation-7"},
+        }, emitted.append)
+
+        progress = next(message for message in emitted if message.get("type") == "progress")
+        self.assertEqual(progress["payload"]["operationId"], "operation-7")
+
     def test_lists_disks_as_json_serializable_contracts(self):
         session = make_handler()
 

@@ -50,16 +50,29 @@ class CatalogScanWorkflow:
                 validation_options = {}
                 if force_fresh_validation:
                     validation_options["force_fresh"] = True
-                report = self.validation_service.validate_disk(
-                    volume.disk_number,
-                    validation_progress_callback,
-                    retain_orphans_for_offset=int(volume.partition_offset),
-                    orphan_scan_volume=volume,
-                    content_carving_range_budget_bytes=(
-                        int(carving_options.scan_budget_gib) * 1024**3
-                    ),
-                    **validation_options,
-                )
+                validate_source = getattr(volume, "source_id", None)
+                if validate_source:
+                    source = self.catalog_builder.source_factory.get_source(volume.source_id)
+                    report = self.validation_service.validate_source(
+                        source,
+                        validation_progress_callback,
+                        retain_orphans_for_offset=int(volume.partition_offset),
+                        orphan_scan_volume=volume,
+                        content_carving_range_budget_bytes=(
+                            int(carving_options.scan_budget_gib) * 1024**3
+                        ),
+                    )
+                else:
+                    report = self.validation_service.validate_disk(
+                        volume.disk_number,
+                        validation_progress_callback,
+                        retain_orphans_for_offset=int(volume.partition_offset),
+                        orphan_scan_volume=volume,
+                        content_carving_range_budget_bytes=(
+                            int(carving_options.scan_budget_gib) * 1024**3
+                        ),
+                        **validation_options,
+                    )
                 validation_summary = self.validation_service.summary(report)
                 partition_offset = int(volume.partition_offset)
                 precomputed_orphans = report.get("orphan_records_by_partition", {}).get(
@@ -80,7 +93,8 @@ class CatalogScanWorkflow:
             except Exception as exc:
                 validation_summary = self._unavailable_validation_summary(exc)
 
-        if include_orphaned and precomputed_carving_ranges is not None:
+        if (include_orphaned and precomputed_carving_ranges is not None
+                and not getattr(volume, "source_id", None)):
             carving_source_disk = self.disk_service.get_disk(volume.disk_number)
             carving_checkpoint = self.deep_scan_service.load_carving_checkpoint(
                 carving_source_disk, volume,

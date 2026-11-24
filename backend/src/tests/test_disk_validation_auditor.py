@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.storage.entities import PhysicalDisk
+from modules.storage.entities import PhysicalDisk, StorageSource
 from modules.disk.entities import NTFSVolume
 from infrastructure.validation.disk_auditor import DiskReadCoverage, DiskValidationAuditor
 from infrastructure.disk.inventory import DiskInventory
@@ -245,6 +245,17 @@ class DiskReadCoverageTests(unittest.TestCase):
 
 
 class DiskValidationAuditorTests(unittest.TestCase):
+    def test_audits_a_raw_image_source_with_the_same_coverage_pipeline(self):
+        source = StorageSource("raw-image:test", "raw_image", "disk.img", 4096, 512, "disk.img")
+        disk = FakeDisk(bytes(4096))
+        auditor = DiskValidationAuditor(FakeEnumerator([]), lambda _number: disk, chunk_size=512)
+
+        report = auditor.validate_source(source, lambda _source: disk)
+
+        self.assertEqual(report["coverage"].bytes_read, 4096)
+        self.assertEqual(report["coverage"].issues, [])
+        self.assertTrue(disk.closed)
+
     def test_bitmap_own_runs_must_be_inside_volume_and_cover_its_file_size(self):
         valid_record = SimpleNamespace(
             is_valid=True, resident_data=None, file_size=600, data_runs=((3, 2),),

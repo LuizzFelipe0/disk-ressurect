@@ -65,6 +65,18 @@ class ValidationService:
             snapshot_saver(disk, cache_snapshot)
         return report
 
+    def validate_source(
+        self, source, progress_callback=None, retain_orphans_for_offset=None,
+        orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+    ):
+        validator = getattr(self.inventory, "validate_source", None)
+        if validator is None:
+            raise NotImplementedError("This inventory does not support source validation")
+        return validator(
+            source, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
+            content_carving_range_budget_bytes,
+        )
+
     @staticmethod
     def _validate_fresh(
         validator, disk_number, progress_callback, retain_orphans_for_offset,

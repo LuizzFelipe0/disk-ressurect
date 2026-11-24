@@ -12,7 +12,7 @@ from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.disk.output_safety import OutputSafetyGuard
 from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from infrastructure.filesystems.ntfs.readers.content_reference_store import NTFSContentReferenceStore
-from infrastructure.storage.factory import create_block_reader
+from infrastructure.storage.factory import create_block_reader, raw_image_source_for_path
 from modules.storage.service import StorageService
 from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
@@ -51,7 +51,10 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
         cache_path = os.path.join(cache_path, "deep_scan_cache.json")
     disk_inventory = inventory if inventory is not None else DiskInventory()
     reference_store = NTFSContentReferenceStore()
-    storage_service = StorageService(disk_inventory, create_block_reader)
+    storage_service = StorageService(
+        disk_inventory, create_block_reader, raw_image_source_for_path,
+    )
+    disk_inventory.source_reader_factory = storage_service.open_reader
     reader_factory = storage_service.open_reader
     repository = scan_repository if scan_repository is not None else JsonDeepScanRepository(cache_path)
     disk_service = DiskService(disk_inventory, repository)
@@ -65,6 +68,7 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
             disk_factory=lambda number: reader_factory(storage_service.get_physical_source(number)),
             source_resolver=storage_service.get_physical_source,
             content_reference_store=reference_store,
+            source_factory=storage_service,
         ),
         CatalogService(),
         workflow if workflow is not None else RecoveryWorkflow(
@@ -73,6 +77,7 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
             FileSignatureValidator, Extractor,
         ),
         source_resolver=storage_service.get_physical_source,
+        storage_service=storage_service,
     )
 
 

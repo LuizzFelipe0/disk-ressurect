@@ -4,6 +4,12 @@ from infrastructure.disk.factory import create_disk_reader
 from infrastructure.storage.image.reader import RawImageReader
 
 
+def raw_image_source_for_path(path):
+    """Validate a selected image using the read-only adapter and return its identity."""
+    with RawImageReader(path) as reader:
+        return reader.source
+
+
 def storage_source_for_physical_disk(disk: PhysicalDisk, bytes_per_sector=512):
     return disk.as_storage_source(bytes_per_sector)
 

@@ -19,9 +19,11 @@ class DiskInventory:
         self,
         enumerator=None,
         disk_factory: DiskReaderFactory | None = None,
+        source_reader_factory=None,
     ):
         self.enumerator = enumerator if enumerator is not None else create_disk_enumerator()
         self.disk_factory = disk_factory if disk_factory is not None else disk_reader_factory()
+        self.source_reader_factory = source_reader_factory
 
     def list_disks(self) -> list[PhysicalDisk]:
         return self.enumerator.list_disks()
@@ -78,4 +80,16 @@ class DiskInventory:
             int(disk_number), progress_callback, retain_orphans_for_offset,
             orphan_scan_volume, content_carving_range_budget_bytes,
             validation_snapshot=validation_snapshot,
+        )
+
+    def validate_source(
+        self, source, progress_callback=None, retain_orphans_for_offset=None,
+        orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+    ):
+        if self.source_reader_factory is None:
+            raise NotImplementedError("Storage source validation is unavailable")
+        return DiskValidationAuditor(self.enumerator, self.disk_factory).validate_source(
+            source, self.source_reader_factory, progress_callback,
+            retain_orphans_for_offset, orphan_scan_volume,
+            content_carving_range_budget_bytes,
         )

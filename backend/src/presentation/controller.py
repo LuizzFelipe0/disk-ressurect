@@ -24,7 +24,7 @@ class RecoveryCommandHandler:
         self, disk_service: DiskService, deep_scan_service: DeepScanService,
         validation_service: ValidationService, catalog_builder, catalog_service,
         recovery_service, session=None,
-        source_resolver=None,
+        source_resolver=None, storage_service=None,
     ):
         self.disk_service = disk_service
         self.deep_scan_service = deep_scan_service
@@ -33,6 +33,7 @@ class RecoveryCommandHandler:
         self.catalog_service = catalog_service
         self.recovery_service = recovery_service
         self.source_resolver = source_resolver
+        self.storage_service = storage_service
         self.session = session if session is not None else RecoverySession()
         self.catalog_scan_workflow = CatalogScanWorkflow(
             disk_service,
@@ -45,12 +46,63 @@ class RecoveryCommandHandler:
         request_id = message.get("id") if isinstance(message, dict) else None
         try:
             request = CommandRequestDto.from_message(message)
-            payload = self.dispatch(request.operation, request.payload, emit)
+            operation_id = request.payload.get("operationId")
+
+            def emit_scoped(event):
+                if event.get("type") == "progress" and isinstance(operation_id, str):
+                    event = dict(event)
+                    event["payload"] = {**event.get("payload", {}), "operationId": operation_id}
+                emit(event)
+
+            payload = self.dispatch(request.operation, request.payload, emit_scoped)
             emit(CommandResultDto(request.request_id, payload).to_dict())
         except Exception as exc:
             emit(CommandErrorDto(request_id, str(exc), type(exc).__name__).to_dict())
 
     def dispatch(self, operation, payload, emit):
+        if operation == "register_raw_image":
+            if self.storage_service is None:
+                raise RuntimeError("Raw image sources are unavailable")
+            source = self.storage_service.register_raw_image(payload.get("path", ""))
+            return {
+                "sourceId": source.source_id,
+                "sourceType": source.source_type,
+                "displayName": source.display_name,
+                "sizeBytes": source.size_bytes,
+            }
+        if operation == "list_source_partitions":
+            source_id = str(payload.get("sourceId", ""))
+            if self.storage_service is None or not source_id:
+                raise ValueError("A registered raw image source is required")
+            source = self.storage_service.get_source(source_id)
+            reader = self.storage_service.open_reader(source)
+            try:
+                if bool(payload.get("deepScan", False)):
+                    from dataclasses import replace
+                    from infrastructure.disk.lost_partition_scanner import LostPartitionScanner
+                    volumes = LostPartitionScanner(reader, -1).scan(self._inventory_progress(emit))
+                    volumes = [replace(volume, source_id=source.source_id) for volume in volumes]
+                else:
+                    from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
+                    volumes = NTFSVolumeScanner(
+                        reader, -1, source_id=source.source_id,
+                    ).scan(self._inventory_progress(emit))
+            finally:
+                reader.close()
+            return [
+                {
+                    "id": self.session.register_volume(volume, source.source_id),
+                    "sourceId": source.source_id,
+                    "sourceType": "raw_image",
+                    "diskNumber": -1,
+                    "partitionNumber": volume.partition_number,
+                    "offset": volume.partition_offset,
+                    "sizeBytes": volume.partition_size,
+                    "estimatedSize": volume.partition_size_is_estimated,
+                    "name": volume.display_name,
+                }
+                for volume in volumes
+            ]
         if operation == "list_disks":
             result = []
             for item in self.disk_service.list_disks():
@@ -132,7 +184,11 @@ class RecoveryCommandHandler:
         volume = self.session.get_volume(request.volume_id)
         expected_source_id = self.session.get_volume_source_id(request.volume_id)
         if expected_source_id and self.source_resolver is not None:
-            current_source = self.source_resolver(volume.disk_number)
+            current_source = (
+                self.storage_service.get_source(expected_source_id)
+                if expected_source_id.startswith("raw-image:") and self.storage_service is not None
+                else self.source_resolver(volume.disk_number)
+            )
             if current_source.source_id != expected_source_id:
                 raise ValueError("Selected partition belongs to a different storage source; rescan it")
         progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)

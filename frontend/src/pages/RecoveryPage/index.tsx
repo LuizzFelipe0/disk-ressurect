@@ -178,12 +178,15 @@ export const RecoveryPage: React.FC = () => {
             ...recovery.disks.map((disk) => ({ value: String(disk.number), label: sanitizeDisplayText(disk.displayName) })),
           ]} /></FormControl>
         <ActionRow>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
+            onClick={() => void recovery.selectRawImage()}>{t("selectRawImage")}</Button>
           <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>{t("refresh")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
             onClick={() => void recovery.findPartitions(false)}>{t("findPartitions")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.selectedDiskNumber}
-            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan ? t("deepScanAgain") : t("deepScan")}</Button>
+          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
+            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan && !recovery.rawImage ? t("deepScanAgain") : t("deepScan")}</Button>
         </ActionRow>
+        {recovery.rawImage && <p role="status">{t("rawImageSelected", { name: sanitizeDisplayText(recovery.rawImage.displayName) })}</p>}
         <FormControl><FormControlCaption>{t("partitionLabel")}</FormControlCaption><Select aria-label={t("partitionLabel")} value={recovery.selectedVolumeId}
           disabled={recovery.busy || !recovery.volumes.length} onChange={recovery.selectVolume} options={[
             { value: "", label: recovery.volumes.length ? t("selectPartition") : t("searchPartitions") },
@@ -257,6 +260,7 @@ export const RecoveryPage: React.FC = () => {
           onChange={recovery.setOutputDirectory} /></FormControl></DestinationInput>
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
       </DestinationRow></Card>
+      {recovery.rawImage && <p role="note">{t("rawDestinationNotice")}</p>}
 
       <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
         <BrowserHeading>

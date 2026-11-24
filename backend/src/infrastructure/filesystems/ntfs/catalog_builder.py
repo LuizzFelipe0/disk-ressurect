@@ -70,9 +70,10 @@ class CatalogBuilder:
     LOW_CONFIDENCE_MAX_FILES = 64
 
     def __init__(self, disk_factory: DiskReaderFactory | None = None,
-                 source_resolver=None, content_reference_store=None):
+                 source_resolver=None, content_reference_store=None, source_factory=None):
         self.disk_factory = disk_factory if disk_factory is not None else disk_reader_factory()
         self.source_resolver = source_resolver
+        self.source_factory = source_factory
         self.content_reference_store = (
             content_reference_store if content_reference_store is not None
             else NTFSContentReferenceStore()
@@ -83,7 +84,12 @@ class CatalogBuilder:
               carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
               uncertain_carving_ranges_truncated=None, carving_options=None,
               carving_checkpoint=None, carving_checkpoint_callback=None):
-        disk = self.disk_factory(volume.disk_number)
+        source = None
+        if getattr(volume, "source_id", None) and self.source_factory is not None:
+            source = self.source_factory(volume.source_id)
+            disk = self.source_factory.open_reader(source)
+        else:
+            disk = self.disk_factory(volume.disk_number)
         try:
             self.content_reference_store.begin_catalog()
             source = getattr(disk, "source", None)

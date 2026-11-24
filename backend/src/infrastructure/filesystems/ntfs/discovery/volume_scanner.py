@@ -7,13 +7,17 @@ from infrastructure.filesystems.ntfs.discovery.partition_scan import NTFSBootSec
 class NTFSVolumeScanner:
     """Find NTFS volumes and map their MFT runlists into physical disk extents."""
 
-    def __init__(self, disk, disk_number, partition_scanner=None):
+    def __init__(self, disk, disk_number, partition_scanner=None, source_id=None):
         self.disk = disk
         self.disk_number = int(disk_number)
+        self.source_id = source_id
         self.partition_scanner = partition_scanner or PartitionTableScanner(disk)
 
     def scan(self, progress_callback=None):
         partitions = self.partition_scanner.partitions()
+        if not partitions and self.source_id:
+            from modules.storage.entities import Partition
+            partitions = [Partition(0, 0, int(self.disk.size), "raw-image", "Unpartitioned image")]
         volumes = []
         total = len(partitions)
         for position, partition in enumerate(partitions, 1):
@@ -55,6 +59,7 @@ class NTFSVolumeScanner:
             mft_size=record.file_size,
             mft_fragments=tuple(fragments),
             partition_name=partition.name,
+            source_id=self.source_id,
         )
 
     @staticmethod

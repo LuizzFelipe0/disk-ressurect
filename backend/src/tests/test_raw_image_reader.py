@@ -9,11 +9,43 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC_ROOT))
 
 from infrastructure.storage.image.reader import RawImageReader
-from infrastructure.storage.factory import create_block_reader
+from infrastructure.storage.factory import create_block_reader, raw_image_source_for_path
 from modules.storage.service import StorageService
 
 
 class RawImageReaderTests(unittest.TestCase):
+    def test_storage_service_registers_image_for_the_current_session(self):
+        class Inventory:
+            def list_disks(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            path.write_bytes(b"raw-image")
+            storage = StorageService(Inventory(), create_block_reader, raw_image_source_for_path)
+
+            source = storage.register_raw_image(path)
+
+            self.assertEqual(source.source_type, "raw_image")
+            self.assertEqual(storage.get_source(source.source_id), source)
+            with storage.open_reader(source) as reader:
+                self.assertEqual(reader.read_at(0, 9), b"raw-image")
+
+    def test_registered_image_identity_is_not_resolved_after_replacement(self):
+        class Inventory:
+            def list_disks(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            path.write_bytes(b"original")
+            storage = StorageService(Inventory(), create_block_reader, raw_image_source_for_path)
+            source = storage.register_raw_image(path)
+            path.write_bytes(b"changed-size")
+
+            with self.assertRaisesRegex(OSError, "identity changed"):
+                storage.open_reader(source)
+
     def test_reads_positionally_and_clamps_at_end_of_image(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disk.img"

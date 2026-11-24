@@ -403,6 +403,30 @@ class DiskValidationAuditor:
         finally:
             disk.close()
 
+    def validate_source(
+        self, source, source_reader_factory, progress_callback=None,
+        retain_orphans_for_offset=None, orphan_scan_volume=None,
+        content_carving_range_budget_bytes=None,
+    ):
+        """Run the same full-disk audit against a registered non-physical source."""
+        from modules.storage.entities import PhysicalDisk
+
+        synthetic_disk = PhysicalDisk(
+            -1, source.display_name, source.size_bytes, source.source_id,
+        )
+
+        class SourceEnumerator:
+            @staticmethod
+            def list_disks():
+                return [synthetic_disk]
+
+        return DiskValidationAuditor(
+            SourceEnumerator(), lambda _number: source_reader_factory(source), self.chunk_size,
+        ).validate(
+            -1, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
+            content_carving_range_budget_bytes,
+        )
+
     def _find_physical_disk(self, disk_number):
         disk_number = int(disk_number)
         return next((item for item in self.disk_enumerator.list_disks()

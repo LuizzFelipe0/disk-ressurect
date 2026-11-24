@@ -6,7 +6,9 @@ class RecoverySession:
         self.nodes = {}
 
     def register_volume(self, volume, source_id=None):
-        volume_id = f"{volume.disk_number}:{volume.partition_offset}"
+        source_id = source_id or getattr(volume, "source_id", None)
+        volume_id = (f"{source_id}:{volume.partition_offset}" if source_id
+                     else f"{volume.disk_number}:{volume.partition_offset}")
         self.volumes[volume_id] = volume
         if source_id:
             self.volume_source_ids[volume_id] = source_id
