@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import struct
 import zlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from disk.deep_scan.ghost_mft_carver import GhostMFTCarver
 from disk.models import PartitionEntry
@@ -36,7 +39,7 @@ class ReadIssue:
 class DiskReadCoverage:
     """Tracks unique byte ranges successfully read and ranges with read errors."""
 
-    def __init__(self, disk, chunk_size=8 * 1024 * 1024):
+    def __init__(self, disk, chunk_size=8 * 1024 * 1024, scan_snapshot=None):
         self.disk = disk
         self.chunk_size = max(int(disk.bytes_per_sector), int(chunk_size))
         self.chunk_size -= self.chunk_size % int(disk.bytes_per_sector)
@@ -44,6 +47,15 @@ class DiskReadCoverage:
         self.issues: list[ReadIssue] = []
         self.bytes_requested = 0
         self.bytes_read_total = 0
+        self.historical_bytes_requested = 0
+        self.historical_bytes_read = 0
+        self.scanned_at = None
+        self.cached_scan_used = False
+        self.filesystem_signatures = ()
+        self.gpt_header_offsets = ()
+        self.ntfs_boot_offsets = ()
+        if scan_snapshot is not None:
+            self._restore_scan_snapshot(scan_snapshot)
 
     @property
     def size(self):
@@ -186,6 +198,120 @@ class DiskReadCoverage:
         self.gpt_header_offsets = tuple(sorted(gpt_header_offsets))
         return tuple(sorted(ntfs_offsets))
 
+    def to_scan_snapshot(self, disk_info, ntfs_boot_offsets, scanned_at=None):
+        """Return the compact, JSON-safe evidence from the sequential scan."""
+        return {
+            "version": 1,
+            "scannedAt": scanned_at or datetime.now(timezone.utc).isoformat(),
+            "identity": self._disk_identity(disk_info),
+            "diskSize": int(self.disk.size),
+            "bytesPerSector": self.bytes_per_sector,
+            "intervals": [[start, end] for start, end in self.intervals],
+            "issues": [[item.start, item.end, item.message] for item in self.issues],
+            "bytesRequested": int(self.bytes_requested),
+            "bytesReadTotal": int(self.bytes_read_total),
+            "ntfsBootOffsets": [int(offset) for offset in ntfs_boot_offsets],
+            "gptHeaderOffsets": [int(offset) for offset in self.gpt_header_offsets],
+            "filesystemSignatures": [dict(item) for item in self.filesystem_signatures],
+        }
+
+    def _restore_scan_snapshot(self, snapshot):
+        if (not isinstance(snapshot, dict) or snapshot.get("version") != 1
+                or int(snapshot.get("diskSize", -1)) != int(self.disk.size)
+                or int(snapshot.get("bytesPerSector", -1)) != self.bytes_per_sector):
+            raise ValueError("Cached disk scan snapshot geometry is invalid")
+        intervals = snapshot.get("intervals")
+        issues = snapshot.get("issues")
+        if (not isinstance(intervals, list) or len(intervals) > 100_000
+                or not isinstance(issues, list) or len(issues) > 100_000):
+            raise ValueError("Cached disk scan snapshot exceeds its entry limits")
+        normalized_intervals = []
+        previous_end = 0
+        for item in intervals:
+            if not isinstance(item, list) or len(item) != 2:
+                raise ValueError("Cached disk scan interval is malformed")
+            start, end = int(item[0]), int(item[1])
+            if start < previous_end or end <= start or end > int(self.disk.size):
+                raise ValueError("Cached disk scan interval is outside disk bounds")
+            normalized_intervals.append((start, end))
+            previous_end = end
+        normalized_issues = []
+        for item in issues:
+            if not isinstance(item, list) or len(item) != 3:
+                raise ValueError("Cached disk read issue is malformed")
+            start, end = int(item[0]), int(item[1])
+            if start < 0 or end <= start or end > int(self.disk.size):
+                raise ValueError("Cached disk read issue is outside disk bounds")
+            normalized_issues.append(ReadIssue(start, end, str(item[2])[:512]))
+        ntfs_offsets = self._valid_offsets(snapshot.get("ntfsBootOffsets", []))
+        gpt_offsets = self._valid_offsets(snapshot.get("gptHeaderOffsets", []))
+        signatures = snapshot.get("filesystemSignatures", [])
+        if not isinstance(signatures, list) or len(signatures) > 100_000:
+            raise ValueError("Cached filesystem signature list is invalid")
+        normalized_signatures = []
+        for item in signatures:
+            if not isinstance(item, dict):
+                raise ValueError("Cached filesystem signature is malformed")
+            offset = int(item.get("offset", -1))
+            filesystem = str(item.get("filesystem", ""))
+            if offset < 0 or offset >= int(self.disk.size) or not filesystem:
+                raise ValueError("Cached filesystem signature is outside disk bounds")
+            normalized_signatures.append({
+                "offset": offset,
+                "filesystem": filesystem[:32],
+                "validated": False,
+            })
+        scanned_at = snapshot.get("scannedAt")
+        if not isinstance(scanned_at, str):
+            raise ValueError("Cached disk scan timestamp is missing")
+        try:
+            datetime.fromisoformat(scanned_at)
+            bytes_requested = int(snapshot["bytesRequested"])
+            bytes_read_total = int(snapshot["bytesReadTotal"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Cached disk scan counters are invalid") from exc
+        if bytes_requested < 0 or bytes_read_total < 0:
+            raise ValueError("Cached disk scan counters cannot be negative")
+        if (normalized_intervals != [(0, int(self.disk.size))] or normalized_issues
+                or bytes_requested < int(self.disk.size)
+                or bytes_read_total < int(self.disk.size)):
+            raise ValueError("Cached disk scan does not prove complete historical coverage")
+
+        self.intervals = normalized_intervals
+        self.issues = normalized_issues
+        self.historical_bytes_requested = bytes_requested
+        self.historical_bytes_read = bytes_read_total
+        self.bytes_requested = bytes_requested
+        self.bytes_read_total = bytes_read_total
+        self.scanned_at = scanned_at
+        self.cached_scan_used = True
+        self.ntfs_boot_offsets = tuple(ntfs_offsets)
+        self.gpt_header_offsets = tuple(gpt_offsets)
+        self.filesystem_signatures = tuple(normalized_signatures)
+
+    def _valid_offsets(self, offsets):
+        if not isinstance(offsets, list) or len(offsets) > 1_000_000:
+            raise ValueError("Cached disk scan offsets are invalid")
+        normalized = []
+        for value in offsets:
+            offset = int(value)
+            if offset < 0 or offset >= int(self.disk.size):
+                raise ValueError("Cached disk scan offset is outside disk bounds")
+            normalized.append(offset)
+        return tuple(sorted(set(normalized)))
+
+    @staticmethod
+    def _disk_identity(disk_info):
+        serial = str(getattr(disk_info, "serial_number", "") or "").strip().casefold()
+        identity = {
+            "model": str(getattr(disk_info, "model", "") or "").strip().casefold(),
+            "sizeBytes": int(disk_info.size_bytes),
+            "serialNumber": serial,
+        }
+        if not serial:
+            identity["number"] = int(disk_info.number)
+        return identity
+
     def _add_interval(self, start, end):
         if end <= start:
             return
@@ -213,6 +339,7 @@ class DiskValidationAuditor:
     def validate(
         self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+        validation_snapshot=None,
     ):
         physical_disk = next(
             (item for item in self.disk_enumerator.list_disks() if item.number == int(disk_number)),
@@ -222,18 +349,29 @@ class DiskValidationAuditor:
             raise ValueError(f"Physical disk {disk_number} is no longer available")
 
         disk = self.disk_factory(int(disk_number))
-        coverage = DiskReadCoverage(disk, self.chunk_size)
+        can_reuse_snapshot = self._snapshot_matches_disk(validation_snapshot, physical_disk)
+        try:
+            coverage = DiskReadCoverage(
+                disk,
+                self.chunk_size,
+                scan_snapshot=validation_snapshot if can_reuse_snapshot else None,
+            )
+        except (TypeError, ValueError, OverflowError):
+            coverage = DiskReadCoverage(disk, self.chunk_size)
         try:
             orphan_stream = None
             if (orphan_scan_volume is not None
                     and int(orphan_scan_volume.partition_offset) == retain_orphans_for_offset):
                 orphan_stream = GhostMFTCarver(disk).stream(orphan_scan_volume)
-            offsets = coverage.scan_full_disk(
-                progress_callback,
-                on_chunk=orphan_stream.feed if orphan_stream is not None else None,
-                on_gap=orphan_stream.gap if orphan_stream is not None else None,
-                combined_orphan_scan=orphan_stream is not None,
-            )
+            if coverage.cached_scan_used:
+                offsets = coverage.ntfs_boot_offsets
+            else:
+                offsets = coverage.scan_full_disk(
+                    progress_callback,
+                    on_chunk=orphan_stream.feed if orphan_stream is not None else None,
+                    on_gap=orphan_stream.gap if orphan_stream is not None else None,
+                    combined_orphan_scan=orphan_stream is not None,
+                )
             try:
                 partition_entries = PartitionTableScanner(coverage).partitions()
             except (OSError, ValueError, struct.error):
@@ -296,21 +434,41 @@ class DiskValidationAuditor:
             content_carving_ranges_truncated_by_partition = {}
             uncertain_content_carving_ranges_by_partition = {}
             uncertain_content_carving_ranges_truncated_by_partition = {}
+            current_orphan_references = dict(
+                (validation_snapshot or {}).get("orphanRecordRefsByPartition", {})
+            )
+            snapshot_mismatch = False
             for volume in sorted(volumes_by_offset.values(), key=lambda item: item.partition_offset):
                 try:
                     retain_orphans = int(volume.partition_offset) == retain_orphans_for_offset
+                    cached_orphans = None
+                    if retain_orphans and coverage.cached_scan_used:
+                        reference_key = str(int(volume.partition_offset))
+                        references = current_orphan_references.get(reference_key)
+                        if references is not None:
+                            cached_orphans = self._revalidate_cached_orphans(
+                                coverage, disk, volume, references,
+                            )
+                            if cached_orphans is None:
+                                snapshot_mismatch = True
+                                cached_orphans = {}
                     checked = self._validate_ntfs_volume(
                         coverage,
                         volume,
                         offsets,
                         retain_orphans=retain_orphans,
                         progress_callback=progress_callback,
-                        precomputed_orphans=(orphan_stream.finish() if retain_orphans
-                            and orphan_stream is not None else None),
+                        precomputed_orphans=(
+                            orphan_stream.finish() if retain_orphans and orphan_stream is not None
+                            else cached_orphans
+                        ),
                         content_carving_range_budget_bytes=content_carving_range_budget_bytes,
                     )
                     if retain_orphans:
                         check, orphan_records, carving_ranges, uncertain_ranges = checked
+                        current_orphan_references[str(int(volume.partition_offset))] = (
+                            self._orphan_record_references(orphan_records)
+                        )
                         orphan_records_by_partition[int(volume.partition_offset)] = orphan_records
                         content_carving_ranges_by_partition[int(volume.partition_offset)] = carving_ranges
                         content_carving_ranges_truncated_by_partition[int(volume.partition_offset)] = bool(
@@ -379,7 +537,7 @@ class DiskValidationAuditor:
                 mbr_signature_found = len(mbr_data) == 512 and mbr_data[510:512] == b"\x55\xAA"
             except (OSError, ValueError):
                 mbr_signature_found = False
-            return {
+            report = {
                 "disk": physical_disk,
                 "coverage": coverage,
                 "partitions": partitions,
@@ -395,9 +553,150 @@ class DiskValidationAuditor:
                 "uncertain_content_carving_ranges_by_partition": uncertain_content_carving_ranges_by_partition,
                 "uncertain_content_carving_ranges_truncated_by_partition":
                     uncertain_content_carving_ranges_truncated_by_partition,
+                "validation_snapshot_used": coverage.cached_scan_used,
+                "validation_snapshot_scanned_at": coverage.scanned_at,
             }
+            if coverage.cached_scan_used:
+                cached_metadata_matches = self._snapshot_metadata_matches(
+                    validation_snapshot,
+                    partitions,
+                    volumes_by_offset,
+                    ntfs_checks,
+                    mbr_signature_found,
+                )
+                old_issues = len((validation_snapshot or {}).get("issues", ()))
+                snapshot_mismatch |= not cached_metadata_matches or len(coverage.issues) > old_issues
+                report["validation_snapshot_mismatch"] = snapshot_mismatch
+                if not snapshot_mismatch:
+                    report["validation_scan_snapshot"] = dict(validation_snapshot)
+                    report["validation_scan_snapshot"]["orphanRecordRefsByPartition"] = (
+                        current_orphan_references
+                    )
+                return report
+
+            if (coverage.bytes_read == int(physical_disk.size_bytes) and not coverage.issues):
+                snapshot = coverage.to_scan_snapshot(physical_disk, offsets)
+                snapshot.update(self._snapshot_metadata(
+                    partitions, volumes_by_offset, ntfs_checks, mbr_signature_found,
+                ))
+                snapshot["orphanRecordRefsByPartition"] = current_orphan_references
+                report["validation_scan_snapshot"] = snapshot
+            report["validation_snapshot_mismatch"] = False
+            return report
         finally:
             disk.close()
+
+    @staticmethod
+    def _snapshot_matches_disk(snapshot, disk_info):
+        if not isinstance(snapshot, dict) or snapshot.get("version") != 1:
+            return False
+        if snapshot.get("identity") != DiskReadCoverage._disk_identity(disk_info):
+            return False
+        try:
+            scanned_at = datetime.fromisoformat(snapshot["scannedAt"])
+            age_seconds = (datetime.now(timezone.utc) - scanned_at.astimezone(timezone.utc)).total_seconds()
+            return (0 <= age_seconds <= 24 * 60 * 60
+                    and int(snapshot["diskSize"]) == int(disk_info.size_bytes)
+                    and int(snapshot["bytesPerSector"]) in (512, 1024, 2048, 4096))
+        except (KeyError, TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _orphan_record_references(records):
+        references = []
+        for record in records.values():
+            offset = getattr(record, "mft_offset", None)
+            if offset is None:
+                return []
+            references.append({
+                "offset": int(offset),
+                "recordIndex": int(record.index),
+                "recordSize": int(record.record_size),
+                "sha256": hashlib.sha256(bytes(record.raw_data)).hexdigest(),
+            })
+        references.sort(key=lambda item: item["offset"])
+        return references
+
+    @staticmethod
+    def _revalidate_cached_orphans(reader, disk, volume, references):
+        if not isinstance(references, list) or len(references) > 100_000:
+            return None
+        volume_start = int(volume.partition_offset)
+        volume_end = volume_start + int(volume.partition_size)
+        unmapped_ranges = GhostMFTCarver._unmapped_ranges(
+            volume, volume_start, volume_end, int(volume.record_size), 512,
+        )
+        restored = {}
+        seen_offsets = set()
+        try:
+            for item in references:
+                if not isinstance(item, dict):
+                    return None
+                offset = int(item["offset"])
+                record_size = int(item["recordSize"])
+                record_index = int(item["recordIndex"])
+                digest = str(item["sha256"])
+                if (record_size != int(volume.record_size) or record_index != -(offset + 1)
+                        or len(digest) != 64 or offset in seen_offsets
+                        or not any(start <= offset and offset + record_size <= end
+                                   for start, end in unmapped_ranges)):
+                    return None
+                raw = reader.read_at(offset, record_size)
+                if len(raw) != record_size:
+                    return None
+                record = MFTRecord(raw, record_index, disk, offset, record_size)
+                if (not record.is_valid
+                        or hashlib.sha256(bytes(record.raw_data)).hexdigest() != digest
+                        or not GhostMFTCarver._is_recoverable(
+                            record, None, int(volume.cluster_size), volume_start, volume_end,
+                        )):
+                    return None
+                restored[record_index] = record
+                seen_offsets.add(offset)
+        except (KeyError, TypeError, ValueError, OSError, OverflowError):
+            return None
+        return restored
+
+    @staticmethod
+    def _snapshot_metadata(partitions, volumes, ntfs_checks, mbr_signature_found):
+        partition_manifest = sorted([
+            int(item["offset"]), int(item["sizeBytes"]), str(item["tableType"]),
+            str(item["filesystem"]), str(item["name"]),
+        ] for item in partitions)
+        volume_manifest = sorted([
+            int(item.partition_offset), int(item.partition_size), int(item.bytes_per_sector),
+            int(item.cluster_size), int(item.record_size), int(item.mft_offset),
+            int(item.mft_size), [list(int(value) for value in fragment)
+                                 for fragment in item.mft_fragments],
+        ] for item in volumes.values())
+        metadata = {
+            "mbrSignatureFound": bool(mbr_signature_found),
+            "partitions": partition_manifest,
+            "volumes": volume_manifest,
+            "ntfsChecks": [{
+                key: check.get(key)
+                for key in (
+                    "partitionOffset", "partitionSizeBytes", "primaryAndBackupBootMatch",
+                    "mftRecordZeroValid", "mftMirrorMatchesFirstRecords", "mftMirrorOffset",
+                    "mftRecords", "mftBytesRead", "mftReadComplete", "mftSha256",
+                    "bitmapRecordValid", "expectedBitmapBytes", "bitmapSha256",
+                    "bitmapAllocation", "orphanedFileRecordCount",
+                )
+            } for check in ntfs_checks],
+        }
+        encoded = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return {
+            "partitionManifest": partition_manifest,
+            "volumeManifest": volume_manifest,
+            "metadataFingerprint": hashlib.sha256(encoded).hexdigest(),
+        }
+
+    @staticmethod
+    def _snapshot_metadata_matches(snapshot, partitions, volumes, ntfs_checks, mbr_signature_found):
+        current = DiskValidationAuditor._snapshot_metadata(
+            partitions, volumes, ntfs_checks, mbr_signature_found,
+        )
+        return all(snapshot.get(key) == value for key, value in current.items())
 
     @staticmethod
     def _validate_gpt_header(disk, offset):
@@ -480,6 +779,7 @@ class DiskValidationAuditor:
 
         mft = disk.read_at(int(volume.mft_offset), int(volume.record_size))
         mft_record = MFTRecord(mft, 0, disk, int(volume.mft_offset), int(volume.record_size))
+        mft_digest = hashlib.sha256()
         mirror_lcn = boot_geometry.mftmirr_lcn if boot_geometry else -1
         mirror_offset = boot_offset + mirror_lcn * cluster_size
         mirror_size = 4 * int(volume.record_size)
@@ -506,6 +806,7 @@ class DiskValidationAuditor:
                 if len(raw) != request_size:
                     break
                 mft_bytes_read += len(raw)
+                mft_digest.update(raw)
                 for index in range(count):
                     begin = index * int(volume.record_size)
                     record_bytes = raw[begin:begin + int(volume.record_size)]
@@ -600,6 +901,7 @@ class DiskValidationAuditor:
             "mftMirrorOffset": mirror_offset,
             "mftRecords": record_counts,
             "mftBytesRead": mft_bytes_read,
+            "mftSha256": mft_digest.hexdigest(),
             "mftReadComplete": mft_bytes_read >= int(volume.mft_size),
             "bitmapRecordValid": bitmap_valid,
             "bitmapRecordOffset": bitmap_offset,
@@ -623,6 +925,7 @@ class DiskValidationAuditor:
         observed = {}
         allocated = 0
         bytes_read = 0
+        bitmap_digest = hashlib.sha256()
         orphan_evidence = ClusterAllocationEvidence(orphan_records, cluster_count)
         free_range_collector = FreeClusterRangeCollector(
             int(volume.partition_offset), int(volume.cluster_size), cluster_count,
@@ -664,6 +967,7 @@ class DiskValidationAuditor:
             if bytes_read >= expected_bytes:
                 break
             chunk = bytes(chunk[:expected_bytes - bytes_read])
+            bitmap_digest.update(chunk)
             orphan_evidence.consume(chunk, bytes_read)
             if free_range_collector is not None:
                 free_range_collector.consume(chunk, bytes_read)
@@ -685,6 +989,7 @@ class DiskValidationAuditor:
         result = {
             "bytesRead": bytes_read,
             "expectedBytes": expected_bytes,
+            "bitmapSha256": bitmap_digest.hexdigest(),
             "clusterCount": cluster_count,
             "allocatedClusters": allocated,
             "freeClusters": max(0, cluster_count - allocated),
