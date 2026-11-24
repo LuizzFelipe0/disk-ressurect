@@ -33,7 +33,9 @@ describe("RecoveryStatusPanel", () => {
     render(<RecoveryStatusPanel {...defaults} partitionScanCanResume onRetryScan={onRetryScan} />);
 
     expect(screen.getByRole("status").textContent).toContain("Scanning disk…");
-    expect((screen.getByRole("progressbar", { name: "Recovery progress" }) as HTMLProgressElement).value).toBe(25);
+    const progress = screen.getByRole("progressbar", { name: "Recovery progress" }) as HTMLProgressElement;
+    expect(progress.value).toBe(25);
+    expect(getComputedStyle(progress).height).toBe("4px");
     fireEvent.click(screen.getByRole("button", { name: "Retry scan" }));
     expect(onRetryScan).toHaveBeenCalledTimes(1);
   });

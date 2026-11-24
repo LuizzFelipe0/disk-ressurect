@@ -77,6 +77,35 @@ describe("RecoveryTree", () => {
     expect(screen.getByText("Found outside the list")).toBeTruthy();
   });
 
+  it("labels records recovered by exact USN and MFT evidence", () => {
+    render(<RecoveryTree {...makeProps({
+      roots: [{ ...file, recoverySource: "usn_journal_mft" }],
+    })} />);
+
+    expect(screen.getByText("Recovered using USN and MFT evidence")).toBeTruthy();
+  });
+
+  it("shows resolved and inconclusive fragmented data evidence", () => {
+    render(<RecoveryTree {...makeProps({ roots: [
+      { ...file, id: "resolved", dataExtentResolution: "resolved", dataExtentCount: 2 },
+      { ...file, id: "uncertain", name: "uncertain.jpg", dataExtentResolution: "inconclusive",
+        dataExtentResolutionReason: "data_extent_vcn_gap_or_overlap" },
+    ] })} />);
+
+    expect(screen.getByText(/Fragmented data map reconstructed \(2 extents\)/)).toBeTruthy();
+    expect(screen.getByText(/Fragmented data map is inconclusive/)
+      .getAttribute("title")).toBe("data_extent_vcn_gap_or_overlap");
+  });
+
+  it("shows translated fragmented data evidence in Portuguese", () => {
+    render(<RecoveryTree {...makeProps({
+      language: "pt-BR",
+      roots: [{ ...file, dataExtentResolution: "resolved", dataExtentCount: 2 }],
+    })} />);
+
+    expect(screen.getByText(/Mapa de dados fragmentado reconstruído \(2 partes\)/)).toBeTruthy();
+  });
+
   it("shows signature and cluster allocation evidence for orphan candidates", () => {
     render(<RecoveryTree {...makeProps({
       roots: [{ ...file, isDeleted: true, isOrphaned: true,
@@ -93,6 +122,22 @@ describe("RecoveryTree", () => {
     })} />);
 
     expect(screen.getByText("Raw-carved file candidate")).toBeTruthy();
+  });
+
+  it("labels a Recycle Bin recovery alias and exposes its original path", () => {
+    render(<RecoveryTree {...makeProps({ roots: [{
+      ...file,
+      name: "Recovered_0123456789ab_report.pdf",
+      path: "Lost_Files_DeepScan/RecycleBin/Recovered_0123456789ab_report.pdf",
+      recoverySource: "recycle_bin",
+      originalPath: "C:\\Users\\sample\\Documents\\report.pdf",
+      deletionTimestampUtc: "2026-11-20T10:30:00+00:00",
+    }] })} />);
+
+    screen.getByText("Recovered_0123456789ab_report.pdf");
+    expect(screen.getByText("Recovered through Recycle Bin metadata")).toBeTruthy();
+    expect(screen.getByTitle(/Original path/).getAttribute("title"))
+      .toContain("C:\\Users\\sample\\Documents\\report.pdf");
   });
 
   it("labels low-confidence carving allocation statuses", () => {

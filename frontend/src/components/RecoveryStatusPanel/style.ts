@@ -4,7 +4,8 @@ import { brandColors } from "../../brandColors";
 
 export const PanelContent = styled.div`
   display: grid;
-  gap: ${spacing[3]};
+  gap: ${spacing[2]};
+  margin: -8px;
 `;
 
 export const StatusMessage = styled.div`
@@ -28,7 +29,7 @@ export const ProgressDetails = styled.span`
 export const ProgressTrack = styled.progress`
   display: block;
   width: 100%;
-  height: 7px;
+  height: 4px;
   appearance: none;
   border: 0;
   border-radius: ${spacing.radiusFull};

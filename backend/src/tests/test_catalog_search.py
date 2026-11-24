@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.catalog.mapper import CatalogMapper
-from modules.catalog.models import RecoveryCatalogSnapshot
+from modules.catalog.dto import CatalogMapper
+from modules.catalog.entities import RecoveryCatalogSnapshot
 from modules.catalog.service import CatalogService
-from domain.recovery_catalog import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalog
 
 
 class CatalogSearchTests(unittest.TestCase):

@@ -7,7 +7,7 @@ import zipfile
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from modules.recovery.extractor import Extractor
+from infrastructure.recovery.extractor import Extractor
 
 
 class FakeDisk:

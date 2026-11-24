@@ -2,6 +2,7 @@ import type {
   CatalogInfo,
   CatalogNode,
   CatalogSearchResult,
+  CarvingOptions,
   FilePreview,
   BackendRuntimeStatus,
   DiskInfo,
@@ -22,7 +23,12 @@ export const recoveryService = {
   listDisks: (): Promise<DiskInfo[]> => getApi().listDisks(),
   listPartitions: (diskNumber: number, deepScan = false, resume = false): Promise<VolumeInfo[]> =>
     getApi().listPartitions(diskNumber, deepScan, resume),
-  scanCatalog: (volumeId: string, includeOrphaned = false): Promise<CatalogInfo> => getApi().scanCatalog(volumeId, includeOrphaned),
+  scanCatalog: (
+    volumeId: string, includeOrphaned = false, carvingOptions?: CarvingOptions,
+    forceFreshValidation = false,
+  ): Promise<CatalogInfo> => getApi().scanCatalog(
+    volumeId, includeOrphaned, carvingOptions, forceFreshValidation,
+  ),
   searchCatalog: (query: string): Promise<CatalogSearchResult> => getApi().searchCatalog(query),
   listSupportedFileTypes: (): Promise<string[]> => getApi().listSupportedFileTypes(),
   getChildren: (nodeId: string): Promise<CatalogNode[]> => getApi().getChildren(nodeId),

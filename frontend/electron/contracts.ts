@@ -19,6 +19,13 @@ export interface VolumeInfo {
   scanSavedAt?: string;
 }
 
+export interface CarvingOptions {
+  scanBudgetGiB: 1 | 4 | 16 | 64;
+  maxFiles: 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384;
+  maxRetainedMiB: 128 | 256 | 512;
+  maxCandidateReadMiBPerFormat: 256 | 512 | 1024;
+}
+
 export interface CatalogNode {
   id: string;
   name: string;
@@ -34,6 +41,13 @@ export interface CatalogNode {
   contentValidation?: "signature_match" | "signature_mismatch" | "format_structure_match" | "unavailable" | "incomplete_metadata" | "invalid_size" | "unsupported";
   clusterAllocationStatus?: "free" | "allocated" | "mixed" | "partially_observed" | "unavailable" | "no_non_sparse_runs" | "bitmap_unobserved" | "possibly_reused";
   metadataConsistent?: boolean;
+  recoverySource?: "recycle_bin" | string;
+  originalPath?: string;
+  deletionTimestampUtc?: string;
+  originalSizeBytes?: number;
+  dataExtentResolution?: "resolved" | "inconclusive";
+  dataExtentResolutionReason?: string;
+  dataExtentCount?: number;
 }
 
 export interface ContentCarvingSummary {
@@ -84,12 +98,73 @@ export interface CatalogInfo {
   diskValidation?: DiskValidationSummary;
   contentCarving?: ContentCarvingSummary;
   lowConfidenceCarving?: LowConfidenceCarvingSummary;
+  recycleBinRecovery?: RecycleBinRecoverySummary;
+  usnJournalEvidence?: UsnJournalEvidenceSummary;
+  ntfsLogFileEvidence?: NtfsLogFileEvidenceSummary;
   availableExtensions: string[];
   roots: CatalogNode[];
 }
 
+export interface RecycleBinRecoverySummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  indexCount: number;
+  aliasesAdded: number;
+  pairedCount: number;
+  missingContentCount: number;
+  ambiguousContentCount: number;
+  metadataMismatchCount: number;
+  invalidIndexCount: number;
+  readErrorCount: number;
+  limitedIndexCount: number;
+  incompleteContentCount: number;
+  unsupportedExtensionCount: number;
+  directoryContentCount: number;
+}
+
+export interface UsnJournalEvidenceSummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  journalCount: number;
+  streamCount: number;
+  bytesRead: number;
+  recordsExamined: number;
+  parsedRecords: number;
+  deletedEvents: number;
+  malformedRecords: number;
+  limitReached: boolean;
+  errorCount: number;
+  matchedMftRecords?: number;
+  matchedDeletedMftRecords?: number;
+  staleReferences?: number;
+  unmatchedReferences?: number;
+  signatureMatchedRecords?: number;
+  signatureMismatches?: number;
+  incompleteRecords?: number;
+  aliasesAdded?: number;
+  correlationLimitReached?: boolean;
+}
+
+export interface NtfsLogFileEvidenceSummary {
+  status: "complete" | "inconclusive";
+  inconclusive: boolean;
+  logFileCount: number;
+  bytesRead: number;
+  pagesExamined: number;
+  restartPages: number;
+  recordPages: number;
+  malformedPages: number;
+  currentLsns: string[];
+  limitReached: boolean;
+  errorCount: number;
+  reason?: string | null;
+  recoveryClaim: "structural_evidence_only";
+}
+
 export interface DiskValidationSummary {
-  coverageStatus: "complete" | "incomplete" | "unavailable";
+  coverageStatus: "complete" | "incomplete" | "cached_snapshot" | "unavailable";
+  evidenceFreshness?: "fresh" | "cached_snapshot";
+  evidenceScannedAt?: string | null;
   assessment: "evidence_collected" | "inconclusive";
   bytesRead: number;
   sizeBytes: number;
@@ -143,7 +218,10 @@ export interface PrivilegeStatus {
 export interface DesktopApi {
   listDisks(): Promise<DiskInfo[]>;
   listPartitions(diskNumber: number, deepScan: boolean, resume?: boolean): Promise<VolumeInfo[]>;
-  scanCatalog(volumeId: string, includeOrphaned?: boolean): Promise<CatalogInfo>;
+  scanCatalog(
+    volumeId: string, includeOrphaned?: boolean, carvingOptions?: CarvingOptions,
+    forceFreshValidation?: boolean,
+  ): Promise<CatalogInfo>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;

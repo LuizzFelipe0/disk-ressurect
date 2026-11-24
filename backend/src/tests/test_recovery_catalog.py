@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from domain.recovery_catalog import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalog
 
 
 def make_node(index, name, size, is_dir=False, path=None):

@@ -4,8 +4,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from ntfs.attributes import AttributeParser
-from ntfs.mft_parser import MFTRecord
+from infrastructure.filesystems.ntfs.attributes.attributes import AttributeParser
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 
 
 def resident_attribute(attribute_type, content):

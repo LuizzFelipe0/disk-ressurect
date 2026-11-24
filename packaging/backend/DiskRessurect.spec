@@ -9,11 +9,11 @@ project_root = Path(SPECPATH).resolve().parents[1]
 source_root = project_root / "backend" / "src"
 sys.path.insert(0, str(source_root))
 hidden_imports = []
-for package in ("disk", "domain", "infrastructure", "modules", "ntfs"):
+for package in ("application", "infrastructure", "modules", "presentation"):
     hidden_imports.extend(collect_submodules(package))
 
 analysis = Analysis(
-    [str(source_root / "backend_orchestrator.py")],
+    [str(source_root / "bootstrap.py")],
     pathex=[str(source_root)],
     binaries=[],
     datas=[],

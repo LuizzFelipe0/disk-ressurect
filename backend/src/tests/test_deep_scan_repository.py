@@ -6,8 +6,9 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from disk.models import NTFSVolume, PhysicalDisk
-from disk.scanning.partition_scan import ScanCheckpoint
+from modules.disk.entities import NTFSVolume, PhysicalDisk
+from modules.disk.entities import ScanCheckpoint
+from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
 from unittest.mock import patch
 
 
@@ -33,7 +34,9 @@ class DeepScanRepositoryTests(unittest.TestCase):
 
             document = JsonDeepScanRepository(cache)._read_document()
 
-        self.assertEqual(document, {"version": 1, "disks": {}})
+        self.assertEqual(document, {
+            "version": 2, "disks": {}, "carving": {}, "validation": {},
+        })
 
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
@@ -45,6 +48,53 @@ class DeepScanRepositoryTests(unittest.TestCase):
             restored = repository.load(disk)
 
         self.assertEqual(restored.checkpoint, checkpoint)
+
+    def test_carving_checkpoint_persists_cursor_carry_and_candidate_references(self):
+        volume = NTFSVolume(
+            1, 0, 4096, 1024 * 1024, 512, 4096, 1024,
+            8192, 2048, ((8192, 2, 0),), "Lost NTFS", True,
+        )
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        candidate = CarvedCandidateReference(
+            offset=64, extension=".jpg", size_bytes=128, sha256="a" * 64,
+        )
+        checkpoint = CarvingCheckpoint(
+            range_fingerprint="b" * 64,
+            range_index=2,
+            next_offset=4096,
+            disk_size=disk.size_bytes,
+            bytes_per_sector=volume.bytes_per_sector,
+            scan_profile="profile-v1",
+            candidates=(candidate,),
+            bytes_scanned=1024**3,
+            signature_carry=b"\xff\xd8\xff",
+            processed_range_fingerprint="c" * 64,
+        )
+
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "deep_scan_cache.json")
+            repository = JsonDeepScanRepository(path)
+            repository.save(disk, [])
+            repository.save_carving_checkpoint(disk, volume, checkpoint)
+            restored = JsonDeepScanRepository(path).load_carving_checkpoint(disk, volume)
+
+        self.assertEqual(restored, checkpoint)
+
+    def test_carving_checkpoint_is_scoped_to_disk_and_volume_identity(self):
+        volume = NTFSVolume(
+            1, 0, 4096, 1024 * 1024, 512, 4096, 1024,
+            8192, 2048, ((8192, 2, 0),), "Lost NTFS", True,
+        )
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        other_disk = PhysicalDisk(2, "Recovery disk", 8 * 1024**3, "SERIAL-456")
+        checkpoint = CarvingCheckpoint(
+            "b" * 64, 0, 8192, disk.size_bytes, 512, "profile-v1",
+        )
+        repository = JsonDeepScanRepository()
+        repository.save_carving_checkpoint(disk, volume, checkpoint)
+
+        self.assertEqual(repository.load_carving_checkpoint(disk, volume), checkpoint)
+        self.assertIsNone(repository.load_carving_checkpoint(other_disk, volume))
 
     def test_scan_results_are_readable_from_a_new_repository_instance(self):
         volume = NTFSVolume(
@@ -110,6 +160,36 @@ class DeepScanRepositoryTests(unittest.TestCase):
             restored = JsonDeepScanRepository(cache_path).load(disk)
 
         self.assertIsNone(restored)
+
+    def test_validation_snapshot_persists_by_disk_identity_and_can_be_invalidated(self):
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        reconnected_disk = PhysicalDisk(4, "Recovery disk", 8 * 1024**3, "serial-123")
+        other_disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-456")
+        snapshot = {
+            "version": 1,
+            "scannedAt": "2026-11-23T12:00:00+00:00",
+            "identity": JsonDeepScanRepository._disk_identity(disk),
+            "diskSize": disk.size_bytes,
+            "bytesPerSector": 512,
+            "intervals": [[0, disk.size_bytes]],
+            "issues": [],
+            "bytesRequested": disk.size_bytes,
+            "bytesReadTotal": disk.size_bytes,
+            "ntfsBootOffsets": [],
+            "gptHeaderOffsets": [],
+            "filesystemSignatures": [],
+        }
+
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "deep_scan_cache.json")
+            first = JsonDeepScanRepository(path)
+            first.save_validation_snapshot(disk, snapshot)
+            second = JsonDeepScanRepository(path)
+
+            self.assertEqual(second.load_validation_snapshot(reconnected_disk), snapshot)
+            self.assertIsNone(second.load_validation_snapshot(other_disk))
+            second.invalidate_validation_snapshot(disk)
+            self.assertIsNone(first.load_validation_snapshot(disk))
 
 
 if __name__ == "__main__":

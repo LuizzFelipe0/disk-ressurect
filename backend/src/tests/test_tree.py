@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from ntfs.tree_builder import FileNode, TreeBuilder
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode, TreeBuilder
 
 
 class TreeBuilderTests(unittest.TestCase):

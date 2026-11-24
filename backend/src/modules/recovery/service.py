@@ -1,16 +1,13 @@
 import os
 import base64
 from typing import Callable
-from disk.access.ports import DiskReaderFactory
+from modules.disk.service import DiskReaderFactory
 
-from disk.safety.output_safety import OutputSafetyGuard
-from disk.platform import disk_reader_factory
-from disk.models import NTFSVolume
-from modules.recovery.extractor import Extractor
-from modules.catalog.models import RecoveryCatalogSnapshot
-from modules.recovery.models import ExtractionSummary, RecoveryProgress
-from ntfs.file_content_reader import NTFSFileContentReader
-from ntfs.file_signature_validator import FileSignatureValidator
+from modules.disk.entities import NTFSVolume
+
+from modules.catalog.entities import RecoveryCatalogSnapshot
+from modules.catalog.entities import RecoveryCatalog
+from modules.recovery.entities import ExtractionSummary, RecoveryProgress
 
 
 ProgressCallback = Callable[[RecoveryProgress], None]
@@ -27,11 +24,17 @@ class RecoveryWorkflow:
 
     def __init__(
         self,
-        disk_factory: DiskReaderFactory | None = None,
-        output_guard=None,
+        disk_factory: DiskReaderFactory,
+        output_guard,
+        content_reader_factory,
+        signature_validator,
+        extractor_factory,
     ):
-        self.disk_factory = disk_factory if disk_factory is not None else disk_reader_factory()
-        self.output_guard = output_guard if output_guard is not None else OutputSafetyGuard()
+        self.disk_factory = disk_factory
+        self.output_guard = output_guard
+        self.content_reader_factory = content_reader_factory
+        self.signature_validator = signature_validator
+        self.extractor_factory = extractor_factory
 
     def preview_file(self, snapshot, node):
         """Return a bounded preview read from the same source as the catalog."""
@@ -46,14 +49,14 @@ class RecoveryWorkflow:
             return {"available": False, "reason": "too_large"}
         disk = self.disk_factory(snapshot.volume.disk_number)
         try:
-            reader = NTFSFileContentReader(disk, snapshot.volume_start, snapshot.cluster_size)
+            reader = self.content_reader_factory(disk, snapshot.volume_start, snapshot.cluster_size)
             content = bytearray()
             for chunk in reader.iter_chunks(node):
                 if len(content) + len(chunk) > self.PREVIEW_LIMIT_BYTES:
                     return {"available": False, "reason": "too_large"}
                 content.extend(chunk)
-            if len(content) != expected_size or not FileSignatureValidator.matches(
-                extension, bytes(content[:FileSignatureValidator.header_window(extension)]),
+            if len(content) != expected_size or not self.signature_validator.matches(
+                extension, bytes(content[:self.signature_validator.header_window(extension)]),
             ):
                 return {"available": False, "reason": "invalid_content"}
             mime_type, kind = preview_type
@@ -78,7 +81,7 @@ class RecoveryWorkflow:
         self.output_guard.validate(output_directory, snapshot.volume.disk_number)
         disk = self.disk_factory(snapshot.volume.disk_number)
         try:
-            extractor = Extractor(
+            extractor = self.extractor_factory(
                 disk,
                 snapshot.catalog.nodes,
                 snapshot.volume_start,
@@ -110,3 +113,46 @@ class RecoveryWorkflow:
     def _notify(callback, stage, completed, total, message):
         if callback is not None:
             callback(RecoveryProgress(stage, completed, total, message))
+
+
+
+
+
+
+class RecoveryPlanner:
+    def __init__(self, catalog: RecoveryCatalog, supported_extensions):
+        self.catalog = catalog
+        self.supported_extensions = frozenset(extension.casefold() for extension in supported_extensions)
+        self.extensions = set(self.supported_extensions)
+        self.minimum_size_bytes = 0
+
+    def set_filters(self, extensions=None, minimum_size_kb=0):
+        self.extensions = self.supported_extensions if extensions is None else {
+            extension.casefold() for extension in extensions
+        }
+        self.minimum_size_bytes = max(0, int(minimum_size_kb)) * 1024
+
+    def is_eligible(self, node):
+        return self.catalog.is_eligible(
+            node,
+            self.supported_extensions.intersection(self.extensions),
+            self.minimum_size_bytes,
+        )
+
+    def candidates(self):
+        return self.catalog.eligible_files(
+            self.supported_extensions,
+            self.extensions,
+            self.minimum_size_bytes,
+        )
+
+    def plan(self, selected_nodes, excluded_nodes=()):
+        eligible = self.candidates()
+        selected = self.catalog.plan_selection(selected_nodes, eligible)
+        if not excluded_nodes:
+            return selected
+        excluded_keys = {
+            self.catalog.node_key(node)
+            for node in self.catalog.plan_selection(excluded_nodes, eligible)
+        }
+        return [node for node in selected if self.catalog.node_key(node) not in excluded_keys]

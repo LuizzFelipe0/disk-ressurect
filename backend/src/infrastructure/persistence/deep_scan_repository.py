@@ -10,9 +10,10 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from modules.disk_discovery.models import CachedDeepScan
-from disk.models import NTFSVolume
-from disk.scanning.partition_scan import ScanCheckpoint
+from modules.disk.entities import CachedDeepScan
+from modules.disk.entities import NTFSVolume
+from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
+from modules.disk.entities import ScanCheckpoint
 from infrastructure.filesystem.user_ownership import (
     ensure_pkexec_user_owned_directory,
     open_pkexec_safe_directory,
@@ -23,11 +24,14 @@ from infrastructure.filesystem.user_ownership import (
 class JsonDeepScanRepository:
     """Store complete NTFS volume metadata keyed by physical disk identity."""
 
-    VERSION = 1
+    VERSION = 2
+    MAX_VALIDATION_SNAPSHOT_BYTES = 32 * 1024 * 1024
 
     def __init__(self, path=None):
         self.path = Path(path) if path else None
         self._memory = {}
+        self._carving_memory = {}
+        self._validation_memory = {}
 
     @staticmethod
     def disk_key(disk):
@@ -74,9 +78,180 @@ class JsonDeepScanRepository:
             return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes), checkpoint=checkpoint)
 
         document = self._read_document()
+        document["version"] = self.VERSION
         document["disks"][key] = entry
         self._write_document(document)
         return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes), checkpoint=checkpoint)
+
+    def load_carving_checkpoint(self, disk, volume):
+        """Load the cursor only for the same disk and volume geometry."""
+        disk_key = self.disk_key(disk)
+        volume_key = self._carving_volume_key(volume)
+        if self.path is None:
+            data = self._carving_memory.get((disk_key, volume_key))
+        else:
+            data = self._read_document().get("carving", {}).get(disk_key, {}).get(volume_key)
+        checkpoint = self._deserialize_carving_checkpoint(data)
+        if checkpoint is None:
+            return None
+        if (checkpoint.disk_size != int(disk.size_bytes)
+                or checkpoint.bytes_per_sector != int(volume.bytes_per_sector)):
+            return None
+        return checkpoint
+
+    def save_carving_checkpoint(self, disk, volume, checkpoint):
+        """Persist compact carving state separately from lost-partition scans."""
+        if checkpoint is not None and not isinstance(checkpoint, CarvingCheckpoint):
+            raise TypeError("checkpoint must be a CarvingCheckpoint or None")
+        disk_key = self.disk_key(disk)
+        volume_key = self._carving_volume_key(volume)
+        if self.path is None:
+            key = (disk_key, volume_key)
+            if checkpoint is None:
+                self._carving_memory.pop(key, None)
+            else:
+                self._carving_memory[key] = self._serialize_carving_checkpoint(checkpoint)
+            return checkpoint
+
+        document = self._read_document()
+        document["version"] = self.VERSION
+        carving = document.setdefault("carving", {})
+        disk_entries = carving.setdefault(disk_key, {})
+        if checkpoint is None:
+            disk_entries.pop(volume_key, None)
+            if not disk_entries:
+                carving.pop(disk_key, None)
+        else:
+            disk_entries[volume_key] = self._serialize_carving_checkpoint(checkpoint)
+        self._write_document(document)
+        return checkpoint
+
+    def load_validation_snapshot(self, disk):
+        """Load the last bounded full-disk scan snapshot for this disk identity."""
+        key = self.disk_key(disk)
+        if self.path is None:
+            snapshot = self._validation_memory.get(key)
+        else:
+            snapshot = self._read_document().get("validation", {}).get(key)
+        if not isinstance(snapshot, dict):
+            return None
+        try:
+            identity_matches = (
+                snapshot.get("version") == 1
+                and snapshot.get("identity") == self._disk_identity(disk)
+                and int(snapshot.get("diskSize", -1)) == int(disk.size_bytes)
+            )
+        except (TypeError, ValueError, OverflowError):
+            identity_matches = False
+        if not identity_matches:
+            return None
+        try:
+            if len(json.dumps(snapshot, separators=(",", ":")).encode("utf-8")) > self.MAX_VALIDATION_SNAPSHOT_BYTES:
+                self.invalidate_validation_snapshot(disk)
+                return None
+        except (TypeError, ValueError):
+            self.invalidate_validation_snapshot(disk)
+            return None
+        return snapshot
+
+    def save_validation_snapshot(self, disk, snapshot):
+        """Persist only the compact scan evidence and revalidation references."""
+        if not isinstance(snapshot, dict):
+            raise TypeError("snapshot must be a JSON object")
+        key = self.disk_key(disk)
+        if (snapshot.get("version") != 1
+                or snapshot.get("identity") != self._disk_identity(disk)
+                or int(snapshot.get("diskSize", -1)) != int(disk.size_bytes)):
+            raise ValueError("Validation snapshot identity does not match the physical disk")
+        try:
+            encoded_size = len(json.dumps(snapshot, separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Validation snapshot must contain JSON-safe values") from exc
+        if encoded_size > self.MAX_VALIDATION_SNAPSHOT_BYTES:
+            self.invalidate_validation_snapshot(disk)
+            return None
+        if self.path is None:
+            self._validation_memory[key] = snapshot
+            return snapshot
+        document = self._read_document()
+        document["version"] = self.VERSION
+        document.setdefault("validation", {})[key] = snapshot
+        self._write_document(document)
+        return snapshot
+
+    def invalidate_validation_snapshot(self, disk):
+        """Remove evidence after identity, layout or metadata revalidation fails."""
+        key = self.disk_key(disk)
+        if self.path is None:
+            self._validation_memory.pop(key, None)
+            return
+        document = self._read_document()
+        validation = document.setdefault("validation", {})
+        if validation.pop(key, None) is not None:
+            self._write_document(document)
+
+    @staticmethod
+    def _carving_volume_key(volume):
+        return ":".join(str(int(value)) for value in (
+            volume.partition_offset,
+            volume.partition_size,
+            volume.bytes_per_sector,
+            volume.cluster_size,
+        ))
+
+    @staticmethod
+    def _serialize_carving_checkpoint(checkpoint):
+        return {
+            "rangeFingerprint": checkpoint.range_fingerprint,
+            "processedRangeFingerprint": checkpoint.processed_range_fingerprint,
+            "rangeIndex": checkpoint.range_index,
+            "nextOffset": checkpoint.next_offset,
+            "diskSize": checkpoint.disk_size,
+            "bytesPerSector": checkpoint.bytes_per_sector,
+            "scanProfile": checkpoint.scan_profile,
+            "bytesScanned": checkpoint.bytes_scanned,
+            "signatureCarryHex": checkpoint.signature_carry.hex(),
+            "candidates": [
+                {
+                    "offset": item.offset,
+                    "extension": item.extension,
+                    "sizeBytes": item.size_bytes,
+                    "sha256": item.sha256,
+                }
+                for item in checkpoint.candidates
+            ],
+        }
+
+    @staticmethod
+    def _deserialize_carving_checkpoint(data):
+        if not isinstance(data, dict):
+            return None
+        raw_candidates = data.get("candidates", [])
+        if not isinstance(raw_candidates, list) or len(raw_candidates) > 10000:
+            return None
+        try:
+            candidates = tuple(CarvedCandidateReference(
+                offset=int(item["offset"]),
+                extension=str(item["extension"]),
+                size_bytes=int(item["sizeBytes"]),
+                sha256=str(item["sha256"]),
+            ) for item in raw_candidates if isinstance(item, dict))
+            if len(candidates) != len(raw_candidates):
+                return None
+            return CarvingCheckpoint(
+                range_fingerprint=str(data["rangeFingerprint"]),
+                processed_range_fingerprint=str(data.get("processedRangeFingerprint", "")),
+                range_index=int(data["rangeIndex"]),
+                next_offset=int(data["nextOffset"]),
+                disk_size=int(data["diskSize"]),
+                bytes_per_sector=int(data["bytesPerSector"]),
+                scan_profile=str(data["scanProfile"]),
+                candidates=candidates,
+                bytes_scanned=int(data.get("bytesScanned", 0)),
+                signature_carry=bytes.fromhex(str(data.get("signatureCarryHex", ""))),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
 
     @staticmethod
     def _serialize_checkpoint(checkpoint):
@@ -113,7 +288,7 @@ class JsonDeepScanRepository:
 
     def _read_document(self):
         if self.path is None:
-            return {"version": self.VERSION, "disks": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
         descriptor = None
         try:
             if sys.platform.startswith("linux") and os.open in os.supports_dir_fd:
@@ -128,24 +303,41 @@ class JsonDeepScanRepository:
                 finally:
                     os.close(directory_fd)
                 if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                    return {"version": self.VERSION, "disks": {}}
+                    return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
                 with os.fdopen(descriptor, "r", encoding="utf-8") as cache_file:
                     descriptor = None
                     document = json.load(cache_file)
             else:
                 if not self.path.exists():
-                    return {"version": self.VERSION, "disks": {}}
+                    return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
                 with self.path.open("r", encoding="utf-8") as cache_file:
                     document = json.load(cache_file)
         except (OSError, json.JSONDecodeError):
-            return {"version": self.VERSION, "disks": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        if (not isinstance(document, dict) or document.get("version") != self.VERSION
+        if (not isinstance(document, dict) or document.get("version") not in (1, self.VERSION)
                 or not isinstance(document.get("disks"), dict)):
-            return {"version": self.VERSION, "disks": {}}
+            return {"version": self.VERSION, "disks": {}, "carving": {}, "validation": {}}
+        if not isinstance(document.get("carving", {}), dict):
+            document["carving"] = {}
+        if not isinstance(document.get("validation", {}), dict):
+            document["validation"] = {}
+        document["version"] = self.VERSION
         return document
+
+    @staticmethod
+    def _disk_identity(disk):
+        serial = str(getattr(disk, "serial_number", "") or "").strip().casefold()
+        identity = {
+            "model": str(getattr(disk, "model", "") or "").strip().casefold(),
+            "sizeBytes": int(disk.size_bytes),
+            "serialNumber": serial,
+        }
+        if not serial:
+            identity["number"] = int(disk.number)
+        return identity
 
     def _write_document(self, document):
         ensure_pkexec_user_owned_directory(self.path.parent)

@@ -7,13 +7,18 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.models import NTFSVolume, PhysicalDisk
-from disk.validation.auditor import DiskReadCoverage, DiskValidationAuditor
-from modules.commands.controller import RecoveryCommandHandler
-from modules.disk_discovery.dto import DiskDto, DiskValidationRequestDto
-from modules.disk_discovery.mapper import DiskDiscoveryMapper
-from modules.disk_discovery.service import DiskDiscoveryService
-from ntfs.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector
+from modules.disk.entities import NTFSVolume, PhysicalDisk
+from infrastructure.validation.disk_auditor import DiskReadCoverage, DiskValidationAuditor
+from infrastructure.disk.inventory import DiskInventory
+from presentation.controller import RecoveryCommandHandler
+from modules.disk.dto import DiskDto
+from modules.validation.dto import DiskValidationDto, DiskValidationRequestDto
+from modules.disk.service import DiskService
+from modules.validation.service import ValidationService
+from modules.deep_scan.service import DeepScanService
+from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
+from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector
 
 
 def make_ntfs_record(name, *, resident_data=None, nonresident_runlist=None, nonresident_size=0):
@@ -67,8 +72,10 @@ class FakeDisk:
         self.bytes_per_sector = 512
         self.failed_ranges = tuple(failed_ranges)
         self.closed = False
+        self.reads = []
 
     def read_at(self, offset, size):
+        self.reads.append((offset, size))
         if any(offset < end and offset + size > start for start, end in self.failed_ranges):
             return b""
         return self.data[offset:offset + size]
@@ -169,6 +176,20 @@ class DiskReadCoverageTests(unittest.TestCase):
         self.assertEqual(result["allocatedClusters"], 3)
         self.assertEqual(result["freeClusters"], 13)
         self.assertEqual(result["systemClustersAllocated"], {"0": True, "2": True, "3": False, "5": True})
+
+    def test_bitmap_scan_uses_requested_trusted_carving_range_budget(self):
+        volume = SimpleNamespace(partition_offset=0, cluster_size=512)
+        bitmap = SimpleNamespace(file_size=1, resident_data=b"\x00", data_runs=())
+
+        result = DiskValidationAuditor._scan_bitmap(
+            FakeDisk(bytes(4096)), volume, bitmap, expected_bytes=1,
+            cluster_count=8, target_clusters=(), collect_carving_ranges=True,
+            carving_range_max_bytes=1024,
+        )
+
+        self.assertEqual(result["_contentCarvingRanges"], ((0, 1024),))
+        self.assertEqual(result["_contentCarvingRangeCapBytes"], 1024)
+        self.assertTrue(result["_contentCarvingRangesTruncated"])
 
     def test_bitmap_scan_classifies_orphan_runs_without_rejecting_allocated_clusters(self):
         volume = SimpleNamespace(partition_offset=0, cluster_size=512)
@@ -278,8 +299,8 @@ class DiskValidationAuditorTests(unittest.TestCase):
             "filesystem_signatures": (),
         }
 
-        validation = DiskDiscoveryMapper.validation(report).to_dict()
-        summary = RecoveryCommandHandler._validation_summary(validation)
+        validation = DiskValidationDto.from_report(report).to_dict()
+        summary = ValidationService.summary(report)
 
         self.assertEqual(validation["assessment"], "inconclusive")
         self.assertEqual(summary["inconsistentMftRecordCount"], 1)
@@ -295,9 +316,9 @@ class DiskValidationAuditorTests(unittest.TestCase):
 
         auditor = DiskValidationAuditor(FakeEnumerator([disk_info]), disk_factory, chunk_size=1024)
         report = auditor.validate(2)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
-        self.assertTrue(issubclass(type(DiskDiscoveryMapper.validation(report)), DiskDto))
+        self.assertTrue(issubclass(type(DiskValidationDto.from_report(report)), DiskDto))
         self.assertEqual(dto["serialNumber"], "serial-2")
         self.assertEqual(dto["sizeBytes"], 4096)
         self.assertEqual(dto["coverageStatus"], "complete")
@@ -306,6 +327,107 @@ class DiskValidationAuditorTests(unittest.TestCase):
         self.assertEqual(dto["assessment"], "inconclusive")
         self.assertIn("does not prove", dto["interpretation"])
         self.assertTrue(opened[0].closed)
+
+    def test_reuses_cached_coverage_but_labels_it_historical_and_inconclusive(self):
+        disk_info = PhysicalDisk(0, "Cache test", 4096, "cache-serial")
+        opened = []
+
+        def disk_factory(_number):
+            disk = FakeDisk(bytes(4096))
+            opened.append(disk)
+            return disk
+
+        inventory = DiskInventory(FakeEnumerator([disk_info]), disk_factory)
+        repository = JsonDeepScanRepository()
+        service = ValidationService(inventory, DiskService(inventory, repository), repository)
+        first = service.validate_disk(0)
+        first_read_count = len(opened[-1].reads)
+        second = service.validate_disk(0)
+        second_read_count = len(opened[-1].reads)
+        forced = service.validate_disk(0, force_fresh=True)
+        forced_read_count = len(opened[-1].reads)
+        dto = DiskValidationDto.from_report(second).to_dict()
+
+        self.assertFalse(first["validation_snapshot_used"])
+        self.assertTrue(second["validation_snapshot_used"])
+        self.assertFalse(forced["validation_snapshot_used"])
+        self.assertLess(second_read_count, first_read_count)
+        self.assertEqual(forced_read_count, first_read_count)
+        self.assertEqual(dto["coverageStatus"], "cached_snapshot")
+        self.assertEqual(dto["evidenceFreshness"], "cached_snapshot")
+        self.assertEqual(dto["assessment"], "inconclusive")
+        self.assertIn(first["validation_scan_snapshot"]["scannedAt"], dto["interpretation"])
+
+    def test_partition_metadata_change_invalidates_snapshot_and_repeats_full_scan(self):
+        disk_info = PhysicalDisk(0, "Cache test", 4096, "cache-serial")
+        data = [bytes(4096)]
+        opened = []
+
+        def disk_factory(_number):
+            disk = FakeDisk(data[0])
+            opened.append(disk)
+            return disk
+
+        inventory = DiskInventory(FakeEnumerator([disk_info]), disk_factory)
+        repository = JsonDeepScanRepository()
+        service = ValidationService(inventory, DiskService(inventory, repository), repository)
+        service.validate_disk(0)
+        changed = bytearray(4096)
+        changed[510:512] = b"\x55\xAA"
+        data[0] = bytes(changed)
+
+        report = service.validate_disk(0)
+
+        self.assertFalse(report["validation_snapshot_used"])
+        self.assertEqual(len(opened[-1].reads), 3)
+        self.assertEqual(report["coverage"].bytes_read, len(data[0]))
+
+    def test_incomplete_cached_scan_snapshot_is_rejected_and_read_again(self):
+        disk_info = PhysicalDisk(0, "Cache test", 4096, "cache-serial")
+        enumerator = FakeEnumerator([disk_info])
+        fresh = DiskValidationAuditor(
+            enumerator, lambda _number: FakeDisk(bytes(4096)), chunk_size=1024,
+        ).validate(0)
+        incomplete = dict(fresh["validation_scan_snapshot"])
+        incomplete["intervals"] = [[0, 4095]]
+        opened = []
+
+        def disk_factory(_number):
+            disk = FakeDisk(bytes(4096))
+            opened.append(disk)
+            return disk
+
+        report = DiskValidationAuditor(
+            enumerator, disk_factory, chunk_size=1024,
+        ).validate(0, validation_snapshot=incomplete)
+
+        self.assertFalse(report["validation_snapshot_used"])
+        self.assertEqual(report["coverage"].bytes_read, 4096)
+        self.assertEqual(opened[0].reads[0], (0, 1024))
+
+    def test_cached_orphan_reference_rejects_changed_record_bytes(self):
+        volume = NTFSVolume(
+            0, 1, 0, 4096, 512, 512, 1024, 512, 1024, ((512, 1, 0),),
+        )
+        raw = bytearray(make_ntfs_record("orphan.jpg", resident_data=b"jpg"))
+        struct.pack_into("<H", raw, 22, 0)
+        data = bytearray(4096)
+        data[1536:1536 + 1024] = raw
+        disk = FakeDisk(data)
+        record = MFTRecord(raw, -1537, disk, 1536, 1024)
+        reference = DiskValidationAuditor._orphan_record_references({record.index: record})
+
+        restored = DiskValidationAuditor._revalidate_cached_orphans(
+            DiskReadCoverage(disk), disk, volume, reference,
+        )
+        data[1536 + 100] ^= 0xFF
+        changed_disk = FakeDisk(data)
+        rejected = DiskValidationAuditor._revalidate_cached_orphans(
+            DiskReadCoverage(changed_disk), changed_disk, volume, reference,
+        )
+
+        self.assertEqual(tuple(restored), (record.index,))
+        self.assertIsNone(rejected)
 
     def test_marks_a_disk_inconclusive_when_any_physical_range_cannot_be_read(self):
         disk_info = PhysicalDisk(0, "Unreadable disk", 4096, "")
@@ -316,7 +438,7 @@ class DiskValidationAuditorTests(unittest.TestCase):
         report = DiskValidationAuditor(
             FakeEnumerator([disk_info]), disk_factory, chunk_size=1024,
         ).validate(0)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
         self.assertEqual(dto["coverageStatus"], "incomplete")
         self.assertEqual(dto["assessment"], "inconclusive")
@@ -402,7 +524,7 @@ class DiskValidationAuditorTests(unittest.TestCase):
             FakeEnumerator([disk_info]), lambda _number: fake_disk, chunk_size=64 * 1024,
         ).validate(0, lambda completed, total, message: progress.append(message),
             retain_orphans_for_offset=start, orphan_scan_volume=selected_volume)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
         self.assertEqual(len(dto["ntfsChecks"]), 1)
         check = dto["ntfsChecks"][0]
@@ -439,8 +561,16 @@ class DiskValidationAuditorTests(unittest.TestCase):
                     chunk_size=1024,
                 ).validate(disk_number)
 
+        repository = FakeRepository()
+        inventory = Inventory()
+        disk_service = DiskService(inventory, repository)
         handler = RecoveryCommandHandler(
-            DiskDiscoveryService(Inventory(), FakeRepository()), None, None,
+            disk_service,
+            DeepScanService(inventory, disk_service, repository, repository),
+            ValidationService(inventory, disk_service, repository),
+            None,
+            None,
+            None,
         )
         events = []
 

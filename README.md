@@ -11,7 +11,7 @@ Unlike basic file carvers that recover files without names, this engine reconstr
 * Virtual File System (VFS): Reads the $MFT and mounts the original folder structure in memory before extraction.
 * Deleted and orphaned MFT entries: The catalog includes deleted records in the mapped MFT. An opt-in scan searches outside those mapped fragments for deleted records with complete, supported file data.
 * NTFS recovery evidence: MFT record numbers and parent sequences are checked, orphan data runs are compared with `$Bitmap`, and known file-header mismatches are excluded from the orphan list.
-* Bounded content carving: When the selected-volume `$Bitmap` is valid, the opt-in workflow searches trusted free ranges for contiguous JPEG, PNG and PDF candidates. Separate low-confidence passes target orphan MFT data runs whose allocation bits were not observed or may describe reused data. Generated names and format checks do not prove that files are deleted or fully recoverable.
+* Bounded content carving: When the selected-volume `$Bitmap` is valid, the opt-in workflow searches trusted free ranges for contiguous JPEG, PNG, PDF, OOXML Office (`.docx`, `.docm`, `.xlsx`, `.xlsm`), MP4, RTF and legacy CFB Office (`.doc`, `.xls`) candidates. Separate low-confidence passes target orphan MFT data runs whose allocation bits were not observed or may describe reused data. Generated names and format checks do not prove that files are deleted or fully recoverable.
 * Smart Header Validation: Reads physical file signatures (magic numbers) during extraction to skip corrupted or overwritten files.
 * Lost-partition discovery: Searches physical media for validated NTFS structures when the partition table is missing.
 * Full-disk validation evidence: A read-only backend audit records disk identity, byte-range coverage, partition-table checks, filesystem signatures, and NTFS boot-sector, MFT mirror, deleted-record, and `$Bitmap` findings.
@@ -19,39 +19,59 @@ Unlike basic file carvers that recover files without names, this engine reconstr
 
 ## Architecture
 
-The Python backend is organized as feature modules over a small set of low-level NTFS and disk primitives:
+The Python backend separates feature policy from platform and filesystem I/O. Feature modules use a consistent small-file layout; concrete readers and scanners live in infrastructure and are composed by the bootstrap:
 
 ```text
 backend/src/
 ├── modules/
-│   ├── commands/       # RecoveryCommandHandler, command DTOs and session state
-│   ├── disk_discovery/ # Disk discovery service, DTOs, models, ports and repository contract
-│   ├── catalog/        # Catalog service, DTOs and catalog snapshot model
-│   └── recovery/       # Recovery service, planner, extractor, DTOs and result models
+│   ├── disk/           # Physical disk, partition and NTFS volume entities and discovery service
+│   ├── deep_scan/      # Resumable partition scans and carving checkpoint policy
+│   ├── validation/     # Full-disk audit policy, DTOs and validation snapshot contract
+│   ├── catalog/        # Recovery catalog entities, DTOs and read-only search service
+│   └── recovery/       # Recovery policy, planner, DTOs and result entities
 ├── infrastructure/
-│   └── persistence/    # JSON deep-scan repository implementation
-├── disk/
-│   ├── access/         # Raw physical-disk reads
-│   ├── enumeration/    # Windows and Linux disk inventory
-│   ├── partition_table/# MBR, EBR and GPT parsing
-│   ├── ntfs_discovery/ # NTFS volume scanning and MFT-anchor resolution
-│   ├── scanning/       # Chunk sources, signatures and MFT-anchor scanning
-│   ├── deep_scan/      # Lost-partition search, orphan-MFT and bounded content carving
-│   ├── safety/         # Keep recovery output off the source disk
-│   ├── models.py       # PhysicalDisk, PartitionEntry and NTFSVolume
-│   └── inventory.py    # DiskInventory composition facade
-├── ntfs/               # MFT parsing, VFS construction and extraction collaborators
-├── domain/              # Framework-independent recovery rules
-└── backend_orchestrator.py # Composition root and JSON-lines process adapter
+│   ├── disk/            # Windows/Linux enumeration, raw reads and destination safety
+│   ├── partition_tables/ # MBR, EBR and GPT scanning
+│   ├── filesystems/ntfs/ # NTFS metadata, MFT, tree, allocation and artifact readers
+│   ├── carving/         # Bounded content-signature scanning
+│   ├── catalog/         # NTFS catalog builder
+│   ├── recovery/        # File extraction adapter
+│   └── persistence/     # JSON deep-scan and validation snapshot repository
+├── application/         # Session state and catalog-scan workflow
+├── presentation/        # Command handler and JSON-lines transport
+└── bootstrap.py         # Composition root and process entry point
 ```
 
-Each feature module owns its use-case service and the contracts/models specific to that feature. `RecoveryCommandHandler` maps validated command DTOs to those services and returns stable response DTOs. Repository interfaces are used for persistence; physical sector access is represented by replaceable disk-reader ports, not by a CRUD repository abstraction. The entry point only composes production dependencies and adapts JSON lines to commands.
+Feature modules contain only `entities.py`, `dto.py`, `service.py`, `repository.py` and `exceptions.py` where needed. Disk inventory, catalog building and extraction adapters depend inward on feature entities; feature modules do not import infrastructure. `RecoveryCommandHandler` maps validated command DTOs to services and returns stable response DTOs. Persistence contracts stay in their owning feature, while the bootstrap composes production implementations and the JSON-lines process adapter.
 
-The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. The catalog can reuse audited orphan records and perform separate bounded scans of trusted `$Bitmap`-free ranges and low-confidence orphan data runs.
+The disk feature owns physical-disk, partition and volume identity. Deep scan owns resumable scan cursors; validation owns audit and cached-evidence policy. NTFS parsing, catalog construction, carving, raw I/O and output writing remain infrastructure implementations. Recovery policy composes those adapters without depending on their concrete modules. Catalog audit handoff continues to reuse orphan records and bounded carving ranges from the same disk audit.
 
 * frontend/src/ (React client): Contains typed domain contracts, services, hooks, reusable styled-components and page composition.
 * frontend/electron/ (Desktop shell): Owns Electron main/preload processes and the context-isolated IPC contract.
 * `DiskInventory` composes discovery components. Deep scan searches a bounded disk prefix for a validated `$MFT` record zero before falling back to NTFS boot-sector scanning.
+
+### Backend responsibilities and data flow
+
+The product reads NTFS media to reconstruct directory metadata and recover selected file contents; disk scans remain read-only, while output validation keeps recovered files away from the source disk. The desktop stack is Electron, React, TypeScript and Vite, with the recovery engine in Python.
+
+```mermaid
+flowchart LR
+    E[Electron and React] -->|JSON Lines| P[Presentation controller]
+    P --> A[Application workflow]
+    A --> D[Disk and deep scan services]
+    A --> V[Validation service and snapshots]
+    A --> C[Catalog builder]
+    C --> N[NTFS and carving infrastructure]
+    P --> R[Recovery service]
+    R --> X[Recovery extractor and output safety]
+    D --> I[Disk I/O infrastructure]
+    V --> I
+    I --> S[Read-only source media]
+```
+
+The catalog and recovery modules share only catalog entities and the supported-format contract. Platform disk access, NTFS parsing, catalog construction and extraction are infrastructure implementations injected by `bootstrap.py`. This keeps recovery algorithms in their existing implementation while making feature policy independent of Windows/Linux I/O.
+
+The JSON cache path and serialized checkpoint fields remain unchanged; no cache migration is required. Repository round-trip tests cover deep-scan and carving checkpoints. Unit tests use deterministic in-memory media, not physical recovery images. The Windows suite cannot exercise Linux ownership and symlink primitives, and the NTFS catalog builder remains the largest infrastructure class. Next validation should compare real disk images on Windows and Linux and record elapsed time, memory, read calls and bytes read before making performance claims.
 
 Frontend pages and components each live in a folder named after the unit. Keep the React entry point in `index.tsx` and its styled-components definitions in a separate `style.ts` file in the same folder.
 
@@ -61,9 +81,13 @@ Frontend pages and components each live in a folder named after the unit. Keep t
 
 Deleted records inside the mapped MFT fragments already appear in the normal catalog. The optional **Search for deleted files missing from the list** setting audits the physical disk, validates NTFS metadata and searches gaps outside the mapped MFT fragments. It retains USA-validated deleted file records with consistent metadata, a supported extension and complete resident data or a complete in-volume runlist. Candidate headers are checked with bounded reads; known signature mismatches are filtered, while unknown content remains labeled as unverified. `$Bitmap` evidence reports whether each candidate's data clusters are free, allocated, mixed or unknown; allocated bits indicate possible reuse and do not automatically reject a candidate.
 
-The same opt-in workflow scans up to 1 GiB of ranges proved free by a complete, valid `$Bitmap` for contiguous JPEG, PNG and PDF candidates. The `$Bitmap` file's own runs and allocation bits are checked before those free ranges are trusted. Candidates use generated names under `Lost_Files_DeepScan/ContentCarving` because original names and paths are unavailable. JPEG marker/frame/scan structure is checked but image entropy is not decoded. PNG chunks and CRCs are checked and the IDAT stream is bounded-decompressed to the expected scanline length, but pixels are not rendered. PDFs require a parseable classic xref table and trailer; xref streams are not currently accepted. The trusted-free scan is bounded to 32 MiB per file, 128 MiB retained content, 256 files, 768 MiB total candidate reads and 256 MiB candidate reads per format. A 64 MiB PNG decompressed-output cap also applies. Per-format and aggregate limit flags are reported separately.
+The same opt-in workflow scans up to the selected budget of 1, 4, 16 or 64 GiB of ranges proved free by a complete, valid `$Bitmap` for contiguous JPEG, PNG, PDF, OOXML Office (`.docx`, `.docm`, `.xlsx`, `.xlsm`), MP4/ISO-BMFF, RTF and legacy Office CFB v3 (`.doc`, `.xls`) candidates. The `$Bitmap` file's own runs and allocation bits are checked before those free ranges are trusted. Candidates use generated names under `Lost_Files_DeepScan/ContentCarving` because original names and paths are unavailable.
 
-Two additional passes target only locatable in-volume data runs named by orphan MFT records: `bitmap_unobserved` tails beyond the observed `$Bitmap` prefix, and `possibly_reused` runs containing allocated bits. These results are kept separately under `Lost_Files_DeepScan/LowConfidence/BitmapUnobserved` and `.../PossiblyReused`. They may refer to current or reused file content and are not marked as confirmed deleted. Each tier retains at most 128 MiB and 4,096 ranges, scans at most 128 MiB, reads at most 48 MiB of candidate data (16 MiB per format), retains at most 32 MiB across 64 files and limits an individual file to 16 MiB. Lower-confidence duplicates are omitted when a higher-confidence candidate with the same offset or content was already added. All carving is additional bounded I/O after the disk audit; it cannot restore overwritten data, reconstruct fragmentation or prove that a candidate will decode in its target application. The source remains read-only.
+Validation is structural and bounded, not full application decoding: JPEG markers/frame/scan are checked but entropy is not decoded; PNG chunks/CRCs and bounded IDAT decompression are checked but pixels are not rendered; PDFs require a classic xref table and trailer (xref streams are rejected); OOXML ZIP central-directory/local-header structure and required document members are checked without decompressing members; MP4 top-level box bounds and `ftyp`/`mdat`/`moov` or `moof` are checked without decoding media; RTF control escapes, binary spans and balanced groups are checked; CFB v3 validates FAT/DIFAT bounds and reachable Word/Excel directory streams. CFB versions other than v3 are not carved. All formats require contiguous candidate bytes; fragmented-file reconstruction is not attempted. These checks do not prove that a candidate is deleted, intact or openable in its target application.
+
+The trusted-free scan is bounded to 32 MiB per file, 128 MiB retained content, 256 files, 768 MiB total candidate reads and 256 MiB candidate reads per format family. A 64 MiB PNG decompressed-output cap also applies. Per-family and aggregate limit flags are reported separately.
+
+Two additional passes target only locatable in-volume data runs named by orphan MFT records: `bitmap_unobserved` tails beyond the observed `$Bitmap` prefix, and `possibly_reused` runs containing allocated bits. These results are kept separately under `Lost_Files_DeepScan/LowConfidence/BitmapUnobserved` and `.../PossiblyReused`. They may refer to current or reused file content and are not marked as confirmed deleted. Each tier retains at most 128 MiB and 4,096 ranges, scans at most 128 MiB, reads at most 48 MiB of candidate data (16 MiB per format family), retains at most 32 MiB across 64 files and limits an individual file to 16 MiB. Lower-confidence duplicates are omitted when a higher-confidence candidate with the same offset or content was already added. All carving is additional bounded I/O after the disk audit; it cannot restore overwritten data, reconstruct fragmentation or prove that a candidate will decode in its target application. The source remains read-only.
 
 The output directory is checked against the source physical disk before recovery starts. Extraction results carry a status and reason per file. Incomplete disk reads and MFT data extents are not counted as successful recoveries.
 
@@ -79,6 +103,8 @@ This operation reads the addressable disk sequentially, tracks uniquely covered 
 
 The response's `coverageStatus` is `incomplete` when any bytes could not be read or a read failed. `assessment` remains `inconclusive` when coverage is incomplete, a partition/filesystem is unsupported or unvalidated, NTFS metadata checks fail, or recoverable deleted records are found. A complete read is evidence only; it does not prove that the disk is empty or contains no recoverable files. FAT/exFAT signatures are candidates only and are not yet fully parsed. The operation can take hours and performs additional reads during metadata checks; keep the source read-only and use a separate destination disk for any recovery.
 
+When the optional recovery catalog is built, `$LogFile` inspection reports only bounded structural evidence from validated RSTR/RCRD pages, including raw restart LSN values. It does not replay transactions or recover file content. Volume Shadow Copy access is not implemented; any future VSS support should be a separate Windows-only adapter that reads existing snapshots without creating, deleting or modifying snapshots.
+
 ## Prerequisites
 
 * Windows or Linux for physical-disk discovery and raw reads.
@@ -89,7 +115,7 @@ The NTFS recovery pipeline is shared across platforms. Linux support uses sysfs 
 
 ## Electron development UI
 
-The Electron app keeps the recovery engine in Python and starts `backend/src/backend_orchestrator.py` as a local child process. You do not start a separate Python server. From the `frontend` directory, install the dependencies and launch the development UI:
+The Electron app keeps the recovery engine in Python and starts `backend/src/bootstrap.py` as a local child process. You do not start a separate Python server. From the `frontend` directory, install the dependencies and launch the development UI:
 
 ```powershell
 npm install
@@ -139,3 +165,5 @@ Push-Location frontend
 npm test
 Pop-Location
 ```
+
+The seven platform-gated skips in the Windows suite are intentional: `test_deep_scan_repository.py::test_cache_reader_rejects_symlinks_instead_of_reading_their_targets` exercises Linux `O_NOFOLLOW`; five tests in `test_linux_user_ownership.py` exercise Linux ownership calls, `openat` protections and directory descriptors; and `test_recovery_output_writer.py::test_output_parent_symlinks_are_rejected_before_creating_descendants` exercises Linux symlink protections. Run the suite on Linux to execute those cases. `test_architecture_boundaries.py` uses the Python AST to keep feature modules on the allowed file layout, block imports from infrastructure, and detect feature-module cycles.

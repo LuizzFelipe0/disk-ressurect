@@ -53,7 +53,10 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
         ) : <TreeIndent />}
         <input type="checkbox" checked={isSelected(node.id)} disabled={loadingFolderIds.has(node.id)}
           aria-label={`${t("select")} ${node.name}`} onChange={(event) => onToggleSelection(node.id, event.target.checked)} />
-        <TreeName title={node.path}>
+        <TreeName title={node.originalPath
+          ? `${node.path}\n${t("originalPathLabel")}: ${node.originalPath}${node.deletionTimestampUtc
+            ? `\n${t("deletedAtLabel")}: ${node.deletionTimestampUtc}` : ""}`
+          : node.path}>
           <span aria-hidden="true">{node.isDirectory ? "▰" : "▱"}</span>
           {node.name}
         </TreeName>
@@ -63,9 +66,15 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
           )}
         </PreviewAction>
         <TreeMeta>
-          {node.isContentCarved ? t("contentCarved") : node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}
+          {node.recoverySource === "recycle_bin" ? t("recycleBinSourceLabel")
+            : node.recoverySource === "usn_journal_mft" ? t("usnMftRecoverySourceLabel")
+            : node.isContentCarved ? t("contentCarved") : node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}
           {node.contentValidation === "signature_match" && ` · ${t("signatureMatch")}`}
           {node.contentValidation === "unavailable" && ` · ${t("signatureUnavailable")}`}
+          {node.dataExtentResolution === "resolved" && <span title={node.dataExtentResolutionReason ?? undefined}>
+            {` · ${t("fragmentedDataRunsResolved", { count: node.dataExtentCount ?? 0 })}`}</span>}
+          {node.dataExtentResolution === "inconclusive" && <span title={node.dataExtentResolutionReason ?? undefined}>
+            {` · ${t("fragmentedDataRunsInconclusive")}`}</span>}
           {node.metadataConsistent === false && ` · ${t("metadataWarning")}`}
           {node.clusterAllocationStatus === "free" && ` · ${t("bitmapFree")}`}
           {node.clusterAllocationStatus === "allocated" && ` · ${t("bitmapAllocated")}`}

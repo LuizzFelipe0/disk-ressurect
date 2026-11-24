@@ -91,6 +91,25 @@ const { recovery } = vi.hoisted(() => ({
           rangeBytesRetained: 0, rangeCollectionCapBytes: 134217728,
         },
       },
+      recycleBinRecovery: {
+        status: "inconclusive", inconclusive: true, indexCount: 3, aliasesAdded: 1,
+        pairedCount: 2, missingContentCount: 1, ambiguousContentCount: 0,
+        metadataMismatchCount: 0, invalidIndexCount: 0, readErrorCount: 0,
+        limitedIndexCount: 0, incompleteContentCount: 0, unsupportedExtensionCount: 1,
+        directoryContentCount: 0,
+      },
+      usnJournalEvidence: {
+        status: "inconclusive", inconclusive: true, journalCount: 1, streamCount: 1,
+        bytesRead: 1024, recordsExamined: 4, parsedRecords: 3, deletedEvents: 1,
+        malformedRecords: 1, limitReached: true, errorCount: 0,
+      },
+      ntfsLogFileEvidence: {
+        status: "inconclusive", inconclusive: true, logFileCount: 1,
+        bytesRead: 8192, pagesExamined: 2, restartPages: 1, recordPages: 1,
+        malformedPages: 0, currentLsns: ["0x0000000000010008"],
+        limitReached: false, errorCount: 0, reason: null,
+        recoveryClaim: "structural_evidence_only",
+      },
     },
     preview: null,
     previewLoading: false,
@@ -136,6 +155,62 @@ afterEach(() => {
 });
 
 describe("RecoveryPage audit details", () => {
+  it("keeps selection actions visible and disabled until a catalog is available", () => {
+    const catalog = recovery.catalog;
+    recovery.catalog = null as never;
+    render(<RecoveryPage />);
+    recovery.catalog = catalog;
+
+    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
+    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
+    for (const name of ["Selecionar tudo", "Limpar seleção", "Recuperar selecionados"]) {
+      expect((within(foundFilesHeader!).getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("opens the filter drawer with file type, size and selection controls", async () => {
+    render(<RecoveryPage />);
+
+    const filterTrigger = screen.getByRole("button", { name: "Filtros" });
+    expect(filterTrigger.closest("header")).not.toBeNull();
+    fireEvent.click(filterTrigger);
+    const dialog = await screen.findByRole("dialog", { name: "Filtros" });
+    expect(within(dialog).queryByRole("navigation")).toBeNull();
+    expect(within(dialog).getAllByText("Tipos de arquivo")).toHaveLength(1);
+    expect(within(dialog).getAllByText("Tamanho mínimo")).toHaveLength(1);
+    expect(within(dialog).queryByRole("button", { name: "Recuperar selecionados" })).toBeNull();
+    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
+    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
+    expect(within(foundFilesHeader!).getByRole("button", { name: "Recuperar selecionados" })).toBeTruthy();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
+  });
+
+  it("defaults to the maximum recovery budgets and lets users adjust them", () => {
+    render(<RecoveryPage />);
+
+    const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
+    const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
+    const candidateReadBudget = screen.getByRole("combobox", { name: "Leitura de candidatos por formato" });
+    const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
+    const forceFresh = screen.getByRole("checkbox", {
+      name: "Forçar nova auditoria completa do disco (padrão; ignora cache; pode levar horas)",
+    });
+    expect((screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista (ativado por padrão)") as HTMLInputElement).checked).toBe(true);
+    expect((forceFresh as HTMLInputElement).checked).toBe(true);
+    expect((scanBudget as HTMLSelectElement).value).toBe("64");
+    expect((maxFiles as HTMLSelectElement).value).toBe("16384");
+    expect((candidateReadBudget as HTMLSelectElement).value).toBe("1024");
+    expect((retainedBudget as HTMLSelectElement).value).toBe("512");
+    fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
+
+    expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
+      scanBudgetGiB: 64, maxFiles: 16384, maxRetainedMiB: 512,
+      maxCandidateReadMiBPerFormat: 1024,
+    }, true);
+  });
+
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
     render(<RecoveryPage />);
 
@@ -155,11 +230,39 @@ describe("RecoveryPage audit details", () => {
     expect(within(dialog).getByText(/\.jpg: 0 candidato\(s\) encontrado\(s\), 12 candidato\(s\) examinado\(s\)/)).toBeTruthy();
     expect(within(dialog).getByText(/Limites atingidos neste formato: leitura de candidatos/)).toBeTruthy();
     expect(within(dialog).getByText(/Candidatos encontrados por carving de baixa confiança/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Recuperação pela Lixeira do Windows" })).toBeTruthy();
+    expect(within(dialog).getByText(/1 atalho\(s\) de recuperação adicionado/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Evidências do diário USN do NTFS" })).toBeTruthy();
+    expect(within(dialog).getByText(/1 eventos de exclusão/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Evidências estruturais do $LogFile NTFS" })).toBeTruthy();
+    expect(within(dialog).getByText(/0x0000000000010008/)).toBeTruthy();
+    expect(within(dialog).getByText(/não recupera conteúdo de arquivos/)).toBeTruthy();
     expect(within(dialog).getByRole("heading", { name: "Bitmap não observado; os dados podem ser atuais" })).toBeTruthy();
     expect(within(dialog).getAllByText(/lê até 16\.777\.216 bytes de candidatos por formato e 50\.331\.648 no total/)).toHaveLength(2);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("labels reused read coverage as a historical snapshot", async () => {
+    const diskValidation = recovery.catalog.diskValidation;
+    Object.assign(diskValidation, {
+      coverageStatus: "cached_snapshot",
+      evidenceFreshness: "cached_snapshot",
+      evidenceScannedAt: "2026-11-23T12:00:00+00:00",
+    });
+    render(<RecoveryPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Detalhes da auditoria do disco" }));
+    const dialog = await screen.findByRole("dialog", { name: "Detalhes da auditoria do disco" });
+    expect(within(dialog).getByText(/A cobertura de leitura é um registro histórico de 2026-11-23/))
+      .toBeTruthy();
+    expect(within(dialog).queryByText(/A auditoria do disco inteiro é inconclusiva/)).toBeNull();
+    Object.assign(diskValidation, {
+      coverageStatus: "complete",
+      evidenceFreshness: "fresh",
+      evidenceScannedAt: undefined,
+    });
   });
 });

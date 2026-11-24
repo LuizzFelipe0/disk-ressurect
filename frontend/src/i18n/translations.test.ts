@@ -7,20 +7,38 @@ describe("application translations", () => {
     for (const language of languages) {
       if (language !== "en-US") expect(translate(language, "recoverSelected")).not.toBe("Recover selected");
       expect(translate(language, "sourceDisk")).toBeTruthy();
+      expect(translate(language, "openFilters")).toBeTruthy();
       expect(translate(language, "includeOrphaned")).toBeTruthy();
+      expect(translate(language, "carvingScanBudget")).toBeTruthy();
+      expect(translate(language, "carvingMaxFiles")).toBeTruthy();
+      expect(translate(language, "carvingCandidateReadBudget")).toBeTruthy();
+      expect(translate(language, "carvingCandidateRead1024")).toMatch(/1 GiB|1 Gio|1 GB|1 吉比字节/);
+      expect(translate(language, "carvingRetainedBudget")).toBeTruthy();
+      expect(translate(language, "usnMftCorrelationLimitReached")).toBeTruthy();
+      expect(translate(language, "usnMftRecoverySourceLabel")).toBeTruthy();
+      expect(translate(language, "recycleBinRecoveryHeading")).toBeTruthy();
+      expect(translate(language, "usnJournalEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceInterpretation")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "recycleBinSourceLabel")).toBeTruthy();
       expect(translate(language, "orphanedEntriesCount", { count: 2 })).toContain("2");
       expect(translate(language, "loadingContents", { name: "Photos" })).toContain("Photos");
       for (const key of ["includeOrphaned", "orphanedDeleted", "partitionLabel", "catalogItems", "statusScanningOrphans"] as const) {
         expect(translate(language, key)).not.toMatch(/MFT|NTFS/i);
       }
       expect(translate(language, "orphanScanWarning")).toBeTruthy();
-      expect(translate(language, "orphanScanWarning")).toMatch(/864 MiB|864 Mio/);
+      expect(translate(language, "orphanScanWarning")).toMatch(/64 GiB|64 Gio/);
       expect(translate(language, "orphanRecordAllocationSummary", {
         free: 9910, allocated: 0, mixed: 2, unknown: 921,
       })).toContain("9910");
       expect(translate(language, "validationEvidence", {
         coverage: 100, partitions: 1, ntfs: 1, deleted: 0, orphans: 0,
       })).toBeTruthy();
+      expect(translate(language, "validationCachedSnapshot", {
+        scannedAt: "2026-11-23T12:00:00Z", coverage: 100,
+      })).toContain("2026-11-23");
+      expect(translate(language, "forceFreshValidation")).toBeTruthy();
     }
   });
 
