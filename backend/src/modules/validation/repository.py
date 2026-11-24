@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from modules.disk.entities import PhysicalDisk
+from modules.storage.entities import PhysicalDisk
 
 
 class ValidationSnapshotRepository(Protocol):

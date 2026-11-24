@@ -1,7 +1,8 @@
 from typing import Callable, Protocol
 
-from modules.disk.entities import ScanCheckpoint
-from modules.disk.entities import DiscoveredDisk, NTFSVolume, PhysicalDisk
+from modules.storage.entities import ScanCheckpoint
+from modules.storage.entities import PhysicalDisk
+from modules.disk.entities import DiscoveredDisk, NTFSVolume
 from modules.disk.repository import DiskRepository
 
 

@@ -55,6 +55,10 @@ class LinuxDiskReader:
             raise OSError(f"Linux block device {self.path} reported an invalid sector size")
         return value
 
+    @property
+    def size_bytes(self):
+        return self.size
+
     def read_at(self, offset, size):
         if offset < 0 or size < 0:
             raise ValueError("Disk offsets and read sizes must be non-negative")

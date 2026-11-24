@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
-from modules.disk.entities import PartitionEntry
+from modules.storage.entities import Partition
 from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
 from infrastructure.partition_tables.scanner import PartitionTableScanner
 from infrastructure.filesystems.ntfs.discovery.partition_scan import NTFSBootSectorParser
@@ -491,7 +491,7 @@ class DiskValidationAuditor:
                     size = min(geometry.volume_size, int(disk.size) - start)
                     if size <= 0:
                         continue
-                    candidate = PartitionEntry(
+                    candidate = Partition(
                         0, start, size, "NTFS signature", "Full-disk NTFS signature",
                     )
                     volume = volume_scanner._probe_partition(candidate)
@@ -862,7 +862,7 @@ class DiskValidationAuditor:
                     partition_offset = first_lba * sector_size
                     partition_size = (last_lba - first_lba + 1) * sector_size
                     if partition_offset >= 0 and partition_size > 0 and partition_offset + partition_size <= int(disk.size):
-                        parsed.append(PartitionEntry(index + 1, partition_offset, partition_size, "GPT", name))
+                        parsed.append(Partition(index + 1, partition_offset, partition_size, "GPT", name))
                 entries = tuple(parsed)
         check.update({
             "currentLba": current_lba,

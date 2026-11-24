@@ -3,7 +3,7 @@ import os
 import subprocess
 from typing import Callable
 
-from modules.disk.entities import PhysicalDisk
+from modules.storage.entities import PhysicalDisk
 
 
 class WindowsDiskEnumerator:

@@ -1,4 +1,4 @@
-from modules.disk.entities import PartitionEntry
+from modules.storage.entities import Partition
 from infrastructure.filesystems.ntfs.discovery.partition_scan import NTFSBootSectorParser
 
 
@@ -24,7 +24,7 @@ class LostPartitionCandidateValidator:
             seen.add(start)
             if boot_offset not in (start, start + geometry.volume_size - geometry.bytes_per_sector):
                 continue
-            partition = PartitionEntry(0, start, geometry.volume_size, "Lost NTFS", "Deep scan")
+            partition = Partition(0, start, geometry.volume_size, "Lost NTFS", "Deep scan")
             volume = self.volume_scanner._probe_partition(partition, boot_sector=boot)
             if volume is not None:
                 found.append(volume)

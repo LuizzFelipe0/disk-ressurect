@@ -1,35 +1,12 @@
+"""Compatibility exports; storage entities are defined in modules.storage."""
+
+from modules.storage.entities import (
+    Partition,
+    PhysicalDisk,
+    ScanCheckpoint,
+)
+
 from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class ScanCheckpoint:
-    range_index: int
-    next_offset: int
-    disk_size: int
-    bytes_per_sector: int
-
-
-@dataclass(frozen=True)
-class PhysicalDisk:
-    number: int
-    model: str
-    size_bytes: int
-    serial_number: str = ""
-
-    @property
-    def display_name(self):
-        size_gib = self.size_bytes / (1024 ** 3)
-        suffix = f" · {self.serial_number}" if self.serial_number else ""
-        return f"Disk {self.number} · {self.model} · {size_gib:.1f} GB{suffix}"
-
-
-@dataclass(frozen=True)
-class PartitionEntry:
-    number: int
-    offset: int
-    size_bytes: int
-    table_type: str
-    name: str = ""
 
 
 @dataclass(frozen=True)

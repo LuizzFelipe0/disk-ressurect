@@ -7,7 +7,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.disk.entities import NTFSVolume, PhysicalDisk
+from modules.storage.entities import PhysicalDisk
+from modules.disk.entities import NTFSVolume
 from infrastructure.validation.disk_auditor import DiskReadCoverage, DiskValidationAuditor
 from infrastructure.disk.inventory import DiskInventory
 from presentation.controller import RecoveryCommandHandler

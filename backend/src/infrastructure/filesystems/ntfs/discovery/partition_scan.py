@@ -4,7 +4,7 @@ import struct
 from dataclasses import dataclass
 from typing import Callable, Iterable, Iterator
 
-from modules.disk.entities import ScanCheckpoint
+from modules.storage.entities import ScanCheckpoint
 
 @dataclass(frozen=True)
 class DiskChunk:

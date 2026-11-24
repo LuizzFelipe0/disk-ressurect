@@ -5,7 +5,7 @@ from infrastructure.filesystems.ntfs.discovery.partition_scan import (
     ScanCheckpoint,
     NTFSBootSectorParser,
 )
-from modules.disk.entities import PartitionEntry
+from modules.storage.entities import Partition
 from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
 from infrastructure.disk.lost_partition_validator import LostPartitionCandidateValidator
 

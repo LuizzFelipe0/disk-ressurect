@@ -57,6 +57,10 @@ class RawDisk:
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel32.CloseHandle.restype = wintypes.BOOL
 
+    @property
+    def size_bytes(self):
+        return self.size
+
     @staticmethod
     def _validated_read_length(success, bytes_read, requested):
         """Validate the Win32 read result while preserving legitimate short reads."""

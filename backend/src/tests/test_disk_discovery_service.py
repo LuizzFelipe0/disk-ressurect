@@ -5,8 +5,9 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.disk.entities import NTFSVolume, PhysicalDisk
-from modules.disk.entities import ScanCheckpoint
+from modules.storage.entities import PhysicalDisk
+from modules.disk.entities import NTFSVolume
+from modules.storage.entities import ScanCheckpoint
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.disk.service import DiskService
 from modules.deep_scan.service import DeepScanService

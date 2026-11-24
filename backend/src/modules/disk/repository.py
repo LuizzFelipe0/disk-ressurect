@@ -1,7 +1,8 @@
 from typing import Protocol
 
-from modules.disk.entities import ScanCheckpoint
-from modules.disk.entities import CachedDeepScan, NTFSVolume, PhysicalDisk
+from modules.storage.entities import ScanCheckpoint
+from modules.storage.entities import PhysicalDisk
+from modules.disk.entities import CachedDeepScan, NTFSVolume
 
 
 class DiskRepository(Protocol):

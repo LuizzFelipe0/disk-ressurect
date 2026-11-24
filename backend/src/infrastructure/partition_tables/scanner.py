@@ -1,6 +1,6 @@
 import struct
 
-from modules.disk.entities import PartitionEntry
+from modules.storage.entities import Partition
 
 
 class PartitionTableScanner:
@@ -53,7 +53,7 @@ class PartitionTableScanner:
             return None
         name = f"MBR type 0x{partition_type:02X}"
         table_type = "GPT protective" if partition_type == 0xEE else partition_type
-        return PartitionEntry(number, first_lba * self.sector_size,
+        return Partition(number, first_lba * self.sector_size,
             sector_count * self.sector_size, table_type, name)
 
     def _logical_partitions(self, extended, first_number):
@@ -71,7 +71,7 @@ class PartitionTableScanner:
             data_entry = self._mbr_entry(ebr, 446, first_number + len(result))
             if data_entry and data_entry.table_type not in self.EXTENDED_MBR_TYPES:
                 relative_lba, sector_count = struct.unpack_from("<II", ebr, 454)
-                result.append(PartitionEntry(
+                result.append(Partition(
                     first_number + len(result),
                     (current_lba + relative_lba) * self.sector_size,
                     sector_count * self.sector_size,
@@ -113,7 +113,7 @@ class PartitionTableScanner:
             if last_lba < first_lba:
                 continue
             name = entry[56:min(entry_size, 128)].decode("utf-16le", errors="ignore").rstrip("\x00")
-            partition = PartitionEntry(index + 1, first_lba * self.sector_size,
+            partition = Partition(index + 1, first_lba * self.sector_size,
                 (last_lba - first_lba + 1) * self.sector_size,
                 "GPT", name)
             if partition.offset >= 0 and partition.size_bytes > 0 and partition.offset + partition.size_bytes <= self.disk.size:

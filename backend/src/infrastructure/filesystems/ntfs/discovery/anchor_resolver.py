@@ -1,4 +1,5 @@
-from modules.disk.entities import NTFSVolume, PartitionEntry
+from modules.storage.entities import Partition
+from modules.disk.entities import NTFSVolume
 from infrastructure.filesystems.ntfs.discovery.mft_anchor_scan import MFTAnchor
 from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
 
@@ -48,7 +49,7 @@ class MFTAnchorVolumeResolver:
         if partition_offset + first_lcn * cluster_size != mft_offset:
             return None
 
-        partition = PartitionEntry(0, partition_offset, self.disk.size - partition_offset,
+        partition = Partition(0, partition_offset, self.disk.size - partition_offset,
             "MFT-derived", "$MFT anchor; partition end estimated")
         fragments = NTFSVolumeScanner._mft_fragments(
             partition, cluster_size, record.record_size, record

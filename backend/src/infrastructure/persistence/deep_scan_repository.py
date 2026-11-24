@@ -13,7 +13,7 @@ from pathlib import Path
 from modules.disk.entities import CachedDeepScan
 from modules.disk.entities import NTFSVolume
 from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
-from modules.disk.entities import ScanCheckpoint
+from modules.storage.entities import ScanCheckpoint
 from infrastructure.filesystem.user_ownership import (
     ensure_pkexec_user_owned_directory,
     open_pkexec_safe_directory,
