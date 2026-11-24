@@ -5,6 +5,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { randomUUID } from "node:crypto";
 import { getAppIconPath as resolveAppIconPath, getBundledBackendPath } from "../src/utils/platformResources";
+import { writeJsonLine } from "../src/utils/pythonBackendTransport";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -68,6 +69,7 @@ class PythonBackend {
     const lines = readline.createInterface({ input: child.stdout });
     lines.on("line", (line) => this.handleLine(line, child));
     child.stderr.on("data", (data: Buffer) => console.error(`[python] ${data.toString().trimEnd()}`));
+    child.stdin.on("error", (error) => this.handleInputError(child, error));
     child.on("error", (error) => {
       if (this.child !== child) return;
       this.rejectAll(error);
@@ -113,14 +115,25 @@ class PythonBackend {
 
   request<T>(operation: string, payload: unknown): Promise<T> {
     const execute = () => {
+      const child = this.child;
+      if (this.status.state === "error" || child.exitCode !== null || child.signalCode !== null
+          || child.stdin.destroyed || child.stdin.writableEnded || !child.stdin.writable) {
+        return Promise.reject(new Error(
+          this.status.state === "error"
+            ? `Python backend is unavailable: ${this.status.message}`
+            : "Python backend input pipe is not writable",
+        ));
+      }
       const id = randomUUID();
       return new Promise<T>((resolve, reject) => {
         this.pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
-        this.child.stdin.write(`${JSON.stringify({ id, operation, payload })}\n`, (error) => {
-          if (error) {
+        void writeJsonLine(child.stdin, `${JSON.stringify({ id, operation, payload })}\n`).catch((error) => {
+          const request = this.pending.get(id);
+          if (request) {
             this.pending.delete(id);
-            reject(error);
+            request.reject(error);
           }
+          this.handleInputError(child, error instanceof Error ? error : new Error(String(error)));
         });
       });
     };
@@ -173,6 +186,16 @@ class PythonBackend {
   private rejectAll(error: Error) {
     for (const request of this.pending.values()) request.reject(error);
     this.pending.clear();
+  }
+
+  private handleInputError(source: ChildProcessWithoutNullStreams, error: Error) {
+    if (this.child !== source) return;
+    const message = `Python backend input pipe failed: ${error.message}`;
+    this.rejectAll(new Error(message));
+    this.resolvePrivilege(false);
+    if (!this.stopping && (this.status.state !== "error" || this.status.message !== message)) {
+      this.updateStatus("error", message);
+    }
   }
 
   private updateStatus(state: "starting" | "ready" | "error", message: string) {
