@@ -71,6 +71,10 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
             : node.isContentCarved ? t("contentCarved") : node.isOrphaned ? t("orphanedDeleted") : node.isDeleted ? t("deleted") : node.isDirectory ? t("folder") : formatSize(node.sizeBytes)}
           {node.contentValidation === "signature_match" && ` · ${t("signatureMatch")}`}
           {node.contentValidation === "unavailable" && ` · ${t("signatureUnavailable")}`}
+          {node.dataExtentResolution === "resolved" && <span title={node.dataExtentResolutionReason ?? undefined}>
+            {` · ${t("fragmentedDataRunsResolved", { count: node.dataExtentCount ?? 0 })}`}</span>}
+          {node.dataExtentResolution === "inconclusive" && <span title={node.dataExtentResolutionReason ?? undefined}>
+            {` · ${t("fragmentedDataRunsInconclusive")}`}</span>}
           {node.metadataConsistent === false && ` · ${t("metadataWarning")}`}
           {node.clusterAllocationStatus === "free" && ` · ${t("bitmapFree")}`}
           {node.clusterAllocationStatus === "allocated" && ` · ${t("bitmapAllocated")}`}
