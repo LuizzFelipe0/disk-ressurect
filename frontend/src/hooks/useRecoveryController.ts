@@ -53,8 +53,11 @@ export function useRecoveryController() {
   const [minimumSizeKb, setMinimumSizeKb] = useState(0);
   const [outputDirectory, setOutputDirectory] = useState("");
   const initialLoadStarted = useRef(false);
+  const catalogGeneration = useRef(0);
+  const catalogBuildRequest = useRef(0);
 
   const clearCatalog = useCallback(() => {
+    catalogGeneration.current += 1;
     previewRequestId.current += 1;
     setPreview(null);
     setPreviewLoading(false);
@@ -268,6 +271,9 @@ export function useRecoveryController() {
   ) => {
     if (!selectedVolumeId) return;
     if (!await ensureAdministrator()) return;
+    clearCatalog();
+    const generation = catalogGeneration.current;
+    const requestId = ++catalogBuildRequest.current;
     setBusy(true); setError(""); setProgress(null);
     setStatus(includeOrphaned
       ? "Reading MFT metadata and searching for orphaned entries…"
@@ -278,15 +284,22 @@ export function useRecoveryController() {
           selectedVolumeId, true, carvingOptions, forceFreshValidation,
         )
         : await recoveryService.scanCatalog(selectedVolumeId);
+      if (generation !== catalogGeneration.current || requestId !== catalogBuildRequest.current) return;
       const parents = new Map<string, string | null>();
       result.roots.forEach((node) => parents.set(node.id, node.parentId ?? null));
       setCatalog(result); setParentById(parents);
       setSearchQuery("");
       setSearchResult(null);
       setStatus(`Catalog ready: ${result.recordCount.toLocaleString()} MFT records.`);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); setStatus("Unable to build the catalog."); }
-    finally { setBusy(false); }
-  }, [selectedVolumeId, ensureAdministrator]);
+    } catch (cause) {
+      if (generation === catalogGeneration.current && requestId === catalogBuildRequest.current) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setStatus("Unable to build the catalog.");
+      }
+    } finally {
+      if (requestId === catalogBuildRequest.current) setBusy(false);
+    }
+  }, [selectedVolumeId, ensureAdministrator, clearCatalog]);
 
   const searchRequestId = useRef(0);
   useEffect(() => {

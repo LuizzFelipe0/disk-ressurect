@@ -97,6 +97,54 @@ describe("useRecoveryController backend lifecycle", () => {
     expect(result.current.catalog?.diskValidation).toEqual(diskValidation);
   });
 
+  it("clears the previous catalog selection as soon as a rebuild starts", async () => {
+    const previousCatalog = {
+      recordCount: 1,
+      availableExtensions: [".jpg"],
+      roots: [{ id: "old-root", name: "Old", path: "Old", isDirectory: true, sizeBytes: 0, hasChildren: false }],
+    };
+    scanCatalog.mockResolvedValueOnce(previousCatalog);
+    let finishBuild!: (value: typeof previousCatalog) => void;
+    scanCatalog.mockReturnValueOnce(new Promise((resolve) => { finishBuild = resolve; }));
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+    await act(async () => { await result.current.buildCatalog(); });
+    act(() => result.current.selectAll());
+    expect(result.current.selectedIds).toEqual(new Set(["old-root"]));
+
+    let pendingBuild!: Promise<void>;
+    act(() => { pendingBuild = result.current.buildCatalog(); });
+    await waitFor(() => expect(result.current.catalog).toBeNull());
+    expect(result.current.selectedIds).toEqual(new Set());
+
+    await act(async () => {
+      finishBuild({ ...previousCatalog, roots: [{ ...previousCatalog.roots[0], id: "new-root" }] });
+      await pendingBuild;
+    });
+    expect(result.current.catalog?.roots[0].id).toBe("new-root");
+  });
+
+  it("ignores a catalog response after its source volume changes", async () => {
+    let finishBuild!: (value: { recordCount: number; availableExtensions: string[]; roots: never[] }) => void;
+    scanCatalog.mockReturnValueOnce(new Promise((resolve) => { finishBuild = resolve; }));
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+
+    let pendingBuild!: Promise<void>;
+    act(() => { pendingBuild = result.current.buildCatalog(); });
+    await waitFor(() => expect(scanCatalog).toHaveBeenCalledTimes(1));
+    act(() => result.current.selectVolume("2:8192"));
+    await act(async () => {
+      finishBuild({ recordCount: 1, availableExtensions: [".jpg"], roots: [] });
+      await pendingBuild;
+    });
+
+    expect(result.current.selectedVolumeId).toBe("2:8192");
+    expect(result.current.catalog).toBeNull();
+  });
+
   it("passes the selected bounded carving budgets to the catalog service", async () => {
     scanCatalog.mockResolvedValue({ recordCount: 1, availableExtensions: [".jpg"], roots: [] });
     const { result } = renderHook(() => useRecoveryController());
