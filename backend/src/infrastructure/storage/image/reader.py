@@ -36,6 +36,7 @@ class RawImageReader:
                 display_name=os.path.basename(self.path) or self.path,
                 size_bytes=self.size_bytes,
                 bytes_per_sector=self.bytes_per_sector,
+                locator=self.path,
             )
         except Exception:
             os.close(self._fd)

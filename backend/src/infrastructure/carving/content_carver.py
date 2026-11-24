@@ -9,7 +9,7 @@ from typing import Callable, Iterable
 import zlib
 
 from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
-from infrastructure.carving.validators.additional import (
+from infrastructure.formats.additional import (
     COMPOUND_FILE_SIGNATURE,
     MAX_ISO_BMFF_BOXES,
     RTF_SIGNATURE,
@@ -18,7 +18,7 @@ from infrastructure.carving.validators.additional import (
     is_plausible_office_local_header,
     validate_additional_candidate,
 )
-from infrastructure.carving.validators.primary import (
+from infrastructure.formats.primary import (
     jpeg_header_status,
     png_decoded_size,
     valid_jpeg,

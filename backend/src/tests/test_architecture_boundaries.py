@@ -73,7 +73,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertTrue(all(visit(feature) for feature in graph), graph)
 
     def test_catalog_and_signature_validator_share_the_supported_format_contract(self):
-        from infrastructure.filesystems.ntfs.readers.file_signature_validator import (
+        from infrastructure.formats.signature import (
             FileSignatureValidator,
         )
         from modules.catalog.service import CatalogService
@@ -82,6 +82,22 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             FileSignatureValidator.supported_extensions(),
             CatalogService.supported_extensions(),
         )
+
+    def test_format_validators_do_not_import_discovery_or_filesystem_adapters(self):
+        violations = []
+        formats_root = SRC_ROOT / "infrastructure" / "formats"
+        for path in formats_root.rglob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                imported = node.module if isinstance(node, ast.ImportFrom) else None
+                names = [item.name for item in node.names] if isinstance(node, ast.Import) else []
+                targets = ([imported] if imported else []) + names
+                if any(
+                    target.startswith(("infrastructure.carving", "infrastructure.filesystems"))
+                    for target in targets
+                ):
+                    violations.append(f"{path.relative_to(SRC_ROOT)}:{node.lineno}")
+        self.assertEqual([], violations)
 
 
 if __name__ == "__main__":

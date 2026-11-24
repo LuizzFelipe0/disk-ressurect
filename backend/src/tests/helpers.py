@@ -1,6 +1,6 @@
 from infrastructure.disk.output_safety import OutputSafetyGuard
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
-from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
 from modules.recovery.service import RecoveryWorkflow
 import struct

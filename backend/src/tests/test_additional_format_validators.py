@@ -6,7 +6,7 @@ import zipfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from infrastructure.carving.validators.additional import (
+from infrastructure.formats.additional import (
     ADDITIONAL_SIGNATURES,
     COMPOUND_FILE_SIGNATURE,
     RTF_SIGNATURE,

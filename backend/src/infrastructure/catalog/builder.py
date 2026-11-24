@@ -19,7 +19,7 @@ from infrastructure.filesystems.ntfs.artifacts.recycle_bin import RecycleBinReco
 from infrastructure.filesystems.ntfs.artifacts.usn_journal import UsnJournalEvidenceScanner
 from infrastructure.filesystems.ntfs.artifacts.usn_mft_correlator import UsnMftCorrelator
 from infrastructure.filesystems.ntfs.artifacts.logfile import NTFSLogFileEvidenceScanner
-from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from infrastructure.formats.signature import FileSignatureValidator
 from modules.catalog.entities import CarvedContentRecord
 
 

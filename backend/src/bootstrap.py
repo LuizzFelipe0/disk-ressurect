@@ -12,7 +12,7 @@ from infrastructure.catalog.builder import CatalogBuilder
 from infrastructure.disk.factory import disk_reader_factory
 from infrastructure.disk.output_safety import OutputSafetyGuard
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
-from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
 from modules.catalog.service import CatalogService
 from modules.disk.service import DiskService

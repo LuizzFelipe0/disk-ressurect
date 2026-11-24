@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from infrastructure.carving.validators.primary import (
+from infrastructure.formats.primary import (
     jpeg_header_status,
     png_decoded_size,
     valid_jpeg,

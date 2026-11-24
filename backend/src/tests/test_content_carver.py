@@ -10,8 +10,8 @@ import zipfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from infrastructure.carving.content_carver import RawContentCarver
-from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
-from infrastructure.carving.validators.additional import COMPOUND_FILE_SIGNATURE
+from infrastructure.formats.signature import FileSignatureValidator
+from infrastructure.formats.additional import COMPOUND_FILE_SIGNATURE
 from infrastructure.recovery.extractor import Extractor
 
 
