@@ -40,10 +40,12 @@ class CatalogMapper:
             low_confidence_carving=getattr(snapshot, "low_confidence_carving_summary", None),
             recycle_bin_recovery=getattr(snapshot, "recycle_bin_summary", None),
             usn_journal_evidence=getattr(snapshot, "usn_journal_summary", None),
+            ntfs_log_file_evidence=getattr(snapshot, "ntfs_log_file_summary", None),
         )
 
     @staticmethod
     def node(node, node_ids_by_identity):
+        extent_resolution = getattr(node.record, "data_extent_resolution", None)
         return CatalogNodeDto(
             id=node_ids_by_identity[id(node)],
             name=node.record.name,
@@ -66,6 +68,18 @@ class CatalogMapper:
             original_path=getattr(node.record, "original_path", None),
             deletion_timestamp_utc=getattr(node.record, "deletion_timestamp_utc", None),
             original_size_bytes=getattr(node.record, "recycle_bin_original_size_bytes", None),
+            data_extent_resolution=(
+                extent_resolution
+                if extent_resolution in {"resolved", "inconclusive"} else None
+            ),
+            data_extent_resolution_reason=getattr(
+                node.record, "data_extent_resolution_reason", None,
+            ),
+            data_extent_count=(
+                int(getattr(node.record, "data_extent_count", 0))
+                if extent_resolution == "resolved"
+                else None
+            ),
         )
 
     @staticmethod
