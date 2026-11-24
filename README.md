@@ -19,39 +19,59 @@ Unlike basic file carvers that recover files without names, this engine reconstr
 
 ## Architecture
 
-The Python backend is organized as feature modules over a small set of low-level NTFS and disk primitives:
+The Python backend separates feature policy from platform and filesystem I/O. Feature modules use a consistent small-file layout; concrete readers and scanners live in infrastructure and are composed by the bootstrap:
 
 ```text
 backend/src/
 ├── modules/
-│   ├── commands/       # RecoveryCommandHandler, command DTOs and session state
-│   ├── disk_discovery/ # Disk discovery service, DTOs, models, ports and repository contract
-│   ├── catalog/        # Catalog service, DTOs and catalog snapshot model
-│   └── recovery/       # Recovery service, planner, extractor, DTOs and result models
+│   ├── disk/           # Physical disk, partition and NTFS volume entities and discovery service
+│   ├── deep_scan/      # Resumable partition scans and carving checkpoint policy
+│   ├── validation/     # Full-disk audit policy, DTOs and validation snapshot contract
+│   ├── catalog/        # Recovery catalog entities, DTOs and read-only search service
+│   └── recovery/       # Recovery policy, planner, DTOs and result entities
 ├── infrastructure/
-│   └── persistence/    # JSON deep-scan repository implementation
-├── disk/
-│   ├── access/         # Raw physical-disk reads
-│   ├── enumeration/    # Windows and Linux disk inventory
-│   ├── partition_table/# MBR, EBR and GPT parsing
-│   ├── ntfs_discovery/ # NTFS volume scanning and MFT-anchor resolution
-│   ├── scanning/       # Chunk sources, signatures and MFT-anchor scanning
-│   ├── deep_scan/      # Lost-partition search, orphan-MFT and bounded content carving
-│   ├── safety/         # Keep recovery output off the source disk
-│   ├── models.py       # PhysicalDisk, PartitionEntry and NTFSVolume
-│   └── inventory.py    # DiskInventory composition facade
-├── ntfs/               # MFT parsing, VFS construction and extraction collaborators
-├── domain/              # Framework-independent recovery rules
-└── backend_orchestrator.py # Composition root and JSON-lines process adapter
+│   ├── disk/            # Windows/Linux enumeration, raw reads and destination safety
+│   ├── partition_tables/ # MBR, EBR and GPT scanning
+│   ├── filesystems/ntfs/ # NTFS metadata, MFT, tree, allocation and artifact readers
+│   ├── carving/         # Bounded content-signature scanning
+│   ├── catalog/         # NTFS catalog builder
+│   ├── recovery/        # File extraction adapter
+│   └── persistence/     # JSON deep-scan and validation snapshot repository
+├── application/         # Session state and catalog-scan workflow
+├── presentation/        # Command handler and JSON-lines transport
+└── bootstrap.py         # Composition root and process entry point
 ```
 
-Each feature module owns its use-case service and the contracts/models specific to that feature. `RecoveryCommandHandler` maps validated command DTOs to those services and returns stable response DTOs. Repository interfaces are used for persistence; physical sector access is represented by replaceable disk-reader ports, not by a CRUD repository abstraction. The entry point only composes production dependencies and adapts JSON lines to commands.
+Feature modules contain only `entities.py`, `dto.py`, `service.py`, `repository.py` and `exceptions.py` where needed. Disk inventory, catalog building and extraction adapters depend inward on feature entities; feature modules do not import infrastructure. `RecoveryCommandHandler` maps validated command DTOs to services and returns stable response DTOs. Persistence contracts stay in their owning feature, while the bootstrap composes production implementations and the JSON-lines process adapter.
 
-The low-level modules are deliberately separate from the feature slices: `disk/` enumerates physical disks on Windows and Linux, parses MBR/GPT, discovers NTFS partitions and reads raw sectors; `domain/` owns catalog eligibility and hierarchical selection; and `ntfs/` parses MFT records and builds the virtual tree. The recovery module composes the NTFS content reader, signature validator and output writer. The catalog can reuse audited orphan records and perform separate bounded scans of trusted `$Bitmap`-free ranges and low-confidence orphan data runs.
+The disk feature owns physical-disk, partition and volume identity. Deep scan owns resumable scan cursors; validation owns audit and cached-evidence policy. NTFS parsing, catalog construction, carving, raw I/O and output writing remain infrastructure implementations. Recovery policy composes those adapters without depending on their concrete modules. Catalog audit handoff continues to reuse orphan records and bounded carving ranges from the same disk audit.
 
 * frontend/src/ (React client): Contains typed domain contracts, services, hooks, reusable styled-components and page composition.
 * frontend/electron/ (Desktop shell): Owns Electron main/preload processes and the context-isolated IPC contract.
 * `DiskInventory` composes discovery components. Deep scan searches a bounded disk prefix for a validated `$MFT` record zero before falling back to NTFS boot-sector scanning.
+
+### Backend responsibilities and data flow
+
+The product reads NTFS media to reconstruct directory metadata and recover selected file contents; disk scans remain read-only, while output validation keeps recovered files away from the source disk. The desktop stack is Electron, React, TypeScript and Vite, with the recovery engine in Python.
+
+```mermaid
+flowchart LR
+    E[Electron and React] -->|JSON Lines| P[Presentation controller]
+    P --> A[Application workflow]
+    A --> D[Disk and deep scan services]
+    A --> V[Validation service and snapshots]
+    A --> C[Catalog builder]
+    C --> N[NTFS and carving infrastructure]
+    P --> R[Recovery service]
+    R --> X[Recovery extractor and output safety]
+    D --> I[Disk I/O infrastructure]
+    V --> I
+    I --> S[Read-only source media]
+```
+
+The catalog and recovery modules share only catalog entities and the supported-format contract. Platform disk access, NTFS parsing, catalog construction and extraction are infrastructure implementations injected by `bootstrap.py`. This keeps recovery algorithms in their existing implementation while making feature policy independent of Windows/Linux I/O.
+
+The JSON cache path and serialized checkpoint fields remain unchanged; no cache migration is required. Repository round-trip tests cover deep-scan and carving checkpoints. Unit tests use deterministic in-memory media, not physical recovery images. The Windows suite cannot exercise Linux ownership and symlink primitives, and the NTFS catalog builder remains the largest infrastructure class. Next validation should compare real disk images on Windows and Linux and record elapsed time, memory, read calls and bytes read before making performance claims.
 
 Frontend pages and components each live in a folder named after the unit. Keep the React entry point in `index.tsx` and its styled-components definitions in a separate `style.ts` file in the same folder.
 
@@ -95,7 +115,7 @@ The NTFS recovery pipeline is shared across platforms. Linux support uses sysfs 
 
 ## Electron development UI
 
-The Electron app keeps the recovery engine in Python and starts `backend/src/backend_orchestrator.py` as a local child process. You do not start a separate Python server. From the `frontend` directory, install the dependencies and launch the development UI:
+The Electron app keeps the recovery engine in Python and starts `backend/src/bootstrap.py` as a local child process. You do not start a separate Python server. From the `frontend` directory, install the dependencies and launch the development UI:
 
 ```powershell
 npm install
@@ -145,3 +165,5 @@ Push-Location frontend
 npm test
 Pop-Location
 ```
+
+The seven platform-gated skips in the Windows suite are intentional: `test_deep_scan_repository.py::test_cache_reader_rejects_symlinks_instead_of_reading_their_targets` exercises Linux `O_NOFOLLOW`; five tests in `test_linux_user_ownership.py` exercise Linux ownership calls, `openat` protections and directory descriptors; and `test_recovery_output_writer.py::test_output_parent_symlinks_are_rejected_before_creating_descendants` exercises Linux symlink protections. Run the suite on Linux to execute those cases. `test_architecture_boundaries.py` uses the Python AST to keep feature modules on the allowed file layout, block imports from infrastructure, and detect feature-module cycles.
