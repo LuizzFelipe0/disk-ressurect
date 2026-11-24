@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-import re
 from typing import Callable, Iterable
 import zlib
 
@@ -18,6 +17,12 @@ from disk.deep_scan.additional_format_validators import (
     ZIP_LOCAL_FILE_HEADER,
     is_plausible_office_local_header,
     validate_additional_candidate,
+)
+from disk.deep_scan.primary_format_validators import (
+    jpeg_header_status,
+    png_decoded_size,
+    valid_jpeg,
+    valid_pdf,
 )
 
 
@@ -799,7 +804,7 @@ class RawContentCarver:
                 )
             content.extend(data)
             bytes_read += len(data)
-            header_status = self._jpeg_header_status(content)
+            header_status = jpeg_header_status(content)
             if header_status is False:
                 return None, bytes_read, None
             header_valid = header_status is True
@@ -809,7 +814,7 @@ class RawContentCarver:
                     break
                 end = marker + 2
                 candidate = bytes(content[:end])
-                if self._valid_jpeg(candidate):
+                if valid_jpeg(candidate):
                     return candidate, bytes_read, None
                 # EOI-like bytes may occur inside a length-delimited APP or
                 # other segment. Keep reading and test later marker positions.
@@ -820,56 +825,6 @@ class RawContentCarver:
         if bytes_read >= byte_budget:
             return None, bytes_read, "candidate_budget"
         return None, bytes_read, None
-
-    @classmethod
-    def _jpeg_header_status(cls, data):
-        """Return None for incomplete headers, False for invalid, True after SOS."""
-        if len(data) < 2:
-            return None
-        if data[:2] != b"\xff\xd8":
-            return False
-        pos = 2
-        has_frame = False
-        while pos < len(data):
-            if data[pos] != 0xFF:
-                return False
-            while pos < len(data) and data[pos] == 0xFF:
-                pos += 1
-            if pos >= len(data):
-                return None
-            marker = data[pos]
-            pos += 1
-            if marker in (0xD8, 0x00, 0xD9):
-                return False
-            if 0xD0 <= marker <= 0xD7 or marker == 0x01:
-                continue
-            if pos + 2 > len(data):
-                return None
-            segment_length = int.from_bytes(data[pos:pos + 2], "big")
-            if segment_length < 2:
-                return False
-            segment_end = pos + segment_length
-            if segment_end > len(data):
-                return None
-            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
-                          0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-                if segment_length < 8:
-                    return False
-                height = int.from_bytes(data[pos + 3:pos + 5], "big")
-                width = int.from_bytes(data[pos + 5:pos + 7], "big")
-                components = data[pos + 7]
-                if (height == 0 or width == 0 or components == 0
-                        or segment_length != 8 + 3 * components):
-                    return False
-                has_frame = True
-            if marker == 0xDA:
-                components = data[pos + 2] if segment_length >= 3 else 0
-                if (components == 0 or segment_length != 6 + 2 * components
-                        or not has_frame):
-                    return False
-                return True
-            pos = segment_end
-        return None
 
     def _read_png(self, offset, range_end, byte_budget):
         content = bytearray()
@@ -960,7 +915,7 @@ class RawContentCarver:
                     return None, bytes_read, limit_reason
                 if color_type in (0, 4) and seen_plte:
                     return None, bytes_read, limit_reason
-                expected_decoded_size = self._png_decoded_size(
+                expected_decoded_size = png_decoded_size(
                     width, height, bit_depth, color_type, interlace,
                 )
                 if expected_decoded_size > self.max_decoded_png_bytes:
@@ -993,25 +948,6 @@ class RawContentCarver:
                 seen_iend = True
         return bytes(content), bytes_read, limit_reason
 
-    @staticmethod
-    def _png_decoded_size(width, height, bit_depth, color_type, interlace):
-        channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
-        bits_per_pixel = channels * bit_depth
-        if not interlace:
-            return ((width * bits_per_pixel + 7) // 8 + 1) * height
-        passes = (
-            (0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4),
-            (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2),
-        )
-        total = 0
-        for x_start, y_start, x_step, y_step in passes:
-            pass_width = max(0, (width - x_start + x_step - 1) // x_step)
-            pass_height = max(0, (height - y_start + y_step - 1) // y_step)
-            if pass_width and pass_height:
-                row_bytes = (pass_width * bits_per_pixel + 7) // 8
-                total += (row_bytes + 1) * pass_height
-        return total
-
     def _read_pdf(self, offset, range_end, byte_budget):
         content = bytearray()
         cursor = offset
@@ -1034,146 +970,13 @@ class RawContentCarver:
             if marker >= 0:
                 candidate_end = marker + len(b"%%EOF")
                 candidate = bytes(content[:candidate_end]).rstrip(b"\x00\t\n\x0c\r ")
-                if self._valid_pdf(candidate):
+                if valid_pdf(candidate):
                     return candidate, bytes_read, None
         if len(content) >= self.max_file_bytes:
             return None, bytes_read, "file_size"
         if bytes_read >= byte_budget:
             return None, bytes_read, "candidate_budget"
         return None, bytes_read, None
-
-    @staticmethod
-    def _valid_pdf(data):
-        if not data.startswith(b"%PDF-") or not re.search(rb"%PDF-[0-9]\.[0-9]", data[:16]):
-            return False
-        eof = data.rfind(b"%%EOF")
-        if eof < 0:
-            return False
-        startxref = list(re.finditer(rb"startxref\s+(\d+)\s*$", data[:eof]))
-        if not startxref:
-            return False
-        xref_offset = int(startxref[-1].group(1))
-        if xref_offset < 0 or xref_offset >= eof:
-            return False
-        return RawContentCarver._valid_classic_xref(data[xref_offset:eof], xref_offset)
-
-    @staticmethod
-    def _valid_classic_xref(data, xref_offset):
-        """Validate classic xref subsections and the trailer's required references.
-
-        Xref streams are conservatively rejected because validating their
-        compressed entry table requires a separate bounded decoder.
-        """
-        lines = data.splitlines()
-        if not lines or lines[0].strip() != b"xref":
-            return False
-        index = 1
-        maximum_object_number = 0
-        while index < len(lines):
-            line = lines[index].strip()
-            index += 1
-            if not line:
-                continue
-            if line == b"trailer":
-                dictionary_lines = []
-                while index < len(lines):
-                    dictionary_lines.append(lines[index])
-                    index += 1
-                    if b">>" in lines[index - 1]:
-                        break
-                dictionary = b"\n".join(dictionary_lines)
-                size_match = re.search(rb"/Size\s+(\d+)\b", dictionary)
-                root_match = re.search(rb"/Root\s+(\d+)\s+(\d+)\s+R\b", dictionary)
-                if not size_match or not root_match or b"<<" not in dictionary or b">>" not in dictionary:
-                    return False
-                size = int(size_match.group(1))
-                root_number, root_generation = map(int, root_match.groups())
-                return (size > maximum_object_number and 0 < root_number < size
-                        and root_generation <= 65535)
-
-            subsection = re.fullmatch(rb"(\d+)\s+(\d+)", line)
-            if not subsection:
-                return False
-            first, count = map(int, subsection.groups())
-            if count <= 0 or first + count > 10_000_000:
-                return False
-            maximum_object_number = max(maximum_object_number, first + count - 1)
-            for _ in range(count):
-                if index >= len(lines):
-                    return False
-                entry = re.fullmatch(rb"\s*(\d{10})\s+(\d{5})\s+([nf])\s*", lines[index])
-                index += 1
-                if not entry:
-                    return False
-                offset, generation = int(entry.group(1)), int(entry.group(2))
-                if generation > 65535 or (entry.group(3) == b"n" and offset >= xref_offset):
-                    return False
-        return False
-
-    @staticmethod
-    def _valid_jpeg(data: bytes) -> bool:
-        """Validate JPEG marker lengths, at least one frame/scan, and EOI."""
-        if len(data) < 12 or not data.startswith(b"\xff\xd8") or not data.endswith(b"\xff\xd9"):
-            return False
-        pos = 2
-        has_frame = False
-        has_scan = False
-        length = len(data)
-        while pos < length:
-            if data[pos] != 0xFF:
-                return False
-            while pos < length and data[pos] == 0xFF:
-                pos += 1
-            if pos >= length:
-                return False
-            marker = data[pos]
-            pos += 1
-            if marker == 0xD9:
-                return has_frame and has_scan and pos == length
-            if marker in (0xD8, 0x00):
-                return False
-            if 0xD0 <= marker <= 0xD7 or marker == 0x01:
-                continue
-            if pos + 2 > length:
-                return False
-            segment_length = int.from_bytes(data[pos:pos + 2], "big")
-            if segment_length < 2 or pos + segment_length > length:
-                return False
-            segment_end = pos + segment_length
-            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
-                          0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
-                if segment_length < 8:
-                    return False
-                height = int.from_bytes(data[pos + 3:pos + 5], "big")
-                width = int.from_bytes(data[pos + 5:pos + 7], "big")
-                components = data[pos + 7]
-                if height == 0 or width == 0 or components == 0 or segment_length != 8 + 3 * components:
-                    return False
-                has_frame = True
-            if marker == 0xDA:
-                components = data[pos + 2] if segment_length >= 3 else 0
-                if components == 0 or segment_length != 6 + 2 * components:
-                    return False
-                has_scan = True
-                pos = segment_end
-                while pos < length:
-                    if data[pos] != 0xFF:
-                        pos += 1
-                        continue
-                    marker_start = pos
-                    while pos < length and data[pos] == 0xFF:
-                        pos += 1
-                    if pos >= length:
-                        return False
-                    entropy_marker = data[pos]
-                    if entropy_marker == 0x00 or 0xD0 <= entropy_marker <= 0xD7:
-                        pos += 1
-                        continue
-                    pos = marker_start
-                    break
-                continue
-            pos = segment_end
-        return False
 
     @staticmethod
     def _merge_ranges(ranges, disk_size):
