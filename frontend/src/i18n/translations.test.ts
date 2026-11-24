@@ -11,6 +11,8 @@ describe("application translations", () => {
       expect(translate(language, "includeOrphaned")).toBeTruthy();
       expect(translate(language, "carvingScanBudget")).toBeTruthy();
       expect(translate(language, "carvingMaxFiles")).toBeTruthy();
+      expect(translate(language, "carvingCandidateReadBudget")).toBeTruthy();
+      expect(translate(language, "carvingCandidateRead1024")).toMatch(/1 GiB|1 Gio|1 GB|1 吉比字节/);
       expect(translate(language, "carvingRetainedBudget")).toBeTruthy();
       expect(translate(language, "usnMftCorrelationLimitReached")).toBeTruthy();
       expect(translate(language, "usnMftRecoverySourceLabel")).toBeTruthy();
