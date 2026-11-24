@@ -16,6 +16,7 @@ from ntfs.tree_builder import FileNode, TreeBuilder
 from ntfs.recycle_bin import RecycleBinRecoveryHelper
 from ntfs.usn_journal import UsnJournalEvidenceScanner
 from ntfs.usn_mft_correlator import UsnMftCorrelator
+from ntfs.logfile import NTFSLogFileEvidenceScanner
 
 
 class CatalogService:
@@ -41,12 +42,15 @@ class CatalogService:
                 volume.fragments_as_dicts(),
                 volume.partition_offset,
                 volume.record_size,
+                cluster_size=volume.cluster_size,
+                volume_size_bytes=volume.partition_size,
             )
             nodes = builder.build(progress_callback=progress_callback, phase_callback=phase_callback)
             content_carving_summary = None
             low_confidence_carving_summary = None
             recycle_bin_summary = None
             usn_journal_summary = None
+            ntfs_log_file_summary = None
             if include_orphaned:
                 from modules.recovery.extractor import Extractor
 
@@ -84,6 +88,9 @@ class CatalogService:
                     volume.cluster_size,
                     volume_size_bytes=volume.partition_size,
                 )
+                ntfs_log_file_summary = NTFSLogFileEvidenceScanner().scan(
+                    builder.nodes.values(), evidence_reader.iter_chunks,
+                ).to_dict()
                 recycle_bin_summary = self._add_recycle_bin_aliases(
                     builder, evidence_reader,
                 )
@@ -121,6 +128,7 @@ class CatalogService:
                 low_confidence_carving_summary=low_confidence_carving_summary,
                 recycle_bin_summary=recycle_bin_summary,
                 usn_journal_summary=usn_journal_summary,
+                ntfs_log_file_summary=ntfs_log_file_summary,
             )
         finally:
             disk.close()
