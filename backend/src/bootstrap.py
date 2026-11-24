@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from infrastructure.disk.inventory import DiskInventory
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.disk.output_safety import OutputSafetyGuard
 from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from infrastructure.filesystems.ntfs.readers.content_reference_store import NTFSContentReferenceStore

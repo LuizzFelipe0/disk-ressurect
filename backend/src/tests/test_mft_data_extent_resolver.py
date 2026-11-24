@@ -10,7 +10,7 @@ from modules.disk.entities import NTFSVolume
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExtentResolver
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
-from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from modules.catalog.dto import CatalogMapper
 from helpers import make_recovery_workflow

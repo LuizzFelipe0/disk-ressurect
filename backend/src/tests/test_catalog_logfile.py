@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
 from modules.catalog.dto import CatalogMapper
-from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
 from test_ntfs_logfile import _log_page
 
@@ -68,7 +68,7 @@ class CatalogLogFileEvidenceTests(unittest.TestCase):
         FakeTreeBuilder.nodes = {record.index: logfile}
         FakeTreeBuilder.root_nodes = [logfile]
 
-        with patch("infrastructure.catalog.builder.TreeBuilder", FakeTreeBuilder):
+        with patch("infrastructure.filesystems.ntfs.catalog_builder.TreeBuilder", FakeTreeBuilder):
             with patch("infrastructure.recovery.extractor.Extractor.supported_extensions", return_value=(".jpg",)):
                 snapshot = CatalogBuilder(lambda _number: disk).build(
                     volume,

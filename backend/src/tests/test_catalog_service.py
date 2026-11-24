@@ -7,8 +7,8 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
-from infrastructure.catalog.builder import CatalogContentValidator
-from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogContentValidator
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.storage.image.reader import RawImageReader
 from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from helpers import make_recovery_workflow
@@ -127,7 +127,7 @@ class CatalogServiceTests(unittest.TestCase):
             opened.append(disk)
             return disk
 
-        with patch("infrastructure.catalog.builder.GhostMFTCarver") as carver_type:
+        with patch("infrastructure.filesystems.ntfs.catalog_builder.GhostMFTCarver") as carver_type:
             snapshot = CatalogBuilder(disk_factory).build(volume, include_orphaned=True)
 
         carver_type.assert_called_once_with(opened[0])
@@ -150,7 +150,7 @@ class CatalogServiceTests(unittest.TestCase):
             return disk
 
         with patch("infrastructure.recovery.extractor.Extractor.supported_extensions", return_value=(".jpg",)):
-            with patch("infrastructure.catalog.builder.GhostMFTCarver") as carver_type:
+            with patch("infrastructure.filesystems.ntfs.catalog_builder.GhostMFTCarver") as carver_type:
                 snapshot = CatalogBuilder(disk_factory).build(
                     volume,
                     include_orphaned=True,

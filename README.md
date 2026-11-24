@@ -34,7 +34,6 @@ backend/src/
 │   ├── partition_tables/ # MBR, EBR and GPT scanning
 │   ├── filesystems/ntfs/ # NTFS metadata, MFT, tree, allocation and artifact readers
 │   ├── carving/         # Bounded content-signature scanning
-│   ├── catalog/         # NTFS catalog builder
 │   ├── recovery/        # File extraction adapter
 │   └── persistence/     # JSON deep-scan and validation snapshot repository
 ├── application/         # Session state and catalog-scan workflow

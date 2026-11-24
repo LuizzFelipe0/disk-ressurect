@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
 from modules.catalog.dto import CatalogMapper
-from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.filesystems.ntfs.mft.parser import NTFSDataStream
 from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
@@ -131,13 +131,13 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
         FakeTreeBuilder.nodes = nodes
         FakeTreeBuilder.root_nodes = roots
         patches = [
-            patch("infrastructure.catalog.builder.TreeBuilder", FakeTreeBuilder),
-            patch("infrastructure.catalog.builder.GhostMFTCarver"),
+            patch("infrastructure.filesystems.ntfs.catalog_builder.TreeBuilder", FakeTreeBuilder),
+            patch("infrastructure.filesystems.ntfs.catalog_builder.GhostMFTCarver"),
             patch("infrastructure.recovery.extractor.Extractor.supported_extensions",
                   return_value=(".jpg",)),
         ]
         if reader_factory is not None:
-            patches.append(patch("infrastructure.catalog.builder.NTFSFileContentReader", reader_factory))
+            patches.append(patch("infrastructure.filesystems.ntfs.catalog_builder.NTFSFileContentReader", reader_factory))
         for active in patches:
             active.start()
             self.addCleanup(active.stop)
