@@ -21,8 +21,9 @@ export interface VolumeInfo {
 
 export interface CarvingOptions {
   scanBudgetGiB: 1 | 4 | 16 | 64;
-  maxFiles: 256 | 512 | 1024 | 2048 | 4096;
+  maxFiles: 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384;
   maxRetainedMiB: 128 | 256 | 512;
+  maxCandidateReadMiBPerFormat: 256 | 512 | 1024;
 }
 
 export interface CatalogNode {
