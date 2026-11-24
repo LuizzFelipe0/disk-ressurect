@@ -1,16 +1,16 @@
 import os
 import base64
 from typing import Callable
-from disk.access.ports import DiskReaderFactory
+from modules.disk.service import DiskReaderFactory
 
-from disk.safety.output_safety import OutputSafetyGuard
-from disk.platform import disk_reader_factory
-from disk.models import NTFSVolume
+from infrastructure.disk.output_safety import OutputSafetyGuard
+from infrastructure.disk.factory import disk_reader_factory
+from modules.disk.entities import NTFSVolume
 from modules.recovery.extractor import Extractor
 from modules.catalog.models import RecoveryCatalogSnapshot
 from modules.recovery.models import ExtractionSummary, RecoveryProgress
-from ntfs.file_content_reader import NTFSFileContentReader
-from ntfs.file_signature_validator import FileSignatureValidator
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
 
 
 ProgressCallback = Callable[[RecoveryProgress], None]

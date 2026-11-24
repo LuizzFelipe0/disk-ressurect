@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 
-from ntfs.file_signature_validator import FileSignatureValidator
+from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
 
 
 @dataclass(frozen=True)

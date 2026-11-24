@@ -12,7 +12,7 @@ from modules.disk.service import DiskDiscoveryService
 from modules.disk.entities import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
+from modules.deep_scan.entities import CarvingCheckpoint
 from presentation.controller import RecoveryCommandHandler
 from modules.catalog.service import CatalogService
 

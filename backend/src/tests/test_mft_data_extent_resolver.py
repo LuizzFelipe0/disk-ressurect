@@ -7,9 +7,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.disk.entities import NTFSVolume
-from ntfs.file_content_reader import NTFSFileContentReader
-from ntfs.mft_data_extent_resolver import MFTDataExtentResolver
-from ntfs.mft_parser import MFTRecord
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExtentResolver
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 from modules.catalog.service import CatalogService
 from modules.catalog.mapper import CatalogMapper
 from modules.recovery.service import RecoveryWorkflow

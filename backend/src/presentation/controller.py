@@ -2,9 +2,9 @@ from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, 
 from modules.catalog.mapper import CatalogMapper
 from application.session import RecoverySession
 from application.workflows.catalog_scan import CatalogScanWorkflow
-from modules.disk_discovery.dto import DiskValidationRequestDto, PartitionScanRequestDto
-from modules.disk_discovery.mapper import DiskDiscoveryMapper
-from modules.disk_discovery.service import DiskDiscoveryService
+from modules.disk.dto import DiskValidationRequestDto, PartitionScanRequestDto
+from modules.disk.dto import DiskDiscoveryMapper
+from modules.disk.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto, RecoveryResultDto
 from presentation.transport import (
     CommandErrorDto,

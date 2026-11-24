@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.disk.entities import NTFSVolume
 from modules.catalog.mapper import CatalogMapper
 from modules.catalog.service import CatalogService
-from ntfs.tree_builder import FileNode
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
 from test_ntfs_logfile import _log_page
 
 

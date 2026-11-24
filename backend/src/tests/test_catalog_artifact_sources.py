@@ -10,9 +10,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.disk.entities import NTFSVolume
 from modules.catalog.mapper import CatalogMapper
 from modules.catalog.service import CatalogService
-from ntfs.file_content_reader import NTFSFileContentReader
-from ntfs.mft_parser import NTFSDataStream
-from ntfs.tree_builder import FileNode
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.mft.parser import NTFSDataStream
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
 
 
 def _index_file(path, original_size):

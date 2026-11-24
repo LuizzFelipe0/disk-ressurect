@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.deep_scan.ghost_mft_carver import GhostMFTCarver
+from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
 from modules.disk.entities import NTFSVolume
-from ntfs.mft_parser import MFTRecord
-from ntfs.tree_builder import TreeBuilder
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
+from infrastructure.filesystems.ntfs.discovery.tree_builder import TreeBuilder
 
 
 def _resident_attribute(attribute_type, content):

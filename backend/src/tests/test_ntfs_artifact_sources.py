@@ -1,7 +1,7 @@
 import struct
 import unittest
 
-from ntfs.artifact_sources import RecycleBinIndexParser, UsnJournalParser
+from infrastructure.filesystems.ntfs.artifacts.sources import RecycleBinIndexParser, UsnJournalParser
 
 
 def _usn_v2(*, name="deleted.txt", reason=0x00000200, file_number=42,

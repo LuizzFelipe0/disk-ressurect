@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from disk.scanning.partition_scan import ScanCheckpoint
+from modules.deep_scan.entities import ScanCheckpoint
 
 
 @dataclass(frozen=True)

@@ -1,22 +1,22 @@
 import os
 import copy
 
-from disk.platform import disk_reader_factory
+from infrastructure.disk.factory import disk_reader_factory
 from domain.recovery_catalog import RecoveryCatalog
 from modules.catalog.models import RecoveryCatalogSnapshot
-from disk.access.ports import DiskReaderFactory
-from disk.deep_scan.ghost_mft_carver import GhostMFTCarver
-from disk.deep_scan.content_carver import RawContentCarver
+from modules.disk.service import DiskReaderFactory
+from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
+from infrastructure.carving.content_carver import RawContentCarver
 from modules.catalog.carved_candidate_catalog import CarvedCandidateCatalog
 from modules.catalog.content_validation import CatalogContentValidator
-from ntfs.cluster_allocation import ClusterAllocationEvidence
-from ntfs.artifact_models import has_path_component
-from ntfs.file_content_reader import NTFSFileContentReader
-from ntfs.tree_builder import FileNode, TreeBuilder
-from ntfs.recycle_bin import RecycleBinRecoveryHelper
-from ntfs.usn_journal import UsnJournalEvidenceScanner
-from ntfs.usn_mft_correlator import UsnMftCorrelator
-from ntfs.logfile import NTFSLogFileEvidenceScanner
+from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence
+from infrastructure.filesystems.ntfs.artifacts.models import has_path_component
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode, TreeBuilder
+from infrastructure.filesystems.ntfs.artifacts.recycle_bin import RecycleBinRecoveryHelper
+from infrastructure.filesystems.ntfs.artifacts.usn_journal import UsnJournalEvidenceScanner
+from infrastructure.filesystems.ntfs.artifacts.usn_mft_correlator import UsnMftCorrelator
+from infrastructure.filesystems.ntfs.artifacts.logfile import NTFSLogFileEvidenceScanner
 
 
 class CatalogService:

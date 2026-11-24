@@ -8,15 +8,15 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume, PhysicalDisk
-from disk.validation.auditor import DiskReadCoverage, DiskValidationAuditor
-from disk.inventory import DiskInventory
+from infrastructure.validation.disk_auditor import DiskReadCoverage, DiskValidationAuditor
+from infrastructure.disk.inventory import DiskInventory
 from presentation.controller import RecoveryCommandHandler
 from modules.disk.dto import DiskDto, DiskValidationRequestDto
 from modules.disk.dto import DiskDiscoveryMapper
 from modules.disk.service import DiskDiscoveryService
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from ntfs.mft_parser import MFTRecord
-from ntfs.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
+from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector
 
 
 def make_ntfs_record(name, *, resident_data=None, nonresident_runlist=None, nonresident_size=0):

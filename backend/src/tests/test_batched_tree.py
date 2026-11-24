@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from ntfs.tree_builder import TreeBuilder
+from infrastructure.filesystems.ntfs.discovery.tree_builder import TreeBuilder
 
 
 class FakeDisk:
@@ -53,7 +53,7 @@ class BatchedTreeTests(unittest.TestCase):
         )
         builder = TreeBuilder(disk, [{"phys": 4096, "count": 1, "base_idx": 0}], 512)
 
-        with patch("ntfs.tree_builder.MFTRecord", return_value=parsed) as parser:
+        with patch("infrastructure.filesystems.ntfs.discovery.tree_builder.MFTRecord", return_value=parsed) as parser:
             builder.build()
 
         self.assertEqual(parser.call_args.args[3], 4096)

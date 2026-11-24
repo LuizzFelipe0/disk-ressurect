@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from disk.models import NTFSVolume
+from modules.disk.entities import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 
 

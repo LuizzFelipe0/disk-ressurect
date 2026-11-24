@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
+from modules.deep_scan.entities import CarvingCheckpoint
 from application.workflows.catalog_scan import CatalogScanWorkflow
 
 

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ntfs.artifact_sources import UsnJournalEvidenceScanner
-from ntfs.file_content_reader import FileContentError, NTFSFileContentReader
-from ntfs.mft_parser import MFTRecord
+from infrastructure.filesystems.ntfs.artifacts.sources import UsnJournalEvidenceScanner
+from infrastructure.filesystems.ntfs.readers.file_content_reader import FileContentError, NTFSFileContentReader
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 
 
 def _align(value, boundary=8):

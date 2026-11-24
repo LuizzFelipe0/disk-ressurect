@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.enumeration.linux import LinuxDiskEnumerator
-from disk.linux_devices import LinuxBlockDeviceCatalog
+from infrastructure.disk.linux.enumeration import LinuxDiskEnumerator
+from infrastructure.disk.linux.devices import LinuxBlockDeviceCatalog
 
 
 class LinuxBlockDeviceCatalogTests(unittest.TestCase):
@@ -48,7 +48,7 @@ class LinuxBlockDeviceCatalogTests(unittest.TestCase):
             self.catalog.get_device(5)
 
     def test_enumerator_maps_sysfs_devices_to_application_disks(self):
-        with patch("disk.enumeration.linux.sys.platform", "linux"):
+        with patch("infrastructure.disk.linux.enumeration.sys.platform", "linux"):
             disks = LinuxDiskEnumerator(self.catalog).list_disks()
 
         self.assertEqual([disk.number for disk in disks], [0, 1])

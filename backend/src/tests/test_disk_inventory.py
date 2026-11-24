@@ -5,15 +5,15 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.inventory import DiskInventory
-from disk.deep_scan.lost_partition_scanner import LostPartitionScanner
-from disk.ntfs_discovery.anchor_resolver import MFTAnchorVolumeResolver
-from disk.ntfs_discovery.volume_scanner import NTFSVolumeScanner
-from disk.partition_table.scanner import PartitionTableScanner
+from infrastructure.disk.inventory import DiskInventory
+from infrastructure.disk.lost_partition_scanner import LostPartitionScanner
+from infrastructure.filesystems.ntfs.discovery.anchor_resolver import MFTAnchorVolumeResolver
+from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
+from infrastructure.partition_tables.scanner import PartitionTableScanner
 from modules.disk.entities import PhysicalDisk
-from disk.enumeration.windows import WindowsDiskEnumerator
-from disk.scanning.mft_anchor_scan import MFTAnchor, MFTAnchorScanner
-from ntfs.mft_parser import MFTRecord
+from infrastructure.disk.windows.enumeration import WindowsDiskEnumerator
+from infrastructure.filesystems.ntfs.discovery.mft_anchor_scan import MFTAnchor, MFTAnchorScanner
+from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 
 
 class MemoryDisk:
@@ -132,7 +132,7 @@ class DiskInventoryTests(unittest.TestCase):
             stdout = '[{"number":2,"model":"Archive","size":2000},{"number":0,"model":"Boot","size":1000}]'
 
         enumerator = WindowsDiskEnumerator(runner=lambda *args, **kwargs: Result())
-        with patch("disk.enumeration.windows.os.name", "nt"):
+        with patch("infrastructure.disk.windows.enumeration.os.name", "nt"):
             disks = enumerator.list_disks()
         self.assertEqual([disk.number for disk in disks], [0, 2])
         self.assertEqual(disks[0].model, "Boot")

@@ -1,7 +1,7 @@
 from typing import Protocol
 
 from modules.disk.entities import CachedDeepScan, NTFSVolume, PhysicalDisk
-from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
+from modules.deep_scan.entities import CarvingCheckpoint
 
 
 class DeepScanRepository(Protocol):

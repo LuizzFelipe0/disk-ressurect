@@ -6,10 +6,10 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from disk.inventory import DiskInventory
+from infrastructure.disk.inventory import DiskInventory
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.catalog.service import CatalogService
-from modules.disk_discovery.service import DiskDiscoveryService
+from modules.disk.service import DiskDiscoveryService
 from modules.recovery.service import RecoveryWorkflow
 from presentation.controller import RecoveryCommandHandler
 from presentation.transport import serve

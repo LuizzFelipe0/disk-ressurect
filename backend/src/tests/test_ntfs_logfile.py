@@ -4,7 +4,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ntfs.logfile import NTFSLogFileParser
+from infrastructure.filesystems.ntfs.artifacts.logfile import NTFSLogFileParser
 
 
 PAGE_SIZE = 4096

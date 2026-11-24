@@ -4,9 +4,9 @@ from typing import Callable, Iterable
 from modules.recovery.planner import RecoveryPlanner
 from modules.recovery.models import ExtractionResult
 from domain.recovery_catalog import RecoveryCatalog
-from ntfs.file_content_reader import FileContentError, NTFSFileContentReader
-from ntfs.file_signature_validator import FileSignatureValidator
-from ntfs.recovery_output_writer import RecoveryOutputWriter, UnsafeRecoveryPath
+from infrastructure.filesystems.ntfs.readers.file_content_reader import FileContentError, NTFSFileContentReader
+from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from infrastructure.filesystem.recovery_output_writer import RecoveryOutputWriter, UnsafeRecoveryPath
 
 
 class Extractor:

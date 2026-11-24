@@ -1,8 +1,21 @@
 from typing import Callable, Protocol
 
-from disk.scanning.partition_scan import ScanCheckpoint
+from modules.deep_scan.entities import ScanCheckpoint
 from modules.disk.entities import DiscoveredDisk, NTFSVolume, PhysicalDisk
 from modules.disk.repository import DeepScanRepository
+
+
+class DiskReader(Protocol):
+    size: int
+    bytes_per_sector: int
+
+    def read_at(self, offset: int, size: int) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class DiskReaderFactory(Protocol):
+    def __call__(self, disk_number: int) -> DiskReader: ...
 
 
 class DiskInventoryPort(Protocol):

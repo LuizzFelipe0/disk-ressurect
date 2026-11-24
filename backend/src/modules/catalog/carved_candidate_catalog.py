@@ -4,7 +4,7 @@ import hashlib
 import os
 
 from modules.catalog.carved_content_record import CarvedContentRecord
-from ntfs.tree_builder import FileNode
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
 
 
 class CarvedCandidateCatalog:

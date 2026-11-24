@@ -2,7 +2,7 @@ import struct
 import unittest
 from types import SimpleNamespace
 
-from ntfs.artifact_sources import RecycleBinRecoveryHelper
+from infrastructure.filesystems.ntfs.artifacts.sources import RecycleBinRecoveryHelper
 
 
 def _index_data(path, original_size):

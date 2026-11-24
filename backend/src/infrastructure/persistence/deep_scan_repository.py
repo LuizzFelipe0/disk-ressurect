@@ -10,10 +10,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from modules.disk_discovery.models import CachedDeepScan
-from disk.models import NTFSVolume
-from disk.scanning.partition_scan import ScanCheckpoint
-from disk.deep_scan.carving_checkpoint import CarvedCandidateReference, CarvingCheckpoint
+from modules.disk.entities import CachedDeepScan
+from modules.disk.entities import NTFSVolume
+from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint, ScanCheckpoint
 from infrastructure.filesystem.user_ownership import (
     ensure_pkexec_user_owned_directory,
     open_pkexec_safe_directory,
