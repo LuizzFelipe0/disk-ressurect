@@ -6,7 +6,7 @@ from modules.catalog.entities import RecoveryCatalog
 from modules.recovery.service import RecoveryPlanner
 from modules.recovery.entities import ContentReadError, ExtractionResult
 from infrastructure.formats.signature import FileSignatureValidator
-from infrastructure.filesystem.recovery_output_writer import RecoveryOutputWriter, UnsafeRecoveryPath
+from infrastructure.filesystems.recovery_output_writer import RecoveryOutputWriter, UnsafeRecoveryPath
 
 
 class Extractor:

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from infrastructure.filesystem.recovery_output_writer import RecoveryOutputWriter
+from infrastructure.filesystems.recovery_output_writer import RecoveryOutputWriter
 
 
 class RecoveryOutputWriterTests(unittest.TestCase):
@@ -21,7 +21,7 @@ class RecoveryOutputWriterTests(unittest.TestCase):
     def test_created_recovery_folders_are_returned_to_the_pkexec_user(self):
         writer = RecoveryOutputWriter()
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as output_dir:
-            with patch("infrastructure.filesystem.recovery_output_writer.ensure_pkexec_user_owned_directory") as ensure_directory:
+            with patch("infrastructure.filesystems.recovery_output_writer.ensure_pkexec_user_owned_directory") as ensure_directory:
                 destination, temporary_path, created_directories = writer.prepare_target(output_dir, "nested/report.pdf")
 
         self.assertEqual(destination, os.path.join(output_dir, "nested", "report.pdf"))
@@ -33,7 +33,7 @@ class RecoveryOutputWriterTests(unittest.TestCase):
         writer = RecoveryOutputWriter()
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as output_dir:
             template = os.path.join(output_dir, "report.pdf.partial")
-            with patch("infrastructure.filesystem.recovery_output_writer.set_pkexec_user_ownership_fd") as set_owner:
+            with patch("infrastructure.filesystems.recovery_output_writer.set_pkexec_user_ownership_fd") as set_owner:
                 first_stream, first_path = writer.open_temporary(template)
                 second_stream, second_path = writer.open_temporary(template)
                 first_stream.close()

@@ -3,7 +3,7 @@ import secrets
 import sys
 import tempfile
 
-from infrastructure.filesystem.user_ownership import (
+from infrastructure.filesystems.user_ownership import (
     ensure_pkexec_user_owned_directory,
     open_pkexec_safe_directory,
     set_pkexec_user_ownership_fd,

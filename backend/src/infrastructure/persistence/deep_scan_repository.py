@@ -14,7 +14,7 @@ from modules.disk.entities import CachedDeepScan
 from modules.disk.entities import NTFSVolume
 from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
 from modules.storage.entities import ScanCheckpoint
-from infrastructure.filesystem.user_ownership import (
+from infrastructure.filesystems.user_ownership import (
     ensure_pkexec_user_owned_directory,
     open_pkexec_safe_directory,
     set_pkexec_user_ownership_fd,
