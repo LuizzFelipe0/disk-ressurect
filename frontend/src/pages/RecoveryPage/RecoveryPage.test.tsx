@@ -187,7 +187,7 @@ describe("RecoveryPage audit details", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
   });
 
-  it("lets users raise bounded carving, candidate-read, candidate-count and retained-memory budgets", () => {
+  it("defaults to the maximum recovery budgets and lets users adjust them", () => {
     render(<RecoveryPage />);
 
     const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
@@ -195,27 +195,18 @@ describe("RecoveryPage audit details", () => {
     const candidateReadBudget = screen.getByRole("combobox", { name: "Leitura de candidatos por formato" });
     const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
     const forceFresh = screen.getByRole("checkbox", {
-      name: "Forçar nova auditoria completa do disco (ignorar cache; pode levar horas)",
+      name: "Forçar nova auditoria completa do disco (padrão; ignora cache; pode levar horas)",
     });
-    expect((scanBudget as HTMLSelectElement).disabled).toBe(true);
-    expect((maxFiles as HTMLSelectElement).disabled).toBe(true);
-    expect((candidateReadBudget as HTMLSelectElement).disabled).toBe(true);
-    expect((retainedBudget as HTMLSelectElement).disabled).toBe(true);
-    expect((forceFresh as HTMLInputElement).disabled).toBe(true);
-
-    fireEvent.click(screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista"));
-    expect((forceFresh as HTMLInputElement).disabled).toBe(false);
-    fireEvent.click(forceFresh);
-    fireEvent.change(scanBudget, { target: { value: "4" } });
-    fireEvent.change(maxFiles, { target: { value: "512" } });
-    fireEvent.change(maxFiles, { target: { value: "2048" } });
-    fireEvent.change(maxFiles, { target: { value: "16384" } });
-    fireEvent.change(candidateReadBudget, { target: { value: "1024" } });
-    fireEvent.change(retainedBudget, { target: { value: "256" } });
+    expect((screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista (ativado por padrão)") as HTMLInputElement).checked).toBe(true);
+    expect((forceFresh as HTMLInputElement).checked).toBe(true);
+    expect((scanBudget as HTMLSelectElement).value).toBe("64");
+    expect((maxFiles as HTMLSelectElement).value).toBe("16384");
+    expect((candidateReadBudget as HTMLSelectElement).value).toBe("1024");
+    expect((retainedBudget as HTMLSelectElement).value).toBe("512");
     fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
 
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
-      scanBudgetGiB: 4, maxFiles: 16384, maxRetainedMiB: 256,
+      scanBudgetGiB: 64, maxFiles: 16384, maxRetainedMiB: 512,
       maxCandidateReadMiBPerFormat: 1024,
     }, true);
   });
