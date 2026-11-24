@@ -14,6 +14,7 @@ class RecoveryCatalogSnapshot:
     low_confidence_carving_summary: dict | None = None
     recycle_bin_summary: dict | None = None
     usn_journal_summary: dict | None = None
+    ntfs_log_file_summary: dict | None = None
 
     @property
     def volume_start(self):
