@@ -51,7 +51,7 @@ class FakeTreeBuilder:
     root_nodes = []
     parent_reference_issue_count = 0
 
-    def __init__(self, *_args):
+    def __init__(self, *_args, **_kwargs):
         self.nodes = type(self).nodes
         self.root_nodes = type(self).root_nodes
 
