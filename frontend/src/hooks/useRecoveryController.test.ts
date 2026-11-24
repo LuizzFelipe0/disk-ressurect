@@ -104,7 +104,8 @@ describe("useRecoveryController backend lifecycle", () => {
     act(() => result.current.selectVolume("1:4096"));
 
     const carvingOptions = {
-      scanBudgetGiB: 16 as const, maxFiles: 2048 as const, maxRetainedMiB: 256 as const,
+        scanBudgetGiB: 16 as const, maxFiles: 16384 as const, maxRetainedMiB: 256 as const,
+        maxCandidateReadMiBPerFormat: 1024 as const,
     };
     await act(async () => { await result.current.buildCatalog(true, carvingOptions); });
 
