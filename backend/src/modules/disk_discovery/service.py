@@ -35,10 +35,62 @@ class DiskDiscoveryService:
     def validate_disk(
         self, disk_number: int, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume: NTFSVolume | None = None, content_carving_range_budget_bytes=None,
+        force_fresh=False,
     ):
         validator = getattr(self.inventory, "validate_disk", None)
         if validator is None:
             raise NotImplementedError("This disk inventory does not support full-disk validation")
+        snapshot_loader = getattr(self.scan_repository, "load_validation_snapshot", None)
+        disk = self.get_disk(disk_number) if snapshot_loader is not None else None
+        invalidator = getattr(self.scan_repository, "invalidate_validation_snapshot", None)
+        if force_fresh and invalidator is not None and disk is not None:
+            invalidator(disk)
+        snapshot = (
+            snapshot_loader(disk)
+            if snapshot_loader is not None and not force_fresh else None
+        )
+        snapshot_validator = getattr(self.inventory, "validate_disk_with_snapshot", None)
+        if snapshot is not None and snapshot_validator is not None:
+            report = snapshot_validator(
+                disk_number,
+                progress_callback,
+                retain_orphans_for_offset,
+                orphan_scan_volume,
+                content_carving_range_budget_bytes,
+                validation_snapshot=snapshot,
+            )
+            if report.get("validation_snapshot_mismatch"):
+                if invalidator is not None:
+                    invalidator(disk)
+                report = self._validate_fresh(
+                    validator,
+                    disk_number,
+                    progress_callback,
+                    retain_orphans_for_offset,
+                    orphan_scan_volume,
+                    content_carving_range_budget_bytes,
+                )
+        else:
+            report = self._validate_fresh(
+                validator,
+                disk_number,
+                progress_callback,
+                retain_orphans_for_offset,
+                orphan_scan_volume,
+                content_carving_range_budget_bytes,
+            )
+
+        snapshot_saver = getattr(self.scan_repository, "save_validation_snapshot", None)
+        cache_snapshot = report.get("validation_scan_snapshot")
+        if snapshot_saver is not None and cache_snapshot is not None and disk is not None:
+            snapshot_saver(disk, cache_snapshot)
+        return report
+
+    @staticmethod
+    def _validate_fresh(
+        validator, disk_number, progress_callback, retain_orphans_for_offset,
+        orphan_scan_volume, content_carving_range_budget_bytes,
+    ):
         if retain_orphans_for_offset is None:
             return validator(disk_number, progress_callback)
         return validator(
