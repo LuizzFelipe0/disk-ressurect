@@ -5,11 +5,11 @@ import { useRecoveryController } from "./hooks/useRecoveryController";
 import { RecoverySessionProvider, useCatalogSession, useStorageSession } from "./app/recoverySession";
 import { AppLayout } from "./app/AppLayout";
 import { LanguageProvider } from "./app/language";
-import { HomePage } from "./features/storage/HomePage";
-import { StoragePage } from "./features/storage/StoragePage";
-import { ScanPage } from "./features/scan/ScanPage";
-import { CatalogPage } from "./features/catalog/CatalogPage";
-import { RecoveryPage } from "./features/recovery/RecoveryPage";
+import { HomePage } from "./pages/storage/HomePage";
+import { StoragePage } from "./pages/storage/StoragePage";
+import { ScanPage } from "./pages/scan/ScanPage";
+import { CatalogPage } from "./pages/catalog/CatalogPage";
+import { RecoveryPage } from "./pages/recovery/RecoveryPage";
 
 const ScanRoute: React.FC = () => {
   const storage = useStorageSession();

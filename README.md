@@ -78,6 +78,19 @@ The physical-disk cache remains version 2 and its key is unchanged. Raw-image so
 
 The Electron renderer uses React Router's `HashRouter` and keeps the recovery controller above the route tree so navigating between workflow steps does not discard an active session:
 
+```text
+frontend/src/
+├── app/                 # AppLayout, language and shared recovery session
+├── pages/
+│   ├── storage/         # Home and storage selection
+│   ├── scan/            # Scan controls and operation state
+│   ├── catalog/         # Catalog browser, selection and audit report
+│   └── recovery/        # Destination, filters and extraction results
+├── components/          # Shared UI components
+├── hooks/               # Recovery workflow orchestration
+└── services/            # Typed Electron bridge adapter
+```
+
 | Route | Page responsibility |
 | --- | --- |
 | `/` | Home and workflow entry points |

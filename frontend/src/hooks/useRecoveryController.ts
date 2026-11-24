@@ -7,9 +7,9 @@ import type {
   VolumeInfo,
   RawImageSource,
 } from "../types/recovery";
-import { useCatalogSelection } from "../features/catalog/useCatalogSelection";
-import { useCatalogBrowser } from "../features/catalog/useCatalogBrowser";
-import { useRecoveryOperationState } from "../features/scan/useRecoveryOperationState";
+import { useCatalogSelection } from "../pages/catalog/useCatalogSelection";
+import { useCatalogBrowser } from "../pages/catalog/useCatalogBrowser";
+import { useRecoveryOperationState } from "../pages/scan/useRecoveryOperationState";
 
 const LAST_SELECTED_DISK_KEY = "disk-ressurect:last-selected-disk";
 
