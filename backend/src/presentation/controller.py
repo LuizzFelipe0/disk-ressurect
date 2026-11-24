@@ -173,9 +173,23 @@ class RecoveryCommandHandler:
                 min_file_size_kb=request.minimum_size_kb,
                 progress_callback=self._progress(emit),
             )
+            details = tuple({
+                "name": str(getattr(item.node, "name", ""))[:260],
+                "path": str(item.path)[:1024],
+                "status": str(item.status)[:80],
+                "reason": str(item.reason)[:512],
+                "bytesWritten": int(item.bytes_written),
+            } for item in summary.results[:500])
+            status_counts = {}
+            for item in summary.results:
+                status_counts[item.status] = status_counts.get(item.status, 0) + 1
             return RecoveryResultDto(
                 recovered_count=summary.recovered_count,
                 candidate_count=len(summary.results),
+                selected_count=len(request.selected_node_ids),
+                results=details,
+                results_truncated=len(summary.results) > len(details),
+                status_counts=status_counts,
             ).to_dict()
         raise ValueError(f"Unknown operation: {operation}")
 

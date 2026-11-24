@@ -36,9 +36,18 @@ class RecoveryRequestDto:
 class RecoveryResultDto:
     recovered_count: int
     candidate_count: int
+    selected_count: int = 0
+    results: tuple[dict, ...] = ()
+    results_truncated: bool = False
+    status_counts: dict[str, int] | None = None
 
     def to_dict(self):
         return {
             "recoveredCount": self.recovered_count,
             "candidateCount": self.candidate_count,
+            "selectedCount": self.selected_count,
+            "rejectedCount": max(0, self.candidate_count - self.recovered_count),
+            "statusCounts": dict(self.status_counts or {}),
+            "results": list(self.results),
+            "resultsTruncated": self.results_truncated,
         }

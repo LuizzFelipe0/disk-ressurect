@@ -214,6 +214,11 @@ export interface ProgressInfo {
 export interface RecoveryResult {
   recoveredCount: number;
   candidateCount: number;
+  selectedCount?: number;
+  rejectedCount?: number;
+  statusCounts?: Record<string, number>;
+  results?: Array<{ name: string; path: string; status: string; reason: string; bytesWritten: number }>;
+  resultsTruncated?: boolean;
 }
 
 export interface BackendRuntimeStatus {

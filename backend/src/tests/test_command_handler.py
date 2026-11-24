@@ -77,7 +77,11 @@ class FakeWorkflow:
 
     def extract_selection(self, **kwargs):
         self.extraction_call = kwargs
-        return SimpleNamespace(recovered_count=1, results=(object(),))
+        result_node = SimpleNamespace(name="file.jpg", full_path="Photos/file.jpg")
+        return SimpleNamespace(recovered_count=1, results=(SimpleNamespace(
+            node=result_node, status="recovered", reason="", bytes_written=12,
+            path=result_node.full_path,
+        ),))
 
 
 class FakeCatalogService:
@@ -462,7 +466,12 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         self.assertEqual([node.full_path for node in workflow.extraction_call["selected_nodes"]], ["Photos"])
         self.assertEqual([node.full_path for node in workflow.extraction_call["excluded_nodes"]], ["Photos/two.jpg"])
         self.assertEqual(result["recoveredCount"], 1)
-        self.assertEqual(result, {"recoveredCount": 1, "candidateCount": 1})
+        self.assertEqual(result["candidateCount"], 1)
+        self.assertEqual(result["selectedCount"], 1)
+        self.assertEqual(result["rejectedCount"], 0)
+        self.assertEqual(result["statusCounts"], {"recovered": 1})
+        self.assertEqual(result["results"][0]["path"], "Photos/file.jpg")
+        self.assertFalse(result["resultsTruncated"])
 
 
 if __name__ == "__main__":

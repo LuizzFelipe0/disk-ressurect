@@ -74,13 +74,13 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
 
         {error && <ErrorNotice spaced title={t("recoveryProblem")}>{error}</ErrorNotice>}
 
-        {!isAdministrator && (
+        {Boolean(selectedDiskNumber) && !isAdministrator && (
           <ErrorNotice tone="warning" spaced title={t("adminRequired")}>
             {t("elevatedAccess")}
           </ErrorNotice>
         )}
 
-        {!isAdministrator && (
+        {Boolean(selectedDiskNumber) && !isAdministrator && (
           <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
             {t("requestAccess")}
           </Button>
