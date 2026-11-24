@@ -72,16 +72,21 @@ class CommandContractTests(unittest.TestCase):
     def test_catalog_request_validates_bounded_carving_options(self):
         request = VolumeSelectionRequestDto.from_payload({
             "volumeId": "0:4096", "includeOrphaned": True,
-            "carvingOptions": {"scanBudgetGiB": 16, "maxFiles": 2048, "maxRetainedMiB": 256},
+            "carvingOptions": {
+                "scanBudgetGiB": 16, "maxFiles": 16384, "maxRetainedMiB": 256,
+                "maxCandidateReadMiBPerFormat": 1024,
+            },
         })
-        self.assertEqual(request.carving_options, CarvingOptionsDto(16, 2048, 256))
+        self.assertEqual(request.carving_options, CarvingOptionsDto(16, 16384, 256, 1024))
         for invalid in (
             {"scanBudgetGiB": 0},
             {"scanBudgetGiB": 128},
             {"scanBudgetGiB": True},
-            {"maxFiles": 8192},
+            {"maxFiles": 32768},
             {"maxFiles": "512"},
             {"maxRetainedMiB": 1024},
+            {"maxCandidateReadMiBPerFormat": 2048},
+            {"maxCandidateReadMiBPerFormat": True},
             {"unknown": 1},
         ):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
