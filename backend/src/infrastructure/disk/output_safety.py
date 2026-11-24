@@ -1,6 +1,7 @@
 import ctypes
 import os
 import struct
+import stat
 import sys
 from ctypes import wintypes
 from infrastructure.disk.linux.devices import LinuxBlockDeviceCatalog
