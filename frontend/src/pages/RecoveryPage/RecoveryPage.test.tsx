@@ -187,17 +187,19 @@ describe("RecoveryPage audit details", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
   });
 
-  it("lets users raise bounded carving, candidate-count and retained-memory budgets", () => {
+  it("lets users raise bounded carving, candidate-read, candidate-count and retained-memory budgets", () => {
     render(<RecoveryPage />);
 
     const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
     const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
+    const candidateReadBudget = screen.getByRole("combobox", { name: "Leitura de candidatos por formato" });
     const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
     const forceFresh = screen.getByRole("checkbox", {
       name: "Forçar nova auditoria completa do disco (ignorar cache; pode levar horas)",
     });
     expect((scanBudget as HTMLSelectElement).disabled).toBe(true);
     expect((maxFiles as HTMLSelectElement).disabled).toBe(true);
+    expect((candidateReadBudget as HTMLSelectElement).disabled).toBe(true);
     expect((retainedBudget as HTMLSelectElement).disabled).toBe(true);
     expect((forceFresh as HTMLInputElement).disabled).toBe(true);
 
@@ -207,11 +209,14 @@ describe("RecoveryPage audit details", () => {
     fireEvent.change(scanBudget, { target: { value: "4" } });
     fireEvent.change(maxFiles, { target: { value: "512" } });
     fireEvent.change(maxFiles, { target: { value: "2048" } });
+    fireEvent.change(maxFiles, { target: { value: "16384" } });
+    fireEvent.change(candidateReadBudget, { target: { value: "1024" } });
     fireEvent.change(retainedBudget, { target: { value: "256" } });
     fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
 
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
-      scanBudgetGiB: 4, maxFiles: 2048, maxRetainedMiB: 256,
+      scanBudgetGiB: 4, maxFiles: 16384, maxRetainedMiB: 256,
+      maxCandidateReadMiBPerFormat: 1024,
     }, true);
   });
 
