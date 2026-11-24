@@ -160,4 +160,4 @@ class CatalogScanWorkflow:
             "orphanedFileRecordCount": 0,
             "unsupportedFilesystems": [],
             "validationError": f"{type(exc).__name__}: {exc}",
-        }\n
+        }
