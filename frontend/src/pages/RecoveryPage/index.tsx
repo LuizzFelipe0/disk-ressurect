@@ -54,6 +54,7 @@ export const RecoveryPage: React.FC = () => {
     return saved === "en-US" || saved === "es-ES" || saved === "fr-FR" || saved === "zh-CN" ? saved : "pt-BR";
   });
   const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
+  const [forceFreshValidation, setForceFreshValidation] = React.useState(false);
   const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(1);
   const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(256);
   const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(128);
@@ -83,6 +84,7 @@ export const RecoveryPage: React.FC = () => {
   const lowConfidenceCarving = recovery.catalog?.lowConfidenceCarving;
   const recycleBinRecovery = recovery.catalog?.recycleBinRecovery;
   const usnJournalEvidence = recovery.catalog?.usnJournalEvidence;
+  const ntfsLogFileEvidence = recovery.catalog?.ntfsLogFileEvidence;
   const lowConfidenceTiers = lowConfidenceCarving ? [
     { key: "bitmapUnobserved" as const, summary: lowConfidenceCarving.bitmapUnobserved },
     { key: "possiblyReused" as const, summary: lowConfidenceCarving.possiblyReused },
@@ -191,12 +193,16 @@ export const RecoveryPage: React.FC = () => {
               scanBudgetGiB,
               maxFiles: maxCarvedFiles,
               maxRetainedMiB: maxCarvedRetainedMiB,
-            })}>{t("buildCatalog")}</Button>
+            }, forceFreshValidation)}>{t("buildCatalog")}</Button>
         </ActionRow>
       </FormGrid>
       <OrphanScanControls>
         <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
           onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
+        <label><input type="checkbox" checked={forceFreshValidation}
+          disabled={recovery.busy || !includeOrphaned}
+          onChange={(event) => setForceFreshValidation(event.target.checked)} />
+          {t("forceFreshValidation")}</label>
         <p>{t("orphanScanWarning")}</p>
         <CarvingBudgetControls>
           <FormControl><FormControlCaption>{t("carvingScanBudget")}</FormControlCaption>
@@ -250,7 +256,7 @@ export const RecoveryPage: React.FC = () => {
                 onClick={() => void recovery.recover()}>{t("recoverSelected")}</Button>
             </SelectionActions>
             {(validation || contentCarving || lowConfidenceCarving
-              || recycleBinRecovery || usnJournalEvidence) && <span ref={auditTriggerRef}>
+              || recycleBinRecovery || usnJournalEvidence || ntfsLogFileEvidence) && <span ref={auditTriggerRef}>
               <Button className="brand-button--ghost" variant="ghost" size="md"
                 aria-haspopup="dialog" aria-controls="disk-audit-overlay"
                 onClick={() => setAuditOpen(true)}>{t("diskAuditDetails")}</Button>
@@ -340,7 +346,12 @@ export const RecoveryPage: React.FC = () => {
         {validation && <ValidationNotice role="status" $inconclusive={validation.assessment === "inconclusive"}>
           {validation.coverageStatus === "unavailable"
             ? t("validationUnavailable", { error: validation.validationError ?? "Unknown error" })
-            : validation.assessment === "inconclusive"
+            : validation.evidenceFreshness === "cached_snapshot"
+              ? t("validationCachedSnapshot", {
+                scannedAt: validation.evidenceScannedAt ?? "unknown",
+                coverage: validationCoverage,
+              })
+              : validation.assessment === "inconclusive"
               ? t("validationInconclusive", {
                 coverage: validationCoverage,
                 errors: validation.readErrorCount,
@@ -446,6 +457,21 @@ export const RecoveryPage: React.FC = () => {
             missing: usnJournalEvidence.unmatchedReferences ?? 0,
           })}</p>
           <p>{t("usnJournalEvidenceInterpretation")}</p>
+        </section>}
+        {ntfsLogFileEvidence && <section aria-label={t("ntfsLogFileEvidenceHeading")}>
+          <h3>{t("ntfsLogFileEvidenceHeading")}</h3>
+          <ValidationNotice role="status" $inconclusive={ntfsLogFileEvidence.inconclusive}>
+            {t("ntfsLogFileEvidenceSummary", {
+              pages: ntfsLogFileEvidence.pagesExamined.toLocaleString(language),
+              restart: ntfsLogFileEvidence.restartPages.toLocaleString(language),
+              records: ntfsLogFileEvidence.recordPages.toLocaleString(language),
+              bytes: ntfsLogFileEvidence.bytesRead.toLocaleString(language),
+              lsns: ntfsLogFileEvidence.currentLsns.join(", ") || "—",
+              errors: ntfsLogFileEvidence.errorCount.toLocaleString(language),
+            })}
+            {ntfsLogFileEvidence.limitReached && ` ${t("ntfsLogFileEvidenceLimitReached")}`}
+          </ValidationNotice>
+          <p>{t("ntfsLogFileEvidenceInterpretation")}</p>
         </section>}
         {lowConfidenceTiers.length > 0 && <>
           <p>{t("lowConfidenceRecoveryInterpretation")}</p>
