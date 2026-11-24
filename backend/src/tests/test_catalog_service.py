@@ -161,7 +161,8 @@ class CatalogServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.content_carving_summary["filesFound"], 1)
         self.assertEqual(snapshot.content_carving_summary["bytesScanned"], 4096)
         self.assertEqual(snapshot.content_carving_summary["filesFoundByExtension"], {
-            ".jpg": 1, ".png": 0, ".pdf": 0, ".office_zip": 0, ".mp4": 0,
+            ".jpg": 1, ".png": 0, ".pdf": 0, ".office_zip": 0,
+            ".mp4": 0, ".rtf": 0, ".ole_cfb": 0,
         })
         self.assertEqual(snapshot.content_carving_summary["validationScope"],
             "contiguous_structure_and_signature")
