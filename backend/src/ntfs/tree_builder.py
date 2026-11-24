@@ -1,7 +1,10 @@
 import os
 import re
 from typing import Callable
+
 from ntfs.mft_parser import MFTRecord
+from ntfs.mft_data_extent_resolver import MFTDataExtentResolver
+
 
 class FileNode:
     def __init__(self, record, *, is_orphaned=False, is_content_carved=False):
@@ -17,14 +20,26 @@ class FileNode:
 
 class TreeBuilder:
     """Builds a Virtual File System (VFS) in memory."""
-    def __init__(self, disk, fragments, base_offset, record_size=1024):
+    def __init__(
+        self, disk, fragments, base_offset, record_size=1024, *,
+        cluster_size=None, volume_size_bytes=None,
+    ):
         self.disk = disk
         self.fragments = fragments
         self.base_offset = base_offset
         self.record_size = int(record_size)
+        self.cluster_size = None if cluster_size is None else int(cluster_size)
+        self.volume_size_bytes = (
+            None if volume_size_bytes is None else int(volume_size_bytes)
+        )
         if self.record_size < 512 or self.record_size % 512:
             raise ValueError("MFT record size must be a positive multiple of 512 bytes")
         self.nodes = {}
+        self.mft_records = {}
+        self.data_extent_resolution_counts = {
+            "resolved": 0,
+            "inconclusive": 0,
+        }
         self.root_nodes = []
         self.parent_reference_issue_count = 0
 
@@ -64,12 +79,15 @@ class TreeBuilder:
                             offset + begin,
                             self.record_size,
                         )
-                        if record.is_valid and record.name:
-                            self.nodes[index] = FileNode(record)
+                        if record.is_valid:
+                            self.mft_records[index] = record
+                            if record.name and not record.is_extension_record:
+                                self.nodes[index] = FileNode(record)
                 processed += batch_count
                 read_index += batch_count
                 if progress_callback is not None:
                     progress_callback(processed, total_records)
+        self._resolve_fragmented_data_runs()
         node_total = len(self.nodes)
         self._report_phase(phase_callback, "linking", 0, node_total)
         self._link_nodes(phase_callback)
@@ -85,6 +103,31 @@ class TreeBuilder:
 
         self._resolve_paths(phase_callback)
         return self.nodes
+
+    def _resolve_fragmented_data_runs(self):
+        if (self.cluster_size is None or self.cluster_size <= 0
+                or self.volume_size_bytes is None or self.volume_size_bytes <= 0):
+            return
+        resolver = MFTDataExtentResolver()
+        for record in self.mft_records.values():
+            if (record.is_extension_record or not record.has_attribute_list
+                    or not record.name or record.is_dir):
+                continue
+            result = resolver.resolve(
+                record,
+                self.mft_records,
+                cluster_size=self.cluster_size,
+                volume_size_bytes=self.volume_size_bytes,
+            )
+            record.data_extent_resolution = result.status
+            record.data_extent_resolution_reason = result.reason
+            record.data_extent_count = result.extent_count
+            if result.status == "resolved":
+                record.data_runs = list(result.data_runs)
+                record.data_is_complete = True
+                self.data_extent_resolution_counts["resolved"] += 1
+            elif result.status == "inconclusive":
+                self.data_extent_resolution_counts["inconclusive"] += 1
 
     def _link_nodes(self, phase_callback=None):
         node_total = len(self.nodes)
