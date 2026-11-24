@@ -34,7 +34,9 @@ class DeepScanRepositoryTests(unittest.TestCase):
 
             document = JsonDeepScanRepository(cache)._read_document()
 
-        self.assertEqual(document, {"version": 1, "disks": {}})
+        self.assertEqual(document, {
+            "version": 2, "disks": {}, "carving": {}, "validation": {},
+        })
 
     def test_checkpoint_is_persisted_and_restored_with_disk_scan(self):
         disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
@@ -158,6 +160,36 @@ class DeepScanRepositoryTests(unittest.TestCase):
             restored = JsonDeepScanRepository(cache_path).load(disk)
 
         self.assertIsNone(restored)
+
+    def test_validation_snapshot_persists_by_disk_identity_and_can_be_invalidated(self):
+        disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-123")
+        reconnected_disk = PhysicalDisk(4, "Recovery disk", 8 * 1024**3, "serial-123")
+        other_disk = PhysicalDisk(1, "Recovery disk", 8 * 1024**3, "SERIAL-456")
+        snapshot = {
+            "version": 1,
+            "scannedAt": "2026-11-23T12:00:00+00:00",
+            "identity": JsonDeepScanRepository._disk_identity(disk),
+            "diskSize": disk.size_bytes,
+            "bytesPerSector": 512,
+            "intervals": [[0, disk.size_bytes]],
+            "issues": [],
+            "bytesRequested": disk.size_bytes,
+            "bytesReadTotal": disk.size_bytes,
+            "ntfsBootOffsets": [],
+            "gptHeaderOffsets": [],
+            "filesystemSignatures": [],
+        }
+
+        with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
+            path = os.path.join(directory, "deep_scan_cache.json")
+            first = JsonDeepScanRepository(path)
+            first.save_validation_snapshot(disk, snapshot)
+            second = JsonDeepScanRepository(path)
+
+            self.assertEqual(second.load_validation_snapshot(reconnected_disk), snapshot)
+            self.assertIsNone(second.load_validation_snapshot(other_disk))
+            second.invalidate_validation_snapshot(disk)
+            self.assertIsNone(first.load_validation_snapshot(disk))
 
 
 if __name__ == "__main__":
