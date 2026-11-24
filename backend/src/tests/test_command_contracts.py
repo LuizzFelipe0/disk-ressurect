@@ -57,11 +57,17 @@ class CommandContractTests(unittest.TestCase):
         default_request = VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096"})
         self.assertFalse(default_request.include_orphaned)
         self.assertEqual(default_request.carving_options, CarvingOptionsDto())
+        self.assertFalse(default_request.force_fresh_validation)
         self.assertTrue(VolumeSelectionRequestDto.from_payload({
             "volumeId": "0:4096", "includeOrphaned": True,
         }).include_orphaned)
+        self.assertTrue(VolumeSelectionRequestDto.from_payload({
+            "volumeId": "0:4096", "forceFreshValidation": True,
+        }).force_fresh_validation)
         with self.assertRaisesRegex(ValueError, "includeOrphaned must be a boolean"):
             VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096", "includeOrphaned": "yes"})
+        with self.assertRaisesRegex(ValueError, "forceFreshValidation must be a boolean"):
+            VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096", "forceFreshValidation": "yes"})
 
     def test_catalog_request_validates_bounded_carving_options(self):
         request = VolumeSelectionRequestDto.from_payload({
