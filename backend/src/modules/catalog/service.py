@@ -141,12 +141,18 @@ class CatalogService:
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
         if options is not None:
+            candidate_read_bytes_per_format = (
+                int(getattr(options, "max_candidate_read_mib_per_format", 256))
+                * 1024**2
+            )
             carver_options = {
                 "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
                 "max_files": int(options.max_files),
                 "max_total_file_bytes": int(
                     getattr(options, "max_retained_mib", 128)
                 ) * 1024**2,
+                "max_candidate_read_bytes_per_format": candidate_read_bytes_per_format,
+                "max_candidate_read_bytes": candidate_read_bytes_per_format * 3,
             }
         carving = RawContentCarver(disk, **carver_options).scan(
             ranges,
