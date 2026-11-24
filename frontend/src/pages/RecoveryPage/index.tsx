@@ -53,13 +53,13 @@ export const RecoveryPage: React.FC = () => {
     const saved = window.localStorage.getItem("disk-ressurect:language");
     return saved === "en-US" || saved === "es-ES" || saved === "fr-FR" || saved === "zh-CN" ? saved : "pt-BR";
   });
-  const [includeOrphaned, setIncludeOrphaned] = React.useState(false);
-  const [forceFreshValidation, setForceFreshValidation] = React.useState(false);
-  const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(1);
-  const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(256);
-  const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(128);
+  const [includeOrphaned, setIncludeOrphaned] = React.useState(true);
+  const [forceFreshValidation, setForceFreshValidation] = React.useState(true);
+  const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(64);
+  const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(16384);
+  const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(512);
   const [maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat] =
-    React.useState<CarvingOptions["maxCandidateReadMiBPerFormat"]>(256);
+    React.useState<CarvingOptions["maxCandidateReadMiBPerFormat"]>(1024);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const filterTriggerRef = React.useRef<HTMLSpanElement>(null);
