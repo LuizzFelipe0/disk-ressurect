@@ -131,6 +131,17 @@ class DiskReadCoverageTests(unittest.TestCase):
         self.assertEqual(coverage.bytes_read, 3584)
         self.assertEqual([(issue.start, issue.end) for issue in coverage.issues], [(1024, 1536)])
 
+    def test_storage_coverage_is_complete_without_partition_or_filesystem_signatures(self):
+        disk = FakeDisk(bytes(4096))
+        coverage = DiskReadCoverage(disk, chunk_size=512)
+
+        signatures = coverage.scan_full_disk()
+
+        self.assertEqual(signatures, ())
+        self.assertEqual(coverage.bytes_read, disk.size)
+        self.assertEqual(coverage.issues, [])
+        self.assertEqual(coverage.filesystem_signatures, ())
+
     def test_free_cluster_ranges_merge_across_bitmap_chunks_and_respect_budget(self):
         collector = FreeClusterRangeCollector(
             volume_start=4096, cluster_size=512, cluster_count=32,

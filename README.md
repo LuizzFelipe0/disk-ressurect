@@ -46,6 +46,8 @@ Feature modules contain only `entities.py`, `dto.py`, `service.py`, `repository.
 
 Storage source identity distinguishes physical disks from raw images. The disk feature owns physical-disk discovery and the current NTFS partition scan workflow; deep scan owns resumable scan cursors and validation owns audit and cached-evidence policy. NTFS parsing, catalog conversion, carving, raw I/O and output writing remain infrastructure implementations. The application bootstrap explicitly composes the NTFS content-reference adapter with storage readers. Storage itself does not select or import filesystems, and the catalog and recovery planner do not inspect MFT records.
 
+Validation keeps three responsibilities explicit in the existing infrastructure code: `DiskReadCoverage` records source size, read intervals and errors; `PartitionTableScanner` checks partition structures; and the NTFS audit methods inspect filesystem metadata. `DiskValidationAuditor` coordinates those checks and reuses their evidence, so no extra service or module layer was added. Coverage remains reportable when no partition table or recognized filesystem signature is present.
+
 * frontend/src/ (React client): Contains typed domain contracts, services, hooks, reusable styled-components and page composition.
 * frontend/electron/ (Desktop shell): Owns Electron main/preload processes and the context-isolated IPC contract.
 * `DiskInventory` composes discovery components. Deep scan searches a bounded disk prefix for a validated `$MFT` record zero before falling back to NTFS boot-sector scanning.
