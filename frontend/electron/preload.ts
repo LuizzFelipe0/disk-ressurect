@@ -5,8 +5,11 @@ const api: DesktopApi = {
   listDisks: () => ipcRenderer.invoke("recovery:list-disks"),
   listPartitions: (diskNumber, deepScan, resume = false) =>
     ipcRenderer.invoke("recovery:list-partitions", { diskNumber, deepScan, resume }),
-  scanCatalog: (volumeId, includeOrphaned = false, carvingOptions) => ipcRenderer.invoke(
-    "recovery:scan-catalog", { volumeId, includeOrphaned, ...(carvingOptions ? { carvingOptions } : {}) },
+  scanCatalog: (volumeId, includeOrphaned = false, carvingOptions, forceFreshValidation = false) => ipcRenderer.invoke(
+    "recovery:scan-catalog", {
+      volumeId, includeOrphaned, forceFreshValidation,
+      ...(carvingOptions ? { carvingOptions } : {}),
+    },
   ),
   searchCatalog: (query) => ipcRenderer.invoke("recovery:search-catalog", { query }),
   listSupportedFileTypes: () => ipcRenderer.invoke("recovery:list-file-types"),
