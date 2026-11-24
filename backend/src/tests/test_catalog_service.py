@@ -9,7 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.disk.entities import NTFSVolume
 from infrastructure.catalog.builder import CatalogContentValidator
 from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.storage.image.reader import RawImageReader
 from helpers import make_recovery_workflow
+from helpers import make_record
 from types import SimpleNamespace
 
 
@@ -36,6 +38,25 @@ def jpeg(payload=b"entropy-data"):
 
 
 class CatalogServiceTests(unittest.TestCase):
+    def test_ntfs_catalog_reads_a_raw_image_without_a_physical_disk(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image_path = os.path.join(directory, "fixture.img")
+            image = bytearray(8192)
+            image[4096:4096 + 1024] = make_record("image.pdf", b"%PDF-image")
+            with open(image_path, "wb") as image_file:
+                image_file.write(image)
+
+            volume = NTFSVolume(
+                0, 1, 0, len(image), 512, 4096, 1024, 4096, 1024,
+                ((4096, 1, 0),),
+            )
+            snapshot = CatalogBuilder(lambda _number: RawImageReader(image_path)).build(volume)
+
+        self.assertEqual(len(snapshot.catalog.nodes), 1)
+        node = next(iter(snapshot.catalog.nodes.values()))
+        self.assertEqual(node.record.name, "image.pdf")
+        self.assertEqual(node.record.resident_data, b"%PDF-image")
+
     def test_builds_empty_catalog_and_closes_disk_reader(self):
         opened = []
 

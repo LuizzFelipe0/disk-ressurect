@@ -6,46 +6,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from infrastructure.filesystems.ntfs.attributes.attributes import AttributeParser
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
-
-
-def resident_attribute(attribute_type, content):
-    length = (24 + len(content) + 7) & ~7
-    attribute = bytearray(length)
-    struct.pack_into("<II", attribute, 0, attribute_type, length)
-    attribute[8] = 0
-    struct.pack_into("<I", attribute, 16, len(content))
-    struct.pack_into("<H", attribute, 20, 24)
-    attribute[24:24 + len(content)] = content
-    return attribute
-
-
-def make_record(name="photo.jpg", payload=b"data", has_attribute_list=False,
-                record_number=0, base_file_reference=0, parent_reference=5):
-    raw = bytearray(1024)
-    raw[:4] = b"FILE"
-    struct.pack_into("<HH", raw, 4, 0x30, 3)
-    raw[0x30:0x36] = b"\xAA\xBB\0\0\0\0"
-    raw[510:512] = b"\xAA\xBB"
-    raw[1022:1024] = b"\xAA\xBB"
-    attr_offset = 0x38
-    struct.pack_into("<HH", raw, 20, attr_offset, 1)
-    struct.pack_into("<Q", raw, 32, base_file_reference)
-    struct.pack_into("<I", raw, 44, record_number)
-
-    file_name = bytearray(66 + len(name.encode("utf-16le")))
-    struct.pack_into("<Q", file_name, 0, parent_reference)
-    file_name[64] = len(name)
-    file_name[65] = 1
-    file_name[66:] = name.encode("utf-16le")
-    attrs = resident_attribute(0x30, file_name)
-    if has_attribute_list:
-        attrs += resident_attribute(0x20, b"\x00")
-    attrs += resident_attribute(0x80, payload)
-    attrs += struct.pack("<I", 0xFFFFFFFF)
-    attrs += bytes((-len(attrs)) % 8)
-    raw[attr_offset:attr_offset + len(attrs)] = attrs
-    struct.pack_into("<I", raw, 24, attr_offset + len(attrs))
-    return bytes(raw)
+from helpers import make_record, resident_attribute
 
 
 class MFTParserTests(unittest.TestCase):
