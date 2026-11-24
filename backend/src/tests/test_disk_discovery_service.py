@@ -5,10 +5,10 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.models import NTFSVolume, PhysicalDisk
+from modules.disk.entities import NTFSVolume, PhysicalDisk
 from disk.scanning.partition_scan import ScanCheckpoint
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from modules.disk_discovery.service import DiskDiscoveryService
+from modules.disk.service import DiskDiscoveryService
 
 
 class InterruptibleInventory:

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.models import NTFSVolume
+from modules.disk.entities import NTFSVolume
 from modules.catalog.content_validation import CatalogContentValidator
 from modules.catalog.service import CatalogService
 from modules.recovery.service import RecoveryWorkflow

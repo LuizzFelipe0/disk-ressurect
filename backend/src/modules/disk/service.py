@@ -1,7 +1,25 @@
-from modules.disk_discovery.models import DiscoveredDisk
-from modules.disk_discovery.repository import DeepScanRepository
-from modules.disk_discovery.ports import DiskInventoryPort
-from disk.models import NTFSVolume
+from typing import Callable, Protocol
+
+from disk.scanning.partition_scan import ScanCheckpoint
+from modules.disk.entities import DiscoveredDisk, NTFSVolume, PhysicalDisk
+from modules.disk.repository import DeepScanRepository
+
+
+class DiskInventoryPort(Protocol):
+    """Operations the disk feature needs from platform-specific discovery."""
+
+    def list_disks(self) -> list[PhysicalDisk]: ...
+
+    def list_ntfs_volumes(self, disk_number: int, progress_callback=None) -> list[NTFSVolume]: ...
+
+    def deep_scan_ntfs_volumes(
+        self,
+        disk_number: int,
+        progress_callback=None,
+        candidate_callback: Callable[[tuple[NTFSVolume, ...]], None] | None = None,
+        resume_checkpoint: ScanCheckpoint | None = None,
+        checkpoint_callback: Callable[[ScanCheckpoint], None] | None = None,
+    ) -> list[NTFSVolume]: ...
 
 
 class DiskDiscoveryService:

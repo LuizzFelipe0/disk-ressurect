@@ -10,7 +10,7 @@ from disk.deep_scan.lost_partition_scanner import LostPartitionScanner
 from disk.ntfs_discovery.anchor_resolver import MFTAnchorVolumeResolver
 from disk.ntfs_discovery.volume_scanner import NTFSVolumeScanner
 from disk.partition_table.scanner import PartitionTableScanner
-from disk.models import PhysicalDisk
+from modules.disk.entities import PhysicalDisk
 from disk.enumeration.windows import WindowsDiskEnumerator
 from disk.scanning.mft_anchor_scan import MFTAnchor, MFTAnchorScanner
 from ntfs.mft_parser import MFTRecord

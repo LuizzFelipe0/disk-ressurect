@@ -7,7 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from disk.deep_scan.ghost_mft_carver import GhostMFTCarver
-from disk.models import NTFSVolume
+from modules.disk.entities import NTFSVolume
 from ntfs.mft_parser import MFTRecord
 from ntfs.tree_builder import TreeBuilder
 

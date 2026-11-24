@@ -7,13 +7,13 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from disk.models import NTFSVolume, PhysicalDisk
+from modules.disk.entities import NTFSVolume, PhysicalDisk
 from disk.validation.auditor import DiskReadCoverage, DiskValidationAuditor
 from disk.inventory import DiskInventory
 from presentation.controller import RecoveryCommandHandler
-from modules.disk_discovery.dto import DiskDto, DiskValidationRequestDto
-from modules.disk_discovery.mapper import DiskDiscoveryMapper
-from modules.disk_discovery.service import DiskDiscoveryService
+from modules.disk.dto import DiskDto, DiskValidationRequestDto
+from modules.disk.dto import DiskDiscoveryMapper
+from modules.disk.service import DiskDiscoveryService
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from ntfs.mft_parser import MFTRecord
 from ntfs.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector

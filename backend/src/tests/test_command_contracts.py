@@ -7,8 +7,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from presentation.controller import RecoveryCommandHandler
 from presentation.transport import CommandRequestDto, ProgressEventDto
 from modules.catalog.dto import CarvingOptionsDto, VolumeSelectionRequestDto
-from modules.disk_discovery.dto import PartitionScanRequestDto
-from modules.disk_discovery.service import DiskDiscoveryService
+from modules.disk.dto import PartitionScanRequestDto
+from modules.disk.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto
 
 

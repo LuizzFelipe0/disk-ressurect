@@ -1,7 +1,6 @@
 from typing import Protocol
 
-from modules.disk_discovery.models import CachedDeepScan
-from disk.models import NTFSVolume, PhysicalDisk
+from modules.disk.entities import CachedDeepScan, NTFSVolume, PhysicalDisk
 from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
 
 

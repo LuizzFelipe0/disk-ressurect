@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from disk.models import NTFSVolume
+from modules.disk.entities import NTFSVolume
 from ntfs.file_content_reader import NTFSFileContentReader
 from ntfs.mft_data_extent_resolver import MFTDataExtentResolver
 from ntfs.mft_parser import MFTRecord

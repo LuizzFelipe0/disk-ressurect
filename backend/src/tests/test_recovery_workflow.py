@@ -7,7 +7,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.catalog.models import RecoveryCatalogSnapshot
 from modules.recovery.service import RecoveryWorkflow
-from disk.models import NTFSVolume
+from modules.disk.entities import NTFSVolume
 from domain.recovery_catalog import RecoveryCatalog
 
 

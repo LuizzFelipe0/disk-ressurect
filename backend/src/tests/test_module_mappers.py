@@ -6,7 +6,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.catalog.mapper import CatalogMapper
-from modules.disk_discovery.mapper import DiskDiscoveryMapper
+from modules.disk.dto import DiskDiscoveryMapper
 
 
 class ModuleMapperTests(unittest.TestCase):
