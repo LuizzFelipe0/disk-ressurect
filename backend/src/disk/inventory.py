@@ -67,3 +67,15 @@ class DiskInventory:
             int(disk_number), progress_callback, retain_orphans_for_offset,
             orphan_scan_volume, content_carving_range_budget_bytes,
         )
+
+    def validate_disk_with_snapshot(
+        self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
+        orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+        validation_snapshot=None,
+    ):
+        """Revalidate metadata while reusing an explicitly historical read snapshot."""
+        return DiskValidationAuditor(self.enumerator, self.disk_factory).validate(
+            int(disk_number), progress_callback, retain_orphans_for_offset,
+            orphan_scan_volume, content_carving_range_budget_bytes,
+            validation_snapshot=validation_snapshot,
+        )
