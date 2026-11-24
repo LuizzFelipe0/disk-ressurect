@@ -46,6 +46,7 @@ class BatchedTreeTests(unittest.TestCase):
             is_valid=True,
             name="photo.jpg",
             index=0,
+            is_extension_record=False,
             parent_index=None,
             is_allocated=True,
             is_dir=False,
@@ -56,6 +57,8 @@ class BatchedTreeTests(unittest.TestCase):
             builder.build()
 
         self.assertEqual(parser.call_args.args[3], 4096)
+        self.assertIs(builder.mft_records[0], parsed)
+        self.assertIs(builder.nodes[0].record, parsed)
 
 
 if __name__ == "__main__":
