@@ -5,10 +5,10 @@ from dataclasses import dataclass
 class CarvingOptionsDto:
     """User-selected, bounded budgets for the trusted free-space carver."""
 
-    scan_budget_gib: int = 1
-    max_files: int = 256
-    max_retained_mib: int = 128
-    max_candidate_read_mib_per_format: int = 256
+    scan_budget_gib: int = 64
+    max_files: int = 16384
+    max_retained_mib: int = 512
+    max_candidate_read_mib_per_format: int = 1024
 
     SCAN_BUDGETS_GIB = (1, 4, 16, 64)
     FILE_COUNT_LIMITS = (256, 512, 1024, 2048, 4096, 8192, 16384)
@@ -19,21 +19,21 @@ class CarvingOptionsDto:
     def from_payload(cls, payload):
         if not isinstance(payload, dict):
             raise ValueError("carvingOptions must be a JSON object")
-        scan_budget_gib = payload.get("scanBudgetGiB", 1)
+        scan_budget_gib = payload.get("scanBudgetGiB", 64)
         if (isinstance(scan_budget_gib, bool) or not isinstance(scan_budget_gib, int)
                 or scan_budget_gib not in cls.SCAN_BUDGETS_GIB):
             raise ValueError("carvingOptions.scanBudgetGiB must be one of 1, 4, 16 or 64")
-        max_files = payload.get("maxFiles", 256)
+        max_files = payload.get("maxFiles", 16384)
         if (isinstance(max_files, bool) or not isinstance(max_files, int)
                 or max_files not in cls.FILE_COUNT_LIMITS):
             raise ValueError(
                 "carvingOptions.maxFiles must be one of 256, 512, 1024, 2048, 4096, 8192 or 16384"
             )
-        max_retained_mib = payload.get("maxRetainedMiB", 128)
+        max_retained_mib = payload.get("maxRetainedMiB", 512)
         if (isinstance(max_retained_mib, bool) or not isinstance(max_retained_mib, int)
                 or max_retained_mib not in cls.RETAINED_BUDGETS_MIB):
             raise ValueError("carvingOptions.maxRetainedMiB must be one of 128, 256 or 512")
-        candidate_read_mib_per_format = payload.get("maxCandidateReadMiBPerFormat", 256)
+        candidate_read_mib_per_format = payload.get("maxCandidateReadMiBPerFormat", 1024)
         if (isinstance(candidate_read_mib_per_format, bool)
                 or not isinstance(candidate_read_mib_per_format, int)
                 or candidate_read_mib_per_format not in cls.CANDIDATE_READ_BUDGETS_MIB_PER_FORMAT):
@@ -51,19 +51,19 @@ class CarvingOptionsDto:
 @dataclass(frozen=True)
 class VolumeSelectionRequestDto:
     volume_id: str
-    include_orphaned: bool = False
+    include_orphaned: bool = True
     carving_options: CarvingOptionsDto = CarvingOptionsDto()
-    force_fresh_validation: bool = False
+    force_fresh_validation: bool = True
 
     @classmethod
     def from_payload(cls, payload):
         value = payload.get("volumeId")
         if not isinstance(value, str) or not value:
             raise ValueError("volumeId must be a non-empty string")
-        include_orphaned = payload.get("includeOrphaned", False)
+        include_orphaned = payload.get("includeOrphaned", True)
         if not isinstance(include_orphaned, bool):
             raise ValueError("includeOrphaned must be a boolean")
-        force_fresh_validation = payload.get("forceFreshValidation", False)
+        force_fresh_validation = payload.get("forceFreshValidation", True)
         if not isinstance(force_fresh_validation, bool):
             raise ValueError("forceFreshValidation must be a boolean")
         carving_options = CarvingOptionsDto.from_payload(payload.get("carvingOptions", {}))
