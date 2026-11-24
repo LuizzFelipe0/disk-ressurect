@@ -93,7 +93,7 @@ describe("useRecoveryController backend lifecycle", () => {
 
     await act(async () => { await result.current.buildCatalog(true); });
 
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined);
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, false);
     expect(result.current.catalog?.diskValidation).toEqual(diskValidation);
   });
 
@@ -108,7 +108,20 @@ describe("useRecoveryController backend lifecycle", () => {
     };
     await act(async () => { await result.current.buildCatalog(true, carvingOptions); });
 
-    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, carvingOptions);
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, carvingOptions, false);
+  });
+
+  it("forwards an explicit request for a fresh full-disk validation", async () => {
+    scanCatalog.mockResolvedValue({ recordCount: 1, availableExtensions: [], roots: [] });
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+
+    await act(async () => {
+      await result.current.buildCatalog(true, undefined, true);
+    });
+
+    expect(scanCatalog).toHaveBeenCalledWith("1:4096", true, undefined, true);
   });
 
   it("loads a preview for the chosen file and clears it when the source changes", async () => {
