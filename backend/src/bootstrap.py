@@ -9,9 +9,11 @@ sys.path.insert(0, os.path.dirname(__file__))
 from infrastructure.disk.inventory import DiskInventory
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from infrastructure.catalog.builder import CatalogBuilder
-from infrastructure.disk.factory import disk_reader_factory
 from infrastructure.disk.output_safety import OutputSafetyGuard
-from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
+from infrastructure.filesystems.ntfs.readers.content_reference_store import NTFSContentReferenceStore
+from infrastructure.storage.factory import create_block_reader
+from modules.storage.service import StorageService
 from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
 from modules.catalog.service import CatalogService
@@ -48,6 +50,9 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
     elif os.path.isdir(cache_path):
         cache_path = os.path.join(cache_path, "deep_scan_cache.json")
     disk_inventory = inventory if inventory is not None else DiskInventory()
+    reference_store = NTFSContentReferenceStore()
+    storage_service = StorageService(disk_inventory, create_block_reader)
+    reader_factory = storage_service.open_reader
     repository = scan_repository if scan_repository is not None else JsonDeepScanRepository(cache_path)
     disk_service = DiskService(disk_inventory, repository)
     deep_scan_service = DeepScanService(disk_inventory, disk_service, repository, repository)
@@ -56,12 +61,18 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
         disk_service,
         deep_scan_service,
         validation_service,
-        CatalogBuilder(),
+        CatalogBuilder(
+            disk_factory=lambda number: reader_factory(storage_service.get_physical_source(number)),
+            source_resolver=storage_service.get_physical_source,
+            content_reference_store=reference_store,
+        ),
         CatalogService(),
         workflow if workflow is not None else RecoveryWorkflow(
-            disk_reader_factory(), OutputSafetyGuard(), NTFSFileContentReader,
+            OutputSafetyGuard(),
+            lambda source: NTFSContentReferenceReader(reader_factory, reference_store),
             FileSignatureValidator, Extractor,
         ),
+        source_resolver=storage_service.get_physical_source,
     )
 
 

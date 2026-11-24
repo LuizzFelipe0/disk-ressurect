@@ -1,16 +1,14 @@
 from infrastructure.disk.output_safety import OutputSafetyGuard
-from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
 from modules.recovery.service import RecoveryWorkflow
 import struct
 
 
-def make_recovery_workflow(disk_factory, output_guard=None):
+def make_recovery_workflow(output_guard=None, content_reader_factory=None):
     return RecoveryWorkflow(
-        disk_factory,
         output_guard if output_guard is not None else OutputSafetyGuard(),
-        NTFSFileContentReader,
+        content_reader_factory if content_reader_factory is not None else (lambda _source: None),
         FileSignatureValidator,
         Extractor,
     )

@@ -99,6 +99,23 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     violations.append(f"{path.relative_to(SRC_ROOT)}:{node.lineno}")
         self.assertEqual([], violations)
 
+    def test_storage_and_catalog_features_remain_filesystem_neutral(self):
+        violations = []
+        for feature in ("storage", "catalog"):
+            root = MODULES_ROOT / feature
+            for path in root.rglob("*.py"):
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                for node in ast.walk(tree):
+                    imported = node.module if isinstance(node, ast.ImportFrom) else None
+                    names = [item.name for item in node.names] if isinstance(node, ast.Import) else []
+                    targets = ([imported] if imported else []) + names
+                    if any(target.startswith((
+                        "infrastructure.filesystems.ntfs", "modules.disk",
+                        "modules.recovery",
+                    )) for target in targets):
+                        violations.append(f"{path.relative_to(SRC_ROOT)}:{node.lineno}")
+        self.assertEqual([], violations)
+
 
 if __name__ == "__main__":
     unittest.main()

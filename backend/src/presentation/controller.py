@@ -24,6 +24,7 @@ class RecoveryCommandHandler:
         self, disk_service: DiskService, deep_scan_service: DeepScanService,
         validation_service: ValidationService, catalog_builder, catalog_service,
         recovery_service, session=None,
+        source_resolver=None,
     ):
         self.disk_service = disk_service
         self.deep_scan_service = deep_scan_service
@@ -31,6 +32,7 @@ class RecoveryCommandHandler:
         self.catalog_builder = catalog_builder
         self.catalog_service = catalog_service
         self.recovery_service = recovery_service
+        self.source_resolver = source_resolver
         self.session = session if session is not None else RecoverySession()
         self.catalog_scan_workflow = CatalogScanWorkflow(
             disk_service,
@@ -52,7 +54,10 @@ class RecoveryCommandHandler:
         if operation == "list_disks":
             result = []
             for item in self.disk_service.list_disks():
-                dto = DiskDtoMapper.disk(item, self.session.register_volume)
+                source_id = self._source_id_for_disk(item.disk)
+                dto = DiskDtoMapper.disk(
+                    item, lambda volume: self.session.register_volume(volume, source_id),
+                )
                 result.append(dto.to_dict())
             return result
         if operation == "list_partitions":
@@ -63,10 +68,11 @@ class RecoveryCommandHandler:
                 self._inventory_progress(emit),
                 resume=request.resume,
             )
+            source_id = self._source_id_for_disk(self.disk_service.get_disk(request.disk_number))
             return [
                 DiskDtoMapper.partition(
                     volume,
-                    self.session.register_volume(volume),
+                    self.session.register_volume(volume, source_id),
                     scanned_at,
                 ).to_dict()
                 for volume in volumes
@@ -124,6 +130,11 @@ class RecoveryCommandHandler:
     def _scan_catalog(self, payload, emit):
         request = VolumeSelectionRequestDto.from_payload(payload)
         volume = self.session.get_volume(request.volume_id)
+        expected_source_id = self.session.get_volume_source_id(request.volume_id)
+        if expected_source_id and self.source_resolver is not None:
+            current_source = self.source_resolver(volume.disk_number)
+            if current_source.source_id != expected_source_id:
+                raise ValueError("Selected partition belongs to a different storage source; rescan it")
         progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)
         outcome = self.catalog_scan_workflow.run(
             volume,
@@ -138,6 +149,11 @@ class RecoveryCommandHandler:
         return CatalogMapper.catalog(
             outcome.snapshot, ids_by_identity, outcome.validation_summary,
         ).to_dict()
+
+    @staticmethod
+    def _source_id_for_disk(disk):
+        as_source = getattr(disk, "as_storage_source", None)
+        return as_source().source_id if callable(as_source) else None
 
     @staticmethod
     def _progress(emit):

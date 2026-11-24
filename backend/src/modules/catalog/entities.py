@@ -1,7 +1,8 @@
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass, field
 
-from modules.disk.entities import NTFSVolume
+from modules.storage.entities import StorageSource
+
 
 SUPPORTED_CATALOG_EXTENSIONS = (
     ".doc", ".docm", ".docx", ".jpeg", ".jpg", ".mp4",
@@ -9,32 +10,47 @@ SUPPORTED_CATALOG_EXTENSIONS = (
 )
 
 
-import os
+@dataclass
+class CatalogNode:
+    """Filesystem-neutral tree entry; files carry a recovery candidate."""
+
+    node_id: str
+    name: str
+    full_path: str
+    is_directory: bool
+    size_bytes: int
+    candidate: object | None = None
+    properties: dict = field(default_factory=dict)
+    parent: "CatalogNode | None" = field(default=None, repr=False)
+    children: list["CatalogNode"] = field(default_factory=list, repr=False)
+
+    def __post_init__(self):
+        if not self.node_id:
+            raise ValueError("Catalog node identity is required")
+        if self.size_bytes < 0:
+            raise ValueError("Catalog node size cannot be negative")
+        if self.is_directory and self.candidate is not None:
+            raise ValueError("Directory nodes cannot be recovery candidates")
+        if not self.is_directory and self.candidate is None:
+            raise ValueError("File nodes require a recovery candidate")
 
 
 class RecoveryCatalog:
     def __init__(self, nodes, root_nodes=None):
-        self.nodes = nodes
+        values = nodes.values() if hasattr(nodes, "values") else nodes
+        self.nodes = {node.node_id: node for node in values}
         self.root_nodes = list(root_nodes or ())
         if not self.root_nodes:
-            self.root_nodes = [node for node in nodes.values() if getattr(node, "parent", None) is None]
-        self.file_nodes = []
+            self.root_nodes = [node for node in self.nodes.values() if node.parent is None]
+        self.file_nodes = [node for node in self.nodes.values() if not node.is_directory]
         self._files_by_extension = {}
-        for node in nodes.values():
-            if node.record.is_dir:
-                continue
-            extension = os.path.splitext(node.record.name)[1].casefold()
-            self.file_nodes.append(node)
+        for node in self.file_nodes:
+            extension = os.path.splitext(node.name)[1].casefold()
             self._files_by_extension.setdefault(extension, []).append(node)
 
     @staticmethod
     def node_key(node):
-        record = node.record
-        return (
-            getattr(record, "index", None),
-            getattr(record, "sequence_number", None),
-            os.path.normcase(getattr(node, "full_path", "")),
-        )
+        return node.node_id
 
     def available_extensions(self, supported_extensions):
         supported = {extension.casefold() for extension in supported_extensions}
@@ -48,19 +64,16 @@ class RecoveryCatalog:
             self.node_key(node)
             for extension in supported.intersection(selected)
             for node in self._files_by_extension.get(extension, ())
-            if int(node.record.file_size) >= threshold
+            if int(node.size_bytes) >= threshold
         }
-        return [
-            node for node in self.file_nodes
-            if self.node_key(node) in eligible_keys
-        ]
+        return [node for node in self.file_nodes if self.node_key(node) in eligible_keys]
 
     @staticmethod
     def is_eligible(node, allowed_extensions, min_file_size=0):
-        if node.record.is_dir:
+        if node.is_directory:
             return False
-        extension = os.path.splitext(node.record.name)[1].casefold()
-        return extension in allowed_extensions and int(node.record.file_size) >= min_file_size
+        extension = os.path.splitext(node.name)[1].casefold()
+        return extension in allowed_extensions and int(node.size_bytes) >= min_file_size
 
     def plan_selection(self, selected_nodes, eligible_files):
         """Expand selected folders to eligible files and deduplicate nested checks."""
@@ -76,14 +89,17 @@ class RecoveryCatalog:
             visited.add(key)
             if key in eligible_by_key:
                 selected_keys.add(key)
-            pending.extend(reversed(tuple(getattr(node, "children", ()))))
+            pending.extend(reversed(tuple(node.children)))
         return [node for key, node in eligible_by_key.items() if key in selected_keys]
 
 
 @dataclass(frozen=True)
 class RecoveryCatalogSnapshot:
     catalog: RecoveryCatalog
-    volume: NTFSVolume
+    source: StorageSource | None = None
+    source_id: str = ""
+    volume_id: str = ""
+    filesystem_id: str | None = None
     orphan_scan_performed: bool = False
     content_carving_summary: dict | None = None
     parent_reference_issue_count: int = 0
@@ -91,40 +107,3 @@ class RecoveryCatalogSnapshot:
     recycle_bin_summary: dict | None = None
     usn_journal_summary: dict | None = None
     ntfs_log_file_summary: dict | None = None
-
-    @property
-    def volume_start(self):
-        return self.volume.partition_offset
-
-    @property
-    def cluster_size(self):
-        return self.volume.cluster_size
-
-
-@dataclass(frozen=True)
-class CarvedContentRecord:
-    """Catalog-facing candidate with bytes found outside filesystem metadata."""
-
-    index: int
-    offset: int
-    name: str
-    resident_data: bytes
-    cluster_allocation_status: str = "free"
-    sequence_number: int = 0
-    is_valid: bool = True
-    # Raw carving cannot prove this file was deleted; do not label it as such.
-    is_allocated: bool = True
-    is_dir: bool = False
-    file_size: int = 0
-    data_is_complete: bool = True
-    data_runs: tuple = ()
-    raw_data: bytes = b""
-    catalog_content_validation: str = "format_structure_match"
-    catalog_content_validation_reason: str = (
-        "Contiguous file structure and format markers passed validation"
-    )
-
-    def __post_init__(self):
-        data = bytes(self.resident_data)
-        object.__setattr__(self, "resident_data", data)
-        object.__setattr__(self, "file_size", len(data))

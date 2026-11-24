@@ -1,30 +1,30 @@
 import os
 import sys
 import unittest
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.catalog.dto import CatalogMapper
-from modules.catalog.entities import RecoveryCatalogSnapshot
+from modules.catalog.entities import CatalogNode, RecoveryCatalogSnapshot
 from modules.catalog.service import CatalogService
 from modules.catalog.entities import RecoveryCatalog
+from modules.recovery.entities import RecoveryCandidate
 
 
 class CatalogSearchTests(unittest.TestCase):
     def setUp(self):
-        self.root = SimpleNamespace(
-            record=SimpleNamespace(name="Photos", file_size=0, is_dir=True),
-            full_path="Users/Photos", children=[], parent=None,
+        self.root = CatalogNode("folder-photos", "Photos", "Users/Photos", True, 0)
+        candidate = RecoveryCandidate(
+            "candidate-photo", "source-test", "volume-test", "Summer.JPG",
+            "Users/Photos/Summer.JPG", 128, "synthetic", ("test",), (),
         )
-        self.photo = SimpleNamespace(
-            record=SimpleNamespace(name="Summer.JPG", file_size=128, is_dir=False),
-            full_path="Users/Photos/Summer.JPG", children=[], parent=self.root,
+        self.photo = CatalogNode(
+            candidate.candidate_id, "Summer.JPG", "Users/Photos/Summer.JPG",
+            False, 128, candidate, parent=self.root,
         )
         self.root.children.append(self.photo)
         self.snapshot = RecoveryCatalogSnapshot(
-            RecoveryCatalog({1: self.root, 2: self.photo}, [self.root]),
-            SimpleNamespace(),
+            RecoveryCatalog({self.root.node_id: self.root, self.photo.node_id: self.photo}, [self.root]),
         )
 
     def test_search_matches_names_and_paths_without_case_sensitivity(self):

@@ -154,15 +154,18 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
 
         snapshot, _disk = self._build(nodes=nodes, roots=roots)
         alias = next(node for node in snapshot.catalog.nodes.values()
-                     if getattr(node.record, "recovery_source", None) == "recycle_bin")
+                     if node.properties.get("recoverySource") == "recycle_bin")
         ids = {id(node): f"node-{index}" for index, node in enumerate(snapshot.catalog.nodes.values())}
         dto = CatalogMapper.catalog(snapshot, ids).to_dict()
         alias_dto = next(node for node in dto["roots"]
                          if node.get("recoverySource") == "recycle_bin")
 
-        self.assertIsNot(alias.record, original_record)
+        self.assertNotEqual(
+            dict(alias.candidate.evidence[0].details).get("recordNumber"), original_record.index,
+        )
+        self.assertEqual(alias.properties["recoverySource"], "recycle_bin")
         self.assertEqual("$Rabc.jpg", original_record.name)
-        self.assertEqual("Lost_Files_DeepScan/RecycleBin/" + alias.record.name,
+        self.assertEqual("Lost_Files_DeepScan/RecycleBin/" + alias.name,
                          alias.full_path.replace("\\", "/"))
         self.assertNotIn("..", alias.full_path)
         self.assertEqual(r"C:\Users\Ada\Photos\..\lost.jpg", alias_dto["originalPath"])
@@ -235,9 +238,9 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
         snapshot, _ = self._build(nodes=nodes, roots=roots)
 
         aliases = [node for node in snapshot.catalog.nodes.values()
-                   if getattr(node.record, "recovery_source", None) == "usn_journal_mft"]
+                   if node.properties.get("recoverySource") == "usn_journal_mft"]
         self.assertEqual(len(aliases), 1)
-        self.assertEqual(aliases[0].record.name, "deleted.jpg")
+        self.assertEqual(aliases[0].name, "deleted.jpg")
         self.assertEqual("Lost_Files_DeepScan/USNJournal/deleted.jpg",
                          aliases[0].full_path.replace("\\", "/"))
         self.assertEqual("damaged-name.tmp", deleted_record.name)

@@ -243,12 +243,12 @@ class CatalogMapper:
             ),
             roots=roots,
             orphaned_record_count=sum(
-                bool(getattr(node, "is_orphaned", False))
-                and not bool(getattr(node, "is_content_carved", False))
+                bool(CatalogMapper._properties(node).get("isOrphaned", False))
+                and not bool(CatalogMapper._properties(node).get("isContentCarved", False))
                 for node in snapshot.catalog.nodes.values()
             ),
             content_carved_count=sum(
-                bool(getattr(node, "is_content_carved", False))
+                bool(CatalogMapper._properties(node).get("isContentCarved", False))
                 for node in snapshot.catalog.nodes.values()
             ),
             orphan_scan_performed=bool(getattr(snapshot, "orphan_scan_performed", False)),
@@ -262,42 +262,64 @@ class CatalogMapper:
 
     @staticmethod
     def node(node, node_ids_by_identity):
-        extent_resolution = getattr(node.record, "data_extent_resolution", None)
+        properties = CatalogMapper._properties(node)
+        record = getattr(node, "record", None)
+        name = getattr(node, "name", getattr(record, "name", ""))
+        full_path = getattr(node, "full_path", name)
+        is_directory = getattr(node, "is_directory", bool(getattr(record, "is_dir", False)))
+        size_bytes = getattr(node, "size_bytes", getattr(record, "file_size", 0))
+        extent_resolution = properties.get("dataExtentResolution")
         return CatalogNodeDto(
             id=node_ids_by_identity[id(node)],
-            name=node.record.name,
-            path=node.full_path,
-            is_directory=bool(node.record.is_dir),
-            size_bytes=int(node.record.file_size),
-            has_children=bool(node.record.is_dir and node.children),
+            name=name,
+            path=full_path,
+            is_directory=is_directory,
+            size_bytes=int(size_bytes),
+            has_children=bool(is_directory and node.children),
             parent_id=node_ids_by_identity.get(id(getattr(node, "parent", None))),
-            is_deleted=not bool(getattr(node.record, "is_allocated", True)),
-            is_orphaned=bool(getattr(node, "is_orphaned", False)),
-            is_content_carved=bool(getattr(node, "is_content_carved", False)),
-            content_validation=getattr(node.record, "catalog_content_validation", None),
-            cluster_allocation_status=(
-                getattr(node.record, "cluster_allocation_evidence", {}).get("status")
-                if isinstance(getattr(node.record, "cluster_allocation_evidence", None), dict)
-                else getattr(node.record, "cluster_allocation_status", None)
-            ),
-            metadata_consistent=getattr(node.record, "is_metadata_consistent", None),
-            recovery_source=getattr(node.record, "recovery_source", None),
-            original_path=getattr(node.record, "original_path", None),
-            deletion_timestamp_utc=getattr(node.record, "deletion_timestamp_utc", None),
-            original_size_bytes=getattr(node.record, "recycle_bin_original_size_bytes", None),
+            is_deleted=bool(properties.get("isDeleted", False)),
+            is_orphaned=bool(properties.get("isOrphaned", False)),
+            is_content_carved=bool(properties.get("isContentCarved", False)),
+            content_validation=properties.get("contentValidation"),
+            cluster_allocation_status=properties.get("clusterAllocationStatus"),
+            metadata_consistent=properties.get("metadataConsistent"),
+            recovery_source=properties.get("recoverySource"),
+            original_path=properties.get("originalPath"),
+            deletion_timestamp_utc=properties.get("deletionTimestampUtc"),
+            original_size_bytes=properties.get("originalSizeBytes"),
             data_extent_resolution=(
                 extent_resolution
                 if extent_resolution in {"resolved", "inconclusive"} else None
             ),
-            data_extent_resolution_reason=getattr(
-                node.record, "data_extent_resolution_reason", None,
-            ),
+            data_extent_resolution_reason=properties.get("dataExtentResolutionReason"),
             data_extent_count=(
-                int(getattr(node.record, "data_extent_count", 0))
+                int(properties.get("dataExtentCount", 0))
                 if extent_resolution == "resolved"
                 else None
             ),
         )
+
+    @staticmethod
+    def _properties(node):
+        properties = getattr(node, "properties", None)
+        if properties is not None:
+            return properties
+        # Keep DTO mapping compatible while callers migrate from legacy adapters.
+        record = getattr(node, "record", None)
+        if record is None:
+            return {}
+        allocation = getattr(record, "cluster_allocation_evidence", None)
+        return {
+            "isDeleted": not bool(getattr(record, "is_allocated", True)),
+            "isOrphaned": bool(getattr(node, "is_orphaned", False)),
+            "isContentCarved": bool(getattr(node, "is_content_carved", False)),
+            "contentValidation": getattr(record, "catalog_content_validation", None),
+            "clusterAllocationStatus": (
+                allocation.get("status") if isinstance(allocation, dict)
+                else getattr(record, "cluster_allocation_status", None)
+            ),
+            "metadataConsistent": getattr(record, "is_metadata_consistent", None),
+        }
 
     @staticmethod
     def search(snapshot, nodes, total_matches, node_ids_by_identity):

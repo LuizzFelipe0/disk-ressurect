@@ -133,3 +133,28 @@ class OutputSafetyGuard:
                 "choose a different physical disk to avoid overwriting recoverable data"
             )
         return sorted(disks)
+
+    def validate_source(self, output_path, source):
+        """Keep recovery output off the physical source and raw-image volume."""
+        if os.path.islink(output_path):
+            raise ValueError("Recovery output cannot be a symbolic link")
+        if source.source_type == "physical_disk":
+            return self.validate(output_path, int(source.locator))
+        if source.source_type == "raw_image":
+            try:
+                if os.path.islink(source.locator):
+                    raise OSError("Raw image path became a symbolic link")
+                source_metadata = os.stat(source.locator, follow_symlinks=False)
+                output_parent = _existing_ancestor(output_path)
+                output_metadata = os.stat(output_parent, follow_symlinks=False)
+            except OSError as exc:
+                raise OSError("Could not validate the output location against the image source") from exc
+            if not stat.S_ISREG(source_metadata.st_mode) or not stat.S_ISDIR(output_metadata.st_mode):
+                raise OSError("Source image or recovery output location is no longer a regular path")
+            if source_metadata.st_dev == output_metadata.st_dev:
+                raise ValueError(
+                    "Recovery output is on the same filesystem as the raw image; "
+                    "choose a different filesystem to protect the source image"
+                )
+            return [int(output_metadata.st_dev)]
+        raise ValueError(f"Unsupported storage source type: {source.source_type}")

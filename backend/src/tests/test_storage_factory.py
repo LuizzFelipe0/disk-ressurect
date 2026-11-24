@@ -8,6 +8,7 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC_ROOT))
 
 from infrastructure.storage.factory import create_block_reader
+from infrastructure.storage.image.reader import RawImageReader
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.storage.entities import PhysicalDisk, StorageSource
 from modules.storage.service import StorageService
@@ -55,7 +56,9 @@ class StorageFactoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disk.img"
             path.write_bytes(b"image")
-            source = StorageSource("raw-image:test", "raw_image", "disk.img", 5, 512, str(path))
+            probe = RawImageReader(path)
+            source = probe.source
+            probe.close()
 
             with create_block_reader(source) as reader:
                 self.assertEqual(reader.read_at(0, 5), b"image")

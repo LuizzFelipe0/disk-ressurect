@@ -1,6 +1,8 @@
 import os
 import copy
 import hashlib
+import json
+import uuid
 from dataclasses import dataclass
 
 from infrastructure.disk.factory import disk_reader_factory
@@ -20,7 +22,43 @@ from infrastructure.filesystems.ntfs.artifacts.usn_journal import UsnJournalEvid
 from infrastructure.filesystems.ntfs.artifacts.usn_mft_correlator import UsnMftCorrelator
 from infrastructure.filesystems.ntfs.artifacts.logfile import NTFSLogFileEvidenceScanner
 from infrastructure.formats.signature import FileSignatureValidator
-from modules.catalog.entities import CarvedContentRecord
+from modules.catalog.entities import CatalogNode
+from modules.recovery.entities import (
+    ContentReference,
+    RecoveryCandidate,
+    RecoveryEvidence,
+    stable_candidate_id,
+)
+from modules.storage.entities import StorageSource
+from infrastructure.filesystems.ntfs.readers.content_reference_store import NTFSContentReferenceStore
+
+
+@dataclass(frozen=True)
+class CarvedContentRecord:
+    """NTFS catalog adapter record for bounded raw carving results."""
+
+    index: int
+    offset: int
+    name: str
+    resident_data: bytes
+    cluster_allocation_status: str = "free"
+    sequence_number: int = 0
+    is_valid: bool = True
+    is_allocated: bool = True
+    is_dir: bool = False
+    file_size: int = 0
+    data_is_complete: bool = True
+    data_runs: tuple = ()
+    raw_data: bytes = b""
+    catalog_content_validation: str = "format_structure_match"
+    catalog_content_validation_reason: str = (
+        "Contiguous file structure and format markers passed validation"
+    )
+
+    def __post_init__(self):
+        content = bytes(self.resident_data)
+        object.__setattr__(self, "resident_data", content)
+        object.__setattr__(self, "file_size", len(content))
 
 
 class CatalogBuilder:
@@ -31,8 +69,14 @@ class CatalogBuilder:
     LOW_CONFIDENCE_MAX_TOTAL_FILE_BYTES = 32 * 1024 * 1024
     LOW_CONFIDENCE_MAX_FILES = 64
 
-    def __init__(self, disk_factory: DiskReaderFactory | None = None):
+    def __init__(self, disk_factory: DiskReaderFactory | None = None,
+                 source_resolver=None, content_reference_store=None):
         self.disk_factory = disk_factory if disk_factory is not None else disk_reader_factory()
+        self.source_resolver = source_resolver
+        self.content_reference_store = (
+            content_reference_store if content_reference_store is not None
+            else NTFSContentReferenceStore()
+        )
 
     def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
               precomputed_orphans=None, precomputed_carving_ranges=None,
@@ -41,6 +85,21 @@ class CatalogBuilder:
               carving_checkpoint=None, carving_checkpoint_callback=None):
         disk = self.disk_factory(volume.disk_number)
         try:
+            self.content_reference_store.begin_catalog()
+            source = getattr(disk, "source", None)
+            if source is None and self.source_resolver is not None:
+                source = self.source_resolver(volume.disk_number)
+            if source is None:
+                source = StorageSource(
+                    source_id=f"physical-device:{int(volume.disk_number)}",
+                    source_type="physical_disk",
+                    display_name=f"Physical disk {volume.disk_number}",
+                    size_bytes=int(getattr(disk, "size_bytes", disk.size)),
+                    bytes_per_sector=int(getattr(disk, "bytes_per_sector", 512)),
+                    locator=str(int(volume.disk_number)),
+                )
+            source_id = source.source_id
+            volume_id = self._volume_identity(source_id, volume)
             builder = TreeBuilder(
                 disk,
                 volume.fragments_as_dicts(),
@@ -124,8 +183,13 @@ class CatalogBuilder:
                     )
                 nodes = builder.nodes
             return RecoveryCatalogSnapshot(
-                catalog=RecoveryCatalog(nodes, builder.root_nodes),
-                volume=volume,
+                catalog=self._to_recovery_catalog(
+                    nodes, builder.root_nodes, source, volume, volume_id,
+                ),
+                source=source,
+                source_id=source_id,
+                volume_id=volume_id,
+                filesystem_id="ntfs",
                 orphan_scan_performed=bool(include_orphaned),
                 content_carving_summary=content_carving_summary,
                 parent_reference_issue_count=int(builder.parent_reference_issue_count),
@@ -136,6 +200,165 @@ class CatalogBuilder:
             )
         finally:
             disk.close()
+
+    @staticmethod
+    def _volume_identity(source_id, volume):
+        identity = [
+            source_id,
+            "ntfs",
+            int(volume.partition_number),
+            int(volume.partition_size),
+            str(volume.partition_name or "").casefold(),
+        ]
+        encoded = json.dumps(identity, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _to_recovery_catalog(self, source_nodes, source_roots, source, volume, volume_id):
+        source_id = source.source_id
+        used_node_ids = set()
+        converted = {}
+        for source_node in source_nodes.values():
+            record = source_node.record
+            is_directory = bool(record.is_dir)
+            properties = self._catalog_properties(source_node, record)
+            candidate = None
+            if not is_directory:
+                resident_data = getattr(record, "resident_data", None)
+                digest = hashlib.sha256(bytes(resident_data)).hexdigest() if resident_data is not None else None
+                logical_identity = getattr(record, "original_path", None)
+                if not logical_identity and not self._is_generated_recovery_path(source_node.full_path):
+                    logical_identity = source_node.full_path
+                if not logical_identity and digest is None:
+                    candidate_id = uuid.uuid4().hex
+                else:
+                    candidate_id = stable_candidate_id(
+                        source_id,
+                        volume_id,
+                        logical_identity,
+                        int(record.file_size),
+                        digest,
+                    )
+                if candidate_id in used_node_ids:
+                    candidate_id = uuid.uuid4().hex
+                used_node_ids.add(candidate_id)
+                allocation = self._allocation_state(record)
+                complete = bool(getattr(record, "data_is_complete", False))
+                valid = bool(getattr(record, "is_valid", True))
+                consistent = getattr(record, "is_metadata_consistent", True)
+                reference = ContentReference(
+                    reference_id=candidate_id,
+                    source_id=source_id,
+                    size_bytes=int(record.file_size),
+                    sha256=digest,
+                )
+                self.content_reference_store.register(
+                    candidate_id, source, volume, source_node,
+                )
+                candidate = RecoveryCandidate(
+                    candidate_id=candidate_id,
+                    source_id=source_id,
+                    volume_id=volume_id,
+                    name=record.name,
+                    original_path=getattr(record, "original_path", None),
+                    size_bytes=int(record.file_size),
+                    filesystem_id="ntfs",
+                    discovery_methods=(self._discovery_method(source_node),),
+                    evidence=(RecoveryEvidence(
+                        "filesystem_metadata",
+                        str(getattr(record, "recovery_source", None) or "ntfs"),
+                        tuple(sorted((
+                            ("recordNumber", getattr(record, "index", None)),
+                            ("sequenceNumber", getattr(record, "sequence_number", None)),
+                            ("physicalOffset", getattr(record, "mft_offset", None)),
+                        ))),
+                    ),),
+                    deletion_state="deleted" if not getattr(record, "is_allocated", True) else "not_deleted",
+                    allocation_state=allocation,
+                    integrity_state=("validated" if valid and consistent is not False else "partial"),
+                    recoverability=("recoverable" if complete else "partial"),
+                    content_reference=reference,
+                )
+                node_id = candidate_id
+            else:
+                node_id = self._folder_identity(source_id, volume_id, source_node.full_path)
+                if node_id in used_node_ids:
+                    node_id = "folder:" + uuid.uuid4().hex
+                used_node_ids.add(node_id)
+            converted[id(source_node)] = CatalogNode(
+                node_id=node_id,
+                name=record.name,
+                full_path=source_node.full_path,
+                is_directory=is_directory,
+                size_bytes=int(record.file_size),
+                candidate=candidate,
+                properties=properties,
+            )
+
+        for source_node in source_nodes.values():
+            node = converted[id(source_node)]
+            node.parent = converted.get(id(source_node.parent)) if source_node.parent else None
+            node.children.extend(
+                converted[id(child)] for child in source_node.children
+                if id(child) in converted
+            )
+        by_id = {node.node_id: node for node in converted.values()}
+        roots = [converted[id(node)] for node in source_roots if id(node) in converted]
+        return RecoveryCatalog(by_id, roots)
+
+    @staticmethod
+    def _folder_identity(source_id, volume_id, path):
+        payload = json.dumps(
+            [source_id, volume_id, os.path.normcase(path).replace("\\", "/").casefold()],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "folder:" + hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _is_generated_recovery_path(path):
+        normalized = str(path).replace("\\", "/").casefold()
+        return normalized.startswith("lost_files_deepscan/")
+
+    @staticmethod
+    def _discovery_method(node):
+        if getattr(node, "is_content_carved", False):
+            return "content_carving"
+        if getattr(node, "is_orphaned", False):
+            return "orphan_mft"
+        return "filesystem_metadata"
+
+    @staticmethod
+    def _allocation_state(record):
+        evidence = getattr(record, "cluster_allocation_evidence", None)
+        status = evidence.get("status") if isinstance(evidence, dict) else None
+        status = status or getattr(record, "cluster_allocation_status", None)
+        return status if status in {"free", "allocated", "mixed"} else "unknown"
+
+    @classmethod
+    def _catalog_properties(cls, node, record):
+        extent_resolution = getattr(record, "data_extent_resolution", None)
+        raw_allocation = getattr(record, "cluster_allocation_status", None)
+        allocation_evidence = getattr(record, "cluster_allocation_evidence", None)
+        if isinstance(allocation_evidence, dict):
+            raw_allocation = allocation_evidence.get("status") or raw_allocation
+        if raw_allocation not in {
+            "free", "allocated", "mixed", "unknown", "bitmap_unobserved", "possibly_reused",
+        }:
+            raw_allocation = cls._allocation_state(record)
+        return {
+            "isDeleted": not bool(getattr(record, "is_allocated", True)),
+            "isOrphaned": bool(getattr(node, "is_orphaned", False)),
+            "isContentCarved": bool(getattr(node, "is_content_carved", False)),
+            "contentValidation": getattr(record, "catalog_content_validation", None),
+            "clusterAllocationStatus": raw_allocation,
+            "metadataConsistent": getattr(record, "is_metadata_consistent", None),
+            "recoverySource": getattr(record, "recovery_source", None),
+            "originalPath": getattr(record, "original_path", None),
+            "deletionTimestampUtc": getattr(record, "deletion_timestamp_utc", None),
+            "originalSizeBytes": getattr(record, "recycle_bin_original_size_bytes", None),
+            "dataExtentResolution": extent_resolution,
+            "dataExtentResolutionReason": getattr(record, "data_extent_resolution_reason", None),
+            "dataExtentCount": getattr(record, "data_extent_count", None),
+        }
 
     def _scan_content_carving(
         self, disk, builder, ranges, ranges_truncated, options, checkpoint,

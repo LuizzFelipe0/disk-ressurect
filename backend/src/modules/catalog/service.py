@@ -16,7 +16,7 @@ class CatalogService:
             return (), 0
         matches = [
             node for node in snapshot.catalog.nodes.values()
-            if normalized in node.record.name.casefold()
+            if normalized in node.name.casefold()
             or normalized in node.full_path.casefold()
         ]
         matches.sort(key=lambda node: (node.full_path.casefold(), node.full_path))

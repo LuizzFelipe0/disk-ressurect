@@ -1,135 +1,107 @@
+import hashlib
 import os
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from modules.catalog.entities import RecoveryCatalogSnapshot
 from helpers import make_recovery_workflow
-from modules.disk.entities import NTFSVolume
-from modules.catalog.entities import RecoveryCatalog
+from modules.catalog.entities import CatalogNode, RecoveryCatalog, RecoveryCatalogSnapshot
+from modules.recovery.entities import ContentReference, RecoveryCandidate
+from modules.storage.entities import StorageSource
 
 
-class FakeDisk:
-    def __init__(self, disk_number):
-        self.disk_number = disk_number
-        self.closed = False
+class MemoryContentReader:
+    def __init__(self, contents):
+        self.contents = contents
 
-    def read_at(self, offset, size):
-        return b""
-
-    def close(self):
-        self.closed = True
+    def iter_chunks(self, reference):
+        yield self.contents[reference.reference_id]
 
 
 class FakeOutputGuard:
     def __init__(self):
         self.calls = []
 
-    def validate(self, output_directory, source_disk_number):
-        self.calls.append((output_directory, source_disk_number))
-        return [0]
+    def validate_source(self, output_directory, source):
+        self.calls.append((output_directory, source.source_id))
+
+
+def file_node(source, name, path, content, *, deleted=False):
+    candidate_id = hashlib.sha256(f"{source.source_id}:{path}".encode()).hexdigest()
+    reference = ContentReference(
+        candidate_id, source.source_id, len(content), hashlib.sha256(content).hexdigest(),
+    )
+    candidate = RecoveryCandidate(
+        candidate_id=candidate_id, source_id=source.source_id, volume_id="test-volume",
+        name=name, original_path=path, size_bytes=len(content), filesystem_id="synthetic",
+        discovery_methods=("test",), evidence=(), deletion_state="deleted" if deleted else "not_deleted",
+        integrity_state="validated", recoverability="recoverable", content_reference=reference,
+    )
+    return CatalogNode(candidate_id, name, path, False, len(content), candidate)
 
 
 class RecoveryWorkflowTests(unittest.TestCase):
-    def test_rejects_empty_output_path_before_opening_source_disk(self):
-        volume = NTFSVolume(2, 1, 0, 1024 * 1024, 512, 4096, 1024, 8192, 1024,
-                            ((8192, 1, 0),))
-        snapshot = RecoveryCatalogSnapshot(RecoveryCatalog({}, []), volume)
-        opened_disks = []
+    def setUp(self):
+        self.source = StorageSource("test-source", "raw_image", "test image", 4096, 512, "unused")
+        self.output_guard = FakeOutputGuard()
+
+    def test_rejects_empty_output_path_before_opening_content_reader(self):
+        created = []
         workflow = make_recovery_workflow(
-            disk_factory=lambda disk_number: opened_disks.append(disk_number),
-            output_guard=FakeOutputGuard(),
+            output_guard=self.output_guard,
+            content_reader_factory=lambda source: created.append(source),
         )
+        snapshot = RecoveryCatalogSnapshot(RecoveryCatalog({}), source=self.source)
 
         with self.assertRaisesRegex(ValueError, "Choose a recovery destination"):
             workflow.extract_selection(snapshot, [], "   ", {".pdf"})
+        self.assertEqual(created, [])
+        self.assertEqual(self.output_guard.calls, [])
 
-        self.assertEqual(opened_disks, [])
-
-    def test_extracts_only_the_selected_nodes_and_emits_progress(self):
+    def test_extracts_selected_candidates_and_emits_progress(self):
         content = b"%PDF-workflow"
-        record = SimpleNamespace(
-            index=42,
-            sequence_number=1,
-            name="notes.pdf",
-            is_dir=False,
-            is_allocated=False,
-            file_size=len(content),
-            resident_data=content,
-            data_runs=[],
-            data_is_complete=True,
+        node = file_node(self.source, "notes.pdf", "selected folder/notes.pdf", content, deleted=True)
+        folder = CatalogNode("folder", "selected folder", "selected folder", True, 0)
+        folder.children.append(node)
+        node.parent = folder
+        catalog = RecoveryCatalog({folder.node_id: folder, node.node_id: node}, [folder])
+        snapshot = RecoveryCatalogSnapshot(catalog, source=self.source, source_id=self.source.source_id)
+        workflow = make_recovery_workflow(
+            output_guard=self.output_guard,
+            content_reader_factory=lambda _source: MemoryContentReader({node.candidate.candidate_id: content}),
         )
-        node = SimpleNamespace(
-            record=record,
-            full_path="selected folder/notes.pdf",
-            parent=None,
-            children=[],
-        )
-        catalog = RecoveryCatalog({42: node}, [node])
-        volume = NTFSVolume(2, 1, 0, 1024 * 1024, 512, 4096, 1024, 8192, 1024,
-                            ((8192, 1, 0),))
-        snapshot = RecoveryCatalogSnapshot(catalog, volume)
-        opened_disks = []
-
-        def disk_factory(disk_number):
-            disk = FakeDisk(disk_number)
-            opened_disks.append(disk)
-            return disk
-
-        output_guard = FakeOutputGuard()
-        workflow = make_recovery_workflow(disk_factory=disk_factory, output_guard=output_guard)
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         progress = []
         with tempfile.TemporaryDirectory(dir=repo_root) as output_directory:
             summary = workflow.extract_selection(
-                snapshot,
-                [node],
-                output_directory,
-                {".pdf"},
-                progress_callback=progress.append,
+                snapshot, [folder], output_directory, {".pdf"}, progress_callback=progress.append,
             )
-            recovered_path = os.path.join(output_directory, "selected folder", "notes.pdf")
-            with open(recovered_path, "rb") as recovered_file:
-                self.assertEqual(recovered_file.read(), content)
-            self.assertFalse(os.path.exists(os.path.join(output_directory, "Recovery_Report.txt")))
+            recovered_path = Path(output_directory) / "selected folder" / "notes.pdf"
+            self.assertEqual(recovered_path.read_bytes(), content)
+            self.assertFalse((Path(output_directory) / "Recovery_Report.txt").exists())
 
         self.assertEqual(summary.recovered_count, 1)
         self.assertEqual(summary.results[0].status, "recovered")
-        self.assertEqual(output_guard.calls, [(output_directory, 2)])
-        self.assertTrue(opened_disks[0].closed)
+        self.assertEqual(self.output_guard.calls, [(output_directory, self.source.source_id)])
         self.assertEqual(progress[0].stage, "extract")
         self.assertEqual(progress[0].completed, 1)
 
-    def test_failed_orphan_recovery_does_not_leave_empty_record_directories(self):
+    def test_signature_failure_does_not_leave_empty_record_directories(self):
         content = b"not a JPEG"
-        record = SimpleNamespace(
-            index=-2049,
-            sequence_number=1,
-            name="[DELETED]_photo.jpg",
-            is_dir=False,
-            is_allocated=False,
-            file_size=len(content),
-            resident_data=content,
-            data_runs=[],
-            data_is_complete=True,
+        path = os.path.join("Lost_Files_DeepScan", "0000000000000800", "[DELETED]_photo.jpg")
+        node = file_node(self.source, "[DELETED]_photo.jpg", path, content, deleted=True)
+        snapshot = RecoveryCatalogSnapshot(
+            RecoveryCatalog({node.node_id: node}, [node]), source=self.source,
         )
-        orphan_path = os.path.join("Lost_Files_DeepScan", "0000000000000800", record.name)
-        node = SimpleNamespace(record=record, full_path=orphan_path, parent=None, children=[])
-        catalog = RecoveryCatalog({record.index: node}, [node])
-        volume = NTFSVolume(2, 1, 0, 1024 * 1024, 512, 4096, 1024, 8192, 1024,
-                            ((8192, 1, 0),))
-        snapshot = RecoveryCatalogSnapshot(catalog, volume)
         workflow = make_recovery_workflow(
-            disk_factory=lambda disk_number: FakeDisk(disk_number),
-            output_guard=FakeOutputGuard(),
+            output_guard=self.output_guard,
+            content_reader_factory=lambda _source: MemoryContentReader({node.candidate.candidate_id: content}),
         )
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-
         with tempfile.TemporaryDirectory(dir=repo_root) as output_directory:
             summary = workflow.extract_selection(snapshot, [node], output_directory, {".jpg"})
-
             self.assertEqual(summary.results[0].status, "signature_mismatch")
             self.assertEqual(os.listdir(output_directory), [])
 

@@ -9,6 +9,8 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC_ROOT))
 
 from infrastructure.storage.image.reader import RawImageReader
+from infrastructure.storage.factory import create_block_reader
+from modules.storage.service import StorageService
 
 
 class RawImageReaderTests(unittest.TestCase):
@@ -72,6 +74,40 @@ class RawImageReaderTests(unittest.TestCase):
                     image.write(b"changed")
                 with self.assertRaisesRegex(OSError, "changed"):
                     reader.validate_source()
+
+    def test_rejects_replaced_image_when_reopening_a_catalog_source(self):
+        class Inventory:
+            def list_disks(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            replacement = Path(directory) / "replacement.img"
+            path.write_bytes(b"original-image")
+            with RawImageReader(path) as initial:
+                source = initial.source
+            replacement.write_bytes(b"replacement-image")
+            replacement.replace(path)
+
+            storage = StorageService(Inventory(), create_block_reader)
+            with self.assertRaisesRegex(OSError, "identity changed"):
+                storage.open_reader(source)
+
+    def test_detects_truncation_when_reopening_a_catalog_source(self):
+        class Inventory:
+            def list_disks(self):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            path.write_bytes(b"original-image")
+            with RawImageReader(path) as initial:
+                source = initial.source
+            path.write_bytes(b"short")
+
+            storage = StorageService(Inventory(), create_block_reader)
+            with self.assertRaisesRegex(OSError, "identity changed"):
+                storage.open_reader(source)
 
     def test_rejects_symbolic_link_paths(self):
         with patch("infrastructure.storage.image.reader.os.path.islink", return_value=True):

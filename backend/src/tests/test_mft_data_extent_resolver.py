@@ -11,6 +11,7 @@ from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFile
 from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExtentResolver
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from modules.catalog.dto import CatalogMapper
 from helpers import make_recovery_workflow
 
@@ -220,29 +221,33 @@ class MFTDataExtentResolverTests(unittest.TestCase):
             3, 1, 4096, 8192, 512, 4, 1024, 4096, 2048, ((4096, 2, 42),),
         )
 
-        snapshot = CatalogBuilder(
-            lambda _disk_number: FakeDisk(disk_image),
-        ).build(volume)
+        builder = CatalogBuilder(lambda _disk_number: FakeDisk(disk_image))
+        snapshot = builder.build(volume)
 
-        self.assertEqual((42,), tuple(snapshot.catalog.nodes))
-        node = snapshot.catalog.nodes[42]
-        self.assertEqual(((10, 1), (20, 1)), tuple(node.record.data_runs))
-        self.assertTrue(node.record.data_is_complete)
-        self.assertTrue(node.record.is_metadata_consistent)
-        self.assertEqual("resolved", node.record.data_extent_resolution)
-        self.assertEqual(2, node.record.data_extent_count)
+        self.assertEqual(1, len(snapshot.catalog.nodes))
+        node = next(iter(snapshot.catalog.nodes.values()))
+        _source, _volume, legacy_node = builder.content_reference_store.resolve(
+            node.candidate.content_reference.reference_id,
+        )
+        self.assertEqual(((10, 1), (20, 1)), tuple(legacy_node.record.data_runs))
+        self.assertTrue(legacy_node.record.data_is_complete)
+        self.assertTrue(legacy_node.record.is_metadata_consistent)
+        self.assertEqual("resolved", legacy_node.record.data_extent_resolution)
+        self.assertEqual(2, legacy_node.record.data_extent_count)
         mapped = CatalogMapper.node(node, {id(node): "file-42"}).to_dict()
         self.assertEqual("resolved", mapped["dataExtentResolution"])
         self.assertEqual(2, mapped["dataExtentCount"])
 
         class SafeDestination:
-            def validate(self, _path, _disk_number):
+            def validate_source(self, _path, _source):
                 return None
 
         with tempfile.TemporaryDirectory() as output_directory:
             result = make_recovery_workflow(
-                disk_factory=lambda _disk_number: FakeDisk(disk_image),
                 output_guard=SafeDestination(),
+                content_reader_factory=lambda _source: NTFSContentReferenceReader(
+                    lambda _source: FakeDisk(disk_image), builder.content_reference_store,
+                ),
             ).extract_selection(
                 snapshot, (node,), output_directory, (".jpg",),
             )
@@ -263,34 +268,38 @@ class MFTDataExtentResolverTests(unittest.TestCase):
             3, 1, 4096, 8192, 512, 4, 1024, 4096, 2048, ((4096, 2, 42),),
         )
 
-        snapshot = CatalogBuilder(
-            lambda _disk_number: FakeDisk(disk_image),
-        ).build(volume)
-
-        self.assertEqual((42,), tuple(snapshot.catalog.nodes))
-        record = snapshot.catalog.nodes[42].record
+        builder = CatalogBuilder(lambda _disk_number: FakeDisk(disk_image))
+        snapshot = builder.build(volume)
+        self.assertEqual(1, len(snapshot.catalog.nodes))
+        node = next(iter(snapshot.catalog.nodes.values()))
+        _source, _volume, legacy_node = builder.content_reference_store.resolve(
+            node.candidate.content_reference.reference_id,
+        )
+        record = legacy_node.record
         self.assertFalse(record.data_is_complete)
         self.assertTrue(record.is_metadata_consistent)
         self.assertEqual("inconclusive", record.data_extent_resolution)
         self.assertEqual("missing_or_ambiguous_extent_record_generation",
                          record.data_extent_resolution_reason)
         mapped = CatalogMapper.node(
-            snapshot.catalog.nodes[42], {id(snapshot.catalog.nodes[42]): "file-42"},
+            node, {id(node): "file-42"},
         ).to_dict()
         self.assertEqual("inconclusive", mapped["dataExtentResolution"])
         self.assertEqual("missing_or_ambiguous_extent_record_generation",
                          mapped["dataExtentResolutionReason"])
 
         class SafeDestination:
-            def validate(self, _path, _disk_number):
+            def validate_source(self, _path, _source):
                 return None
 
         with tempfile.TemporaryDirectory() as output_directory:
             result = make_recovery_workflow(
-                disk_factory=lambda _disk_number: FakeDisk(disk_image),
                 output_guard=SafeDestination(),
+                content_reader_factory=lambda _source: NTFSContentReferenceReader(
+                    lambda _source: FakeDisk(disk_image), builder.content_reference_store,
+                ),
             ).extract_selection(
-                snapshot, (snapshot.catalog.nodes[42],), output_directory, (".jpg",),
+                snapshot, (node,), output_directory, (".jpg",),
             )
 
         self.assertEqual(0, result.recovered_count)

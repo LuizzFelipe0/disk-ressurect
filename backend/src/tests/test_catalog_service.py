@@ -10,6 +10,7 @@ from modules.disk.entities import NTFSVolume
 from infrastructure.catalog.builder import CatalogContentValidator
 from infrastructure.catalog.builder import CatalogBuilder
 from infrastructure.storage.image.reader import RawImageReader
+from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
 from helpers import make_recovery_workflow
 from helpers import make_record
 from types import SimpleNamespace
@@ -54,8 +55,8 @@ class CatalogServiceTests(unittest.TestCase):
 
         self.assertEqual(len(snapshot.catalog.nodes), 1)
         node = next(iter(snapshot.catalog.nodes.values()))
-        self.assertEqual(node.record.name, "image.pdf")
-        self.assertEqual(node.record.resident_data, b"%PDF-image")
+        self.assertEqual(node.name, "image.pdf")
+        self.assertEqual(node.candidate.size_bytes, len(b"%PDF-image"))
 
     def test_builds_empty_catalog_and_closes_disk_reader(self):
         opened = []
@@ -68,7 +69,8 @@ class CatalogServiceTests(unittest.TestCase):
         volume = NTFSVolume(3, 1, 0, 8192, 512, 4096, 1024, 0, 0, ())
         snapshot = CatalogBuilder(disk_factory).build(volume)
 
-        self.assertEqual(snapshot.volume, volume)
+        self.assertTrue(snapshot.volume_id)
+        self.assertEqual(snapshot.filesystem_id, "ntfs")
         self.assertEqual(snapshot.catalog.nodes, {})
         self.assertEqual(snapshot.catalog.root_nodes, [])
         self.assertTrue(opened[0].closed)
@@ -156,8 +158,12 @@ class CatalogServiceTests(unittest.TestCase):
                 )
 
         carver_type.assert_not_called()
-        self.assertIn(-101, snapshot.catalog.nodes)
-        self.assertTrue(snapshot.catalog.nodes[-101].is_orphaned)
+        candidate = next(iter(snapshot.catalog.nodes.values())).candidate
+        self.assertTrue(any(
+            dict(evidence.details).get("recordNumber") == -101
+            for evidence in candidate.evidence
+        ))
+        self.assertTrue(snapshot.catalog.nodes[candidate.candidate_id].properties["isOrphaned"])
         self.assertTrue(opened[0].closed)
 
     def test_adds_bounded_carved_jpeg_as_a_recoverable_catalog_candidate(self):
@@ -166,7 +172,8 @@ class CatalogServiceTests(unittest.TestCase):
         candidate = jpeg()
         disk.data[4096:4096 + len(candidate)] = candidate
 
-        snapshot = CatalogBuilder(lambda _number: disk).build(
+        builder = CatalogBuilder(lambda _number: disk)
+        snapshot = builder.build(
             volume,
             include_orphaned=True,
             precomputed_orphans={},
@@ -175,10 +182,10 @@ class CatalogServiceTests(unittest.TestCase):
 
         self.assertEqual(len(snapshot.catalog.nodes), 1)
         node = next(iter(snapshot.catalog.nodes.values()))
-        self.assertTrue(node.is_content_carved)
-        self.assertTrue(node.is_orphaned)
-        self.assertEqual(node.record.catalog_content_validation, "format_structure_match")
-        self.assertEqual(node.record.resident_data, candidate)
+        self.assertTrue(node.properties["isContentCarved"])
+        self.assertTrue(node.properties["isOrphaned"])
+        self.assertEqual(node.properties["contentValidation"], "format_structure_match")
+        self.assertEqual(node.candidate.content_reference.size_bytes, len(candidate))
         self.assertEqual(snapshot.content_carving_summary["filesFound"], 1)
         self.assertEqual(snapshot.content_carving_summary["bytesScanned"], 4096)
         self.assertEqual(snapshot.content_carving_summary["filesFoundByExtension"], {
@@ -189,12 +196,14 @@ class CatalogServiceTests(unittest.TestCase):
             "contiguous_structure_and_signature")
 
         class OutputGuard:
-            def validate(self, *_args):
+            def validate_source(self, *_args):
                 return []
 
         recovery = make_recovery_workflow(
-            disk_factory=lambda _number: FakeDisk(3),
             output_guard=OutputGuard(),
+            content_reader_factory=lambda source: NTFSContentReferenceReader(
+                lambda _source: FakeDisk(3), builder.content_reference_store,
+            ),
         )
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         with tempfile.TemporaryDirectory(dir=repo_root) as output_directory:
@@ -202,7 +211,7 @@ class CatalogServiceTests(unittest.TestCase):
                 snapshot, [node], output_directory, {".jpg"},
             )
             recovered_path = os.path.join(
-                output_directory, "Lost_Files_DeepScan", "ContentCarving", node.record.name,
+                output_directory, "Lost_Files_DeepScan", "ContentCarving", node.name,
             )
             with open(recovered_path, "rb") as recovered_file:
                 self.assertEqual(recovered_file.read(), candidate)
@@ -280,11 +289,11 @@ class CatalogServiceTests(unittest.TestCase):
         nodes = list(snapshot.catalog.nodes.values())
         self.assertEqual(len(nodes), 2)
         uncertain_node = next(node for node in nodes
-            if node.record.cluster_allocation_status == "bitmap_unobserved")
+            if node.properties["clusterAllocationStatus"] == "bitmap_unobserved")
         self.assertTrue(uncertain_node.full_path.startswith(
             os.path.join("Lost_Files_DeepScan", "LowConfidence", "BitmapUnobserved"),
         ))
-        self.assertTrue(uncertain_node.record.is_allocated)
+        self.assertFalse(uncertain_node.properties["isDeleted"])
         self.assertEqual(
             snapshot.low_confidence_carving_summary["bitmapUnobserved"]["catalogItemsAdded"], 1,
         )

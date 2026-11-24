@@ -46,4 +46,16 @@ class StorageService:
         return disk.as_storage_source()
 
     def open_reader(self, source: StorageSource):
-        return self.reader_factory(source)
+        if source.source_type == "physical_disk":
+            current = self.get_physical_source(int(source.locator))
+            if current.source_id != source.source_id or current.size_bytes != source.size_bytes:
+                raise OSError("Physical storage identity changed since the catalog was built")
+        reader = self.reader_factory(source)
+        actual_source = getattr(reader, "source", None)
+        if actual_source is not None and actual_source.source_id != source.source_id:
+            reader.close()
+            raise OSError("Storage source identity changed since the catalog was built")
+        if getattr(reader, "size_bytes", source.size_bytes) != source.size_bytes:
+            reader.close()
+            raise OSError("Storage source size changed since the catalog was built")
+        return reader

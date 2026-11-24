@@ -1,26 +1,25 @@
 import os
 import sys
 import unittest
-from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from modules.catalog.entities import RecoveryCatalog
+from modules.catalog.entities import CatalogNode, RecoveryCatalog
+from modules.recovery.entities import RecoveryCandidate
 
 
 def make_node(index, name, size, is_dir=False, path=None):
-    record = SimpleNamespace(
-        index=index,
-        sequence_number=1,
+    candidate = None if is_dir else RecoveryCandidate(
+        candidate_id=f"candidate-{index}",
+        source_id="source-test",
+        volume_id="volume-test",
         name=name,
-        file_size=size,
-        is_dir=is_dir,
+        original_path=path or name,
+        size_bytes=size,
+        filesystem_id="synthetic",
+        discovery_methods=("test",),
+        evidence=(),
     )
-    return SimpleNamespace(
-        record=record,
-        full_path=path or name,
-        parent=None,
-        children=[],
-    )
+    return CatalogNode(f"node-{index}", name, path or name, is_dir, size, candidate)
 
 
 class RecoveryCatalogTests(unittest.TestCase):
@@ -36,7 +35,7 @@ class RecoveryCatalogTests(unittest.TestCase):
             node.parent = self.folder
             self.folder.children.append(node)
         self.catalog = RecoveryCatalog(
-            {node.record.index: node for node in (self.root, self.folder, self.photo, self.document, self.tiny_photo)},
+            {node.node_id: node for node in (self.root, self.folder, self.photo, self.document, self.tiny_photo)},
             [self.root],
         )
 
@@ -69,7 +68,7 @@ class RecoveryCatalogTests(unittest.TestCase):
         photo.parent = parent
         parent.children.append(photo)
         nodes.append(photo)
-        catalog = RecoveryCatalog({node.record.index: node for node in nodes}, [root])
+        catalog = RecoveryCatalog({node.node_id: node for node in nodes}, [root])
 
         selected = catalog.plan_selection([root], catalog.eligible_files({".jpg"}))
 

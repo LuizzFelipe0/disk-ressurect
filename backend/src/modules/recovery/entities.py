@@ -37,6 +37,15 @@ CandidateIntegrityState = Literal["validated", "partial", "invalid", "unknown"]
 CandidateRecoverability = Literal["recoverable", "partial", "unavailable", "unknown"]
 
 
+class ContentReadError(Exception):
+    """Generic failure reported by a content-reference adapter."""
+
+    def __init__(self, status, reason):
+        super().__init__(reason)
+        self.status = str(status)
+        self.reason = str(reason)
+
+
 def stable_candidate_id(source_id, volume_id, logical_identity, size_bytes, content_sha256=None):
     """Build an opaque identity from semantic identity, never a scan offset or strategy."""
     source_id = str(source_id).strip()

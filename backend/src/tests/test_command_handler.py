@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
+import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -13,6 +14,8 @@ from modules.deep_scan.service import DeepScanService
 from modules.validation.service import ValidationService
 from modules.disk.entities import NTFSVolume
 from modules.catalog.entities import RecoveryCatalog
+from modules.catalog.entities import CatalogNode
+from modules.recovery.entities import ContentReference, RecoveryCandidate
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.deep_scan.entities import CarvingCheckpoint
 from presentation.controller import RecoveryCommandHandler
@@ -20,19 +23,18 @@ from modules.catalog.service import CatalogService
 
 
 def make_node(index, name, is_directory, path, children=(), parent=None, size=0):
-    record = SimpleNamespace(
-        index=index,
-        sequence_number=1,
-        name=name,
-        is_dir=is_directory,
-        file_size=size,
-    )
-    return SimpleNamespace(
-        record=record,
-        full_path=path,
-        children=list(children),
-        parent=parent,
-    )
+    candidate = None
+    node_id = "folder:" + hashlib.sha256(path.encode()).hexdigest()
+    if not is_directory:
+        source_id = "command-handler-test"
+        node_id = hashlib.sha256(f"{source_id}:{path}:{size}".encode()).hexdigest()
+        reference = ContentReference(node_id, source_id, size)
+        candidate = RecoveryCandidate(
+            node_id, source_id, "test-volume", name, path, size, "synthetic",
+            ("test",), (), content_reference=reference,
+        )
+    return CatalogNode(node_id, name, path, is_directory, size, candidate,
+                       parent=parent, children=list(children))
 
 
 def make_volume():
@@ -223,13 +225,14 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
         catalog = session.dispatch("scan_catalog", {"volumeId": "1:4096"}, events.append)
         matches = session.dispatch("search_catalog", {"query": "PHOTO.JPG"}, events.append)
-        children = session.dispatch("catalog_children", {"nodeId": "n0"}, events.append)
+        root_id = catalog["roots"][0]["id"]
+        children = session.dispatch("catalog_children", {"nodeId": root_id}, events.append)
 
         self.assertEqual(catalog["recordCount"], 2)
         self.assertEqual(catalog["roots"][0]["name"], "Photos")
         self.assertTrue(catalog["roots"][0]["hasChildren"])
         self.assertEqual(matches["totalMatches"], 1)
-        self.assertEqual(matches["results"][0]["parentId"], "n0")
+        self.assertEqual(matches["results"][0]["parentId"], root_id)
         self.assertEqual(children[0]["name"], "photo.jpg")
         self.assertTrue(any(event["type"] == "progress" for event in events))
 
