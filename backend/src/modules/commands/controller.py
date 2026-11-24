@@ -1,6 +1,7 @@
 from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
 from modules.catalog.mapper import CatalogMapper
 from modules.commands.dto import CommandErrorDto, CommandRequestDto, CommandResultDto, ProgressEventDto
+from modules.commands.catalog_scan_workflow import CatalogScanWorkflow
 from modules.commands.session import RecoverySession
 from modules.disk_discovery.dto import DiskValidationRequestDto, PartitionScanRequestDto
 from modules.disk_discovery.mapper import DiskDiscoveryMapper
@@ -16,6 +17,11 @@ class RecoveryCommandHandler:
         self.catalog_service = catalog_service
         self.recovery_service = recovery_service
         self.session = session if session is not None else RecoverySession()
+        self.catalog_scan_workflow = CatalogScanWorkflow(
+            disk_discovery,
+            catalog_service,
+            self._validation_summary_from_report,
+        )
 
     def handle(self, message, emit):
         request_id = message.get("id") if isinstance(message, dict) else None
@@ -103,116 +109,19 @@ class RecoveryCommandHandler:
         request = VolumeSelectionRequestDto.from_payload(payload)
         volume = self.session.get_volume(request.volume_id)
         progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)
-        validation_summary = None
-        precomputed_orphans = None
-        precomputed_carving_ranges = None
-        carving_ranges_truncated = False
-        precomputed_uncertain_carving_ranges = None
-        uncertain_carving_ranges_truncated = None
-        carving_source_disk = None
-        carving_checkpoint = None
-        latest_carving_checkpoint = None
-        carving_checkpoint_callback = None
-        if request.include_orphaned:
-            try:
-                report = self.disk_discovery.validate_disk(
-                    volume.disk_number,
-                    self._validation_progress(emit),
-                    retain_orphans_for_offset=int(volume.partition_offset),
-                    orphan_scan_volume=volume,
-                    content_carving_range_budget_bytes=(
-                        int(request.carving_options.scan_budget_gib) * 1024**3
-                    ),
-                )
-                validation_summary = self._validation_summary(
-                    DiskDiscoveryMapper.validation(report).to_dict(),
-                )
-                partition_offset = int(volume.partition_offset)
-                precomputed_orphans = report.get("orphan_records_by_partition", {}).get(partition_offset)
-                precomputed_carving_ranges = report.get(
-                    "content_carving_ranges_by_partition", {},
-                ).get(partition_offset)
-                carving_ranges_truncated = report.get(
-                    "content_carving_ranges_truncated_by_partition", {},
-                ).get(partition_offset, False)
-                precomputed_uncertain_carving_ranges = report.get(
-                    "uncertain_content_carving_ranges_by_partition", {},
-                ).get(partition_offset)
-                uncertain_carving_ranges_truncated = report.get(
-                    "uncertain_content_carving_ranges_truncated_by_partition", {},
-                ).get(partition_offset)
-            except Exception as exc:
-                validation_summary = {
-                    "coverageStatus": "unavailable",
-                    "assessment": "inconclusive",
-                    "bytesRead": 0,
-                    "sizeBytes": 0,
-                    "readErrorCount": 0,
-                    "partitionCount": 0,
-                    "ntfsVolumeCount": 0,
-                    "deletedMftRecordCount": 0,
-                    "orphanedFileRecordCount": 0,
-                    "unsupportedFilesystems": [],
-                    "validationError": f"{type(exc).__name__}: {exc}",
-                }
-        if request.include_orphaned and precomputed_carving_ranges is not None:
-            carving_source_disk = self.disk_discovery.get_disk(volume.disk_number)
-            carving_checkpoint = self.disk_discovery.load_carving_checkpoint(
-                carving_source_disk, volume,
-            )
-            latest_carving_checkpoint = carving_checkpoint
-            last_persisted_bytes = (
-                carving_checkpoint.bytes_scanned if carving_checkpoint is not None else 0
-            )
-            checkpoint_interval = 256 * 1024 * 1024
-
-            def persist_carving_checkpoint(checkpoint, force=False):
-                nonlocal latest_carving_checkpoint, last_persisted_bytes
-                latest_carving_checkpoint = checkpoint
-                if checkpoint is None:
-                    self.disk_discovery.save_carving_checkpoint(
-                        carving_source_disk, volume, None,
-                    )
-                    last_persisted_bytes = 0
-                elif (force or checkpoint.bytes_scanned - last_persisted_bytes
-                        >= checkpoint_interval):
-                    self.disk_discovery.save_carving_checkpoint(
-                        carving_source_disk, volume, checkpoint,
-                    )
-                    last_persisted_bytes = checkpoint.bytes_scanned
-
-            carving_checkpoint_callback = persist_carving_checkpoint
-
-        try:
-            if request.include_orphaned:
-                snapshot = self.catalog_service.build(
-                    volume,
-                    progress_callback,
-                    include_orphaned=True,
-                    precomputed_orphans=precomputed_orphans,
-                    precomputed_carving_ranges=precomputed_carving_ranges,
-                    carving_ranges_truncated=carving_ranges_truncated,
-                    precomputed_uncertain_carving_ranges=precomputed_uncertain_carving_ranges,
-                    uncertain_carving_ranges_truncated=uncertain_carving_ranges_truncated,
-                    carving_options=request.carving_options,
-                    carving_checkpoint=carving_checkpoint,
-                    carving_checkpoint_callback=carving_checkpoint_callback,
-                    phase_callback=self._catalog_phase_progress(emit),
-                )
-            else:
-                snapshot = self.catalog_service.build(
-                    volume,
-                    progress_callback,
-                    phase_callback=self._catalog_phase_progress(emit),
-                )
-        except Exception:
-            if latest_carving_checkpoint is not None and carving_source_disk is not None:
-                persist_carving_checkpoint(latest_carving_checkpoint, force=True)
-            raise
-        if latest_carving_checkpoint is not None and carving_source_disk is not None:
-            persist_carving_checkpoint(latest_carving_checkpoint, force=True)
-        ids_by_identity = self.session.set_catalog(snapshot)
-        return CatalogMapper.catalog(snapshot, ids_by_identity, validation_summary).to_dict()
+        outcome = self.catalog_scan_workflow.run(
+            volume,
+            include_orphaned=request.include_orphaned,
+            force_fresh_validation=request.force_fresh_validation,
+            carving_options=request.carving_options,
+            progress_callback=progress_callback,
+            validation_progress_callback=self._validation_progress(emit),
+            phase_callback=self._catalog_phase_progress(emit),
+        )
+        ids_by_identity = self.session.set_catalog(outcome.snapshot)
+        return CatalogMapper.catalog(
+            outcome.snapshot, ids_by_identity, outcome.validation_summary,
+        ).to_dict()
 
     @staticmethod
     def _progress(emit):
@@ -265,10 +174,18 @@ class RecoveryCommandHandler:
         return report
 
     @staticmethod
+    def _validation_summary_from_report(report):
+        return RecoveryCommandHandler._validation_summary(
+            DiskDiscoveryMapper.validation(report).to_dict(),
+        )
+
+    @staticmethod
     def _validation_summary(report):
         ntfs_checks = report.get("ntfsChecks", [])
         return {
             "coverageStatus": report["coverageStatus"],
+            "evidenceFreshness": report.get("evidenceFreshness", "fresh"),
+            "evidenceScannedAt": report.get("evidenceScannedAt"),
             "assessment": report["assessment"],
             "bytesRead": report["bytesRead"],
             "sizeBytes": report["sizeBytes"],
@@ -285,7 +202,9 @@ class RecoveryCommandHandler:
                 int(item.get("mftRecords", {}).get("metadataInconsistent", 0))
                 for item in ntfs_checks
             ),
-            "orphanRecordsByAllocationStatus": RecoveryCommandHandler._orphan_record_allocation_counts(ntfs_checks),
+            "orphanRecordsByAllocationStatus": RecoveryCommandHandler._orphan_record_allocation_counts(
+                ntfs_checks,
+            ),
             "unsupportedFilesystems": list(report.get("unsupportedFilesystems", [])),
         }
 
