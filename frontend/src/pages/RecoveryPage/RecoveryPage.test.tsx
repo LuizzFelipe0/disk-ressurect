@@ -103,6 +103,13 @@ const { recovery } = vi.hoisted(() => ({
         bytesRead: 1024, recordsExamined: 4, parsedRecords: 3, deletedEvents: 1,
         malformedRecords: 1, limitReached: true, errorCount: 0,
       },
+      ntfsLogFileEvidence: {
+        status: "inconclusive", inconclusive: true, logFileCount: 1,
+        bytesRead: 8192, pagesExamined: 2, restartPages: 1, recordPages: 1,
+        malformedPages: 0, currentLsns: ["0x0000000000010008"],
+        limitReached: false, errorCount: 0, reason: null,
+        recoveryClaim: "structural_evidence_only",
+      },
     },
     preview: null,
     previewLoading: false,
@@ -186,11 +193,17 @@ describe("RecoveryPage audit details", () => {
     const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
     const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
     const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
+    const forceFresh = screen.getByRole("checkbox", {
+      name: "Forçar nova auditoria completa do disco (ignorar cache; pode levar horas)",
+    });
     expect((scanBudget as HTMLSelectElement).disabled).toBe(true);
     expect((maxFiles as HTMLSelectElement).disabled).toBe(true);
     expect((retainedBudget as HTMLSelectElement).disabled).toBe(true);
+    expect((forceFresh as HTMLInputElement).disabled).toBe(true);
 
     fireEvent.click(screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista"));
+    expect((forceFresh as HTMLInputElement).disabled).toBe(false);
+    fireEvent.click(forceFresh);
     fireEvent.change(scanBudget, { target: { value: "4" } });
     fireEvent.change(maxFiles, { target: { value: "512" } });
     fireEvent.change(maxFiles, { target: { value: "2048" } });
@@ -199,7 +212,7 @@ describe("RecoveryPage audit details", () => {
 
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
       scanBudgetGiB: 4, maxFiles: 2048, maxRetainedMiB: 256,
-    });
+    }, true);
   });
 
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
@@ -225,11 +238,35 @@ describe("RecoveryPage audit details", () => {
     expect(within(dialog).getByText(/1 atalho\(s\) de recuperação adicionado/)).toBeTruthy();
     expect(within(dialog).getByRole("heading", { name: "Evidências do diário USN do NTFS" })).toBeTruthy();
     expect(within(dialog).getByText(/1 eventos de exclusão/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Evidências estruturais do $LogFile NTFS" })).toBeTruthy();
+    expect(within(dialog).getByText(/0x0000000000010008/)).toBeTruthy();
+    expect(within(dialog).getByText(/não recupera conteúdo de arquivos/)).toBeTruthy();
     expect(within(dialog).getByRole("heading", { name: "Bitmap não observado; os dados podem ser atuais" })).toBeTruthy();
     expect(within(dialog).getAllByText(/lê até 16\.777\.216 bytes de candidatos por formato e 50\.331\.648 no total/)).toHaveLength(2);
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("labels reused read coverage as a historical snapshot", async () => {
+    const diskValidation = recovery.catalog.diskValidation;
+    Object.assign(diskValidation, {
+      coverageStatus: "cached_snapshot",
+      evidenceFreshness: "cached_snapshot",
+      evidenceScannedAt: "2026-11-23T12:00:00+00:00",
+    });
+    render(<RecoveryPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Detalhes da auditoria do disco" }));
+    const dialog = await screen.findByRole("dialog", { name: "Detalhes da auditoria do disco" });
+    expect(within(dialog).getByText(/A cobertura de leitura é um registro histórico de 2026-11-23/))
+      .toBeTruthy();
+    expect(within(dialog).queryByText(/A auditoria do disco inteiro é inconclusiva/)).toBeNull();
+    Object.assign(diskValidation, {
+      coverageStatus: "complete",
+      evidenceFreshness: "fresh",
+      evidenceScannedAt: undefined,
+    });
   });
 });
