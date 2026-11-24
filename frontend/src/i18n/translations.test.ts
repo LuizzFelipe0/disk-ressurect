@@ -16,6 +16,9 @@ describe("application translations", () => {
       expect(translate(language, "usnMftRecoverySourceLabel")).toBeTruthy();
       expect(translate(language, "recycleBinRecoveryHeading")).toBeTruthy();
       expect(translate(language, "usnJournalEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceHeading")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceInterpretation")).toBeTruthy();
+      expect(translate(language, "ntfsLogFileEvidenceHeading")).toBeTruthy();
       expect(translate(language, "recycleBinSourceLabel")).toBeTruthy();
       expect(translate(language, "orphanedEntriesCount", { count: 2 })).toContain("2");
       expect(translate(language, "loadingContents", { name: "Photos" })).toContain("Photos");
@@ -30,6 +33,10 @@ describe("application translations", () => {
       expect(translate(language, "validationEvidence", {
         coverage: 100, partitions: 1, ntfs: 1, deleted: 0, orphans: 0,
       })).toBeTruthy();
+      expect(translate(language, "validationCachedSnapshot", {
+        scannedAt: "2026-11-23T12:00:00Z", coverage: 100,
+      })).toContain("2026-11-23");
+      expect(translate(language, "forceFreshValidation")).toBeTruthy();
     }
   });
 
