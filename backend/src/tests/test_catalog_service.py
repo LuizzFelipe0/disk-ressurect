@@ -193,7 +193,10 @@ class CatalogServiceTests(unittest.TestCase):
         candidate = jpeg()
         disk.data[4096:4096 + len(candidate)] = candidate
         saved_checkpoints = []
-        options = SimpleNamespace(scan_budget_gib=1, max_files=10, max_retained_mib=256)
+        options = SimpleNamespace(
+            scan_budget_gib=1, max_files=10, max_retained_mib=256,
+            max_candidate_read_mib_per_format=1024,
+        )
 
         snapshot = CatalogService(lambda _number: disk).build(
             volume,
@@ -207,6 +210,8 @@ class CatalogServiceTests(unittest.TestCase):
         self.assertEqual(snapshot.content_carving_summary["filesFound"], 1)
         self.assertEqual(snapshot.content_carving_summary["retainedBudgetMiB"], 256)
         self.assertEqual(snapshot.content_carving_summary["retainedBytesCap"], 256 * 1024**2)
+        self.assertEqual(snapshot.content_carving_summary["candidateReadCapBytesPerFormat"], 1024 * 1024**2)
+        self.assertEqual(snapshot.content_carving_summary["candidateReadCapBytes"], 3 * 1024 * 1024**2)
         self.assertEqual(saved_checkpoints[-1], None)
         self.assertFalse(snapshot.content_carving_summary["resumeAvailable"])
 
