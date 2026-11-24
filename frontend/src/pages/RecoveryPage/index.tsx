@@ -58,6 +58,8 @@ export const RecoveryPage: React.FC = () => {
   const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(1);
   const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(256);
   const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(128);
+  const [maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat] =
+    React.useState<CarvingOptions["maxCandidateReadMiBPerFormat"]>(256);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const filterTriggerRef = React.useRef<HTMLSpanElement>(null);
@@ -193,6 +195,7 @@ export const RecoveryPage: React.FC = () => {
               scanBudgetGiB,
               maxFiles: maxCarvedFiles,
               maxRetainedMiB: maxCarvedRetainedMiB,
+              maxCandidateReadMiBPerFormat,
             }, forceFreshValidation)}>{t("buildCatalog")}</Button>
         </ActionRow>
       </FormGrid>
@@ -222,6 +225,19 @@ export const RecoveryPage: React.FC = () => {
                 { value: "1024", label: t("carvingFiles1024") },
                 { value: "2048", label: t("carvingFiles2048") },
                 { value: "4096", label: t("carvingFiles4096") },
+                { value: "8192", label: t("carvingFiles8192") },
+                { value: "16384", label: t("carvingFiles16384") },
+              ]} />
+          </FormControl>
+          <FormControl><FormControlCaption>{t("carvingCandidateReadBudget")}</FormControlCaption>
+            <Select aria-label={t("carvingCandidateReadBudget")}
+              value={String(maxCandidateReadMiBPerFormat)} disabled={recovery.busy || !includeOrphaned}
+              onChange={(value) => setMaxCandidateReadMiBPerFormat(
+                Number(value) as CarvingOptions["maxCandidateReadMiBPerFormat"],
+              )} options={[
+                { value: "256", label: t("carvingCandidateRead256") },
+                { value: "512", label: t("carvingCandidateRead512") },
+                { value: "1024", label: t("carvingCandidateRead1024") },
               ]} />
           </FormControl>
           <FormControl><FormControlCaption>{t("carvingRetainedBudget")}</FormControlCaption>
