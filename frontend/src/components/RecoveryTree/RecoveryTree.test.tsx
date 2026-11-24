@@ -85,6 +85,27 @@ describe("RecoveryTree", () => {
     expect(screen.getByText("Recovered using USN and MFT evidence")).toBeTruthy();
   });
 
+  it("shows resolved and inconclusive fragmented data evidence", () => {
+    render(<RecoveryTree {...makeProps({ roots: [
+      { ...file, id: "resolved", dataExtentResolution: "resolved", dataExtentCount: 2 },
+      { ...file, id: "uncertain", name: "uncertain.jpg", dataExtentResolution: "inconclusive",
+        dataExtentResolutionReason: "data_extent_vcn_gap_or_overlap" },
+    ] })} />);
+
+    expect(screen.getByText(/Fragmented data map reconstructed \(2 extents\)/)).toBeTruthy();
+    expect(screen.getByText(/Fragmented data map is inconclusive/)
+      .getAttribute("title")).toBe("data_extent_vcn_gap_or_overlap");
+  });
+
+  it("shows translated fragmented data evidence in Portuguese", () => {
+    render(<RecoveryTree {...makeProps({
+      language: "pt-BR",
+      roots: [{ ...file, dataExtentResolution: "resolved", dataExtentCount: 2 }],
+    })} />);
+
+    expect(screen.getByText(/Mapa de dados fragmentado reconstruído \(2 partes\)/)).toBeTruthy();
+  });
+
   it("shows signature and cluster allocation evidence for orphan candidates", () => {
     render(<RecoveryTree {...makeProps({
       roots: [{ ...file, isDeleted: true, isOrphaned: true,
