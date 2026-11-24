@@ -11,10 +11,11 @@ import zlib
 
 from disk.deep_scan.carving_checkpoint import CarvedCandidateReference, CarvingCheckpoint
 from disk.deep_scan.additional_format_validators import (
+    COMPOUND_FILE_SIGNATURE,
     MAX_ISO_BMFF_BOXES,
+    RTF_SIGNATURE,
     ZIP_END_OF_CENTRAL_DIRECTORY,
     ZIP_LOCAL_FILE_HEADER,
-    AdditionalFormatCandidate,
     is_plausible_office_local_header,
     validate_additional_candidate,
 )
@@ -83,6 +84,8 @@ class RawContentCarver:
         (".pdf", b"%PDF-"),
         (".office_zip", ZIP_LOCAL_FILE_HEADER),
         (".mp4", b"ftyp"),
+        (".rtf", RTF_SIGNATURE),
+        (".ole_cfb", COMPOUND_FILE_SIGNATURE),
     )
     SIGNATURE_OFFSETS = {".mp4": 4}
     EXTENSIONS_BY_FAMILY = {
@@ -91,6 +94,8 @@ class RawContentCarver:
         ".pdf": (".pdf",),
         ".office_zip": (".docx", ".docm", ".xlsx", ".xlsm"),
         ".mp4": (".mp4",),
+        ".rtf": (".rtf",),
+        ".ole_cfb": (".doc", ".xls"),
     }
     SIGNATURES_BY_EXTENSION = {
         ".jpg": SIGNATURE,
@@ -101,6 +106,9 @@ class RawContentCarver:
         ".xlsx": ZIP_LOCAL_FILE_HEADER,
         ".xlsm": ZIP_LOCAL_FILE_HEADER,
         ".mp4": b"ftyp",
+        ".rtf": RTF_SIGNATURE,
+        ".doc": COMPOUND_FILE_SIGNATURE,
+        ".xls": COMPOUND_FILE_SIGNATURE,
     }
     FAMILY_BY_EXTENSION = {
         ".jpg": ".jpg",
@@ -111,6 +119,9 @@ class RawContentCarver:
         ".xlsx": ".office_zip",
         ".xlsm": ".office_zip",
         ".mp4": ".mp4",
+        ".rtf": ".rtf",
+        ".doc": ".ole_cfb",
+        ".xls": ".ole_cfb",
     }
     DEFAULT_CHUNK_SIZE = 1024 * 1024
     DEFAULT_MAX_SCAN_BYTES = 1024 * 1024 * 1024
@@ -291,7 +302,7 @@ class RawContentCarver:
                             break
                         if digest not in seen_content:
                             seen_content.add(digest)
-                            if family in (".office_zip", ".mp4"):
+                            if family in (".office_zip", ".mp4", ".rtf", ".ole_cfb"):
                                 candidate_result = validate_additional_candidate(candidate)
                                 if candidate_result is None:
                                     continue
@@ -599,7 +610,41 @@ class RawContentCarver:
             return self._read_office_zip(offset, range_end, byte_budget)
         if family == ".mp4":
             return self._read_mp4(offset, range_end, byte_budget)
+        if family in (".rtf", ".ole_cfb"):
+            return self._read_structured_additional(offset, range_end, byte_budget, family)
         return None, 0, None
+
+    def _read_structured_additional(self, offset, range_end, byte_budget, family):
+        """Read RTF or CFB until its structural parser can determine file length."""
+        content = bytearray()
+        cursor = offset
+        bytes_read = 0
+        while (cursor < range_end and len(content) < self.max_file_bytes
+               and bytes_read < byte_budget):
+            request_size = min(
+                self.chunk_size, range_end - cursor,
+                self.max_file_bytes - len(content), byte_budget - bytes_read,
+            )
+            if request_size <= 0:
+                break
+            data = bytes(self.disk.read_at(cursor, request_size))
+            if len(data) != request_size:
+                raise OSError(
+                    f"Short {family} candidate read at {cursor:#x}: "
+                    f"received {len(data)} of {request_size} bytes"
+                )
+            content.extend(data)
+            cursor += request_size
+            bytes_read += request_size
+            candidate = validate_additional_candidate(content)
+            if (candidate is not None
+                    and candidate.extension in self.EXTENSIONS_BY_FAMILY[family]):
+                return bytes(content[:candidate.size_bytes]), bytes_read, None
+        if len(content) >= self.max_file_bytes:
+            return None, bytes_read, "file_size"
+        if bytes_read >= byte_budget:
+            return None, bytes_read, "candidate_budget"
+        return None, bytes_read, None
 
     def _read_office_zip(self, offset, range_end, byte_budget):
         """Read one bounded ZIP candidate; its family budget is shared by OOXML."""
