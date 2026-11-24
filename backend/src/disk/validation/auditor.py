@@ -36,6 +36,18 @@ class ReadIssue:
         return {"start": self.start, "end": self.end, "sizeBytes": self.end - self.start, "message": self.message}
 
 
+@dataclass
+class _NTFSVolumeResults:
+    checks: list
+    orphan_records_by_partition: dict
+    content_carving_ranges_by_partition: dict
+    content_carving_ranges_truncated_by_partition: dict
+    uncertain_content_carving_ranges_by_partition: dict
+    uncertain_content_carving_ranges_truncated_by_partition: dict
+    orphan_references: dict
+    snapshot_mismatch: bool = False
+
+
 class DiskReadCoverage:
     """Tracks unique byte ranges successfully read and ranges with read errors."""
 
@@ -341,250 +353,350 @@ class DiskValidationAuditor:
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
         validation_snapshot=None,
     ):
-        physical_disk = next(
-            (item for item in self.disk_enumerator.list_disks() if item.number == int(disk_number)),
-            None,
-        )
+        physical_disk = self._find_physical_disk(disk_number)
         if physical_disk is None:
             raise ValueError(f"Physical disk {disk_number} is no longer available")
 
         disk = self.disk_factory(int(disk_number))
         can_reuse_snapshot = self._snapshot_matches_disk(validation_snapshot, physical_disk)
         try:
-            coverage = DiskReadCoverage(
+            coverage = self._create_coverage(
+                disk, validation_snapshot if can_reuse_snapshot else None,
+            )
+            orphan_stream = self._create_orphan_stream(
+                disk, orphan_scan_volume, retain_orphans_for_offset,
+            )
+            offsets = self._scan_disk(coverage, progress_callback, orphan_stream)
+            partition_entries, partition_checks, volumes = self._discover_volumes(
+                coverage, disk, int(disk_number), offsets,
+            )
+            volume_results = self._validate_volumes(
+                coverage,
                 disk,
-                self.chunk_size,
-                scan_snapshot=validation_snapshot if can_reuse_snapshot else None,
+                volumes,
+                offsets,
+                retain_orphans_for_offset,
+                orphan_stream,
+                progress_callback,
+                validation_snapshot,
+                content_carving_range_budget_bytes,
             )
-        except (TypeError, ValueError, OverflowError):
-            coverage = DiskReadCoverage(disk, self.chunk_size)
-        try:
-            orphan_stream = None
-            if (orphan_scan_volume is not None
-                    and int(orphan_scan_volume.partition_offset) == retain_orphans_for_offset):
-                orphan_stream = GhostMFTCarver(disk).stream(orphan_scan_volume)
-            if coverage.cached_scan_used:
-                offsets = coverage.ntfs_boot_offsets
-            else:
-                offsets = coverage.scan_full_disk(
-                    progress_callback,
-                    on_chunk=orphan_stream.feed if orphan_stream is not None else None,
-                    on_gap=orphan_stream.gap if orphan_stream is not None else None,
-                    combined_orphan_scan=orphan_stream is not None,
-                )
-            try:
-                partition_entries = PartitionTableScanner(coverage).partitions()
-            except (OSError, ValueError, struct.error):
-                partition_entries = []
-            partition_table_checks = []
-            gpt_partitions = {}
-            for header_offset in coverage.gpt_header_offsets:
-                try:
-                    check, entries = self._validate_gpt_header(coverage, header_offset)
-                except (OSError, ValueError, struct.error) as exc:
-                    check, entries = ({
-                        "offset": header_offset,
-                        "valid": False,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }, ())
-                partition_table_checks.append(check)
-                for entry in entries:
-                    gpt_partitions.setdefault(entry.offset, entry)
-            known_partition_offsets = {entry.offset for entry in partition_entries}
-            partition_entries.extend(
-                entry for offset, entry in gpt_partitions.items()
-                if offset not in known_partition_offsets
+            partitions = self._partition_report(
+                coverage, partition_entries, volumes, offsets,
             )
-            volume_scanner = NTFSVolumeScanner(coverage, int(disk_number))
-            volumes_by_offset = {}
-
-            for partition in partition_entries:
-                try:
-                    volume = volume_scanner._probe_partition(partition)
-                except (OSError, ValueError, struct.error):
-                    volume = None
-                if volume:
-                    volumes_by_offset[volume.partition_offset] = volume
-
-            # Full-disk boot-sector hits include volumes whose partition table was lost.
-            for boot_offset in offsets:
-                try:
-                    boot = coverage.read_at(boot_offset, max(512, disk.bytes_per_sector))
-                    geometry = NTFSBootSectorParser.parse(boot)
-                    if geometry is None:
-                        continue
-                    starts = {boot_offset}
-                    estimated_start = boot_offset + geometry.bytes_per_sector - geometry.volume_size
-                    if 0 <= estimated_start < boot_offset:
-                        starts.add(estimated_start)
-                    for start in starts:
-                        size = min(geometry.volume_size, int(disk.size) - start)
-                        if size <= 0:
-                            continue
-                        candidate = PartitionEntry(0, start, size, "NTFS signature", "Full-disk NTFS signature")
-                        volume = volume_scanner._probe_partition(candidate)
-                        if volume:
-                            volumes_by_offset[volume.partition_offset] = volume
-                except (OSError, ValueError, struct.error):
-                    continue
-
-            ntfs_checks = []
-            orphan_records_by_partition = {}
-            content_carving_ranges_by_partition = {}
-            content_carving_ranges_truncated_by_partition = {}
-            uncertain_content_carving_ranges_by_partition = {}
-            uncertain_content_carving_ranges_truncated_by_partition = {}
-            current_orphan_references = dict(
-                (validation_snapshot or {}).get("orphanRecordRefsByPartition", {})
+            mbr_signature_found = self._mbr_signature_found(coverage)
+            report = self._build_report(
+                physical_disk, disk, coverage, partitions, partition_checks,
+                volumes, volume_results, mbr_signature_found,
             )
-            snapshot_mismatch = False
-            for volume in sorted(volumes_by_offset.values(), key=lambda item: item.partition_offset):
-                try:
-                    retain_orphans = int(volume.partition_offset) == retain_orphans_for_offset
-                    cached_orphans = None
-                    if retain_orphans and coverage.cached_scan_used:
-                        reference_key = str(int(volume.partition_offset))
-                        references = current_orphan_references.get(reference_key)
-                        if references is not None:
-                            cached_orphans = self._revalidate_cached_orphans(
-                                coverage, disk, volume, references,
-                            )
-                            if cached_orphans is None:
-                                snapshot_mismatch = True
-                                cached_orphans = {}
-                    checked = self._validate_ntfs_volume(
-                        coverage,
-                        volume,
-                        offsets,
-                        retain_orphans=retain_orphans,
-                        progress_callback=progress_callback,
-                        precomputed_orphans=(
-                            orphan_stream.finish() if retain_orphans and orphan_stream is not None
-                            else cached_orphans
-                        ),
-                        content_carving_range_budget_bytes=content_carving_range_budget_bytes,
-                    )
-                    if retain_orphans:
-                        check, orphan_records, carving_ranges, uncertain_ranges = checked
-                        current_orphan_references[str(int(volume.partition_offset))] = (
-                            self._orphan_record_references(orphan_records)
-                        )
-                        orphan_records_by_partition[int(volume.partition_offset)] = orphan_records
-                        content_carving_ranges_by_partition[int(volume.partition_offset)] = carving_ranges
-                        content_carving_ranges_truncated_by_partition[int(volume.partition_offset)] = bool(
-                            check.get("contentCarvingRangesTruncated", False)
-                        )
-                        uncertain_content_carving_ranges_by_partition[int(volume.partition_offset)] = {
-                            "bitmapUnobserved": uncertain_ranges["bitmapUnobserved"],
-                            "possiblyReused": uncertain_ranges["possiblyReused"],
-                        }
-                        uncertain_content_carving_ranges_truncated_by_partition[
-                            int(volume.partition_offset)
-                        ] = {
-                            "bitmapUnobserved": uncertain_ranges["bitmapUnobservedTruncated"],
-                            "possiblyReused": uncertain_ranges["possiblyReusedTruncated"],
-                        }
-                        ntfs_checks.append(check)
-                    else:
-                        ntfs_checks.append(checked)
-                except (OSError, ValueError, struct.error) as exc:
-                    ntfs_checks.append({
-                        "partitionOffset": int(volume.partition_offset),
-                        "validationError": f"{type(exc).__name__}: {exc}",
-                    })
-            filesystem_by_offset = {
-                int(item["offset"]): item["filesystem"]
-                for item in coverage.filesystem_signatures
-            }
-            filesystem_by_offset.update({offset: "NTFS" for offset in offsets})
-            partitions = [
-                {
-                    "partitionNumber": entry.number,
-                    "offset": entry.offset,
-                    "sizeBytes": entry.size_bytes,
-                    "tableType": str(entry.table_type),
-                    "name": entry.name,
-                    "filesystem": "NTFS" if entry.offset in volumes_by_offset
-                        else filesystem_by_offset.get(entry.offset, "unvalidated"),
-                    "source": "partition_table",
-                }
-                for entry in partition_entries
-            ]
-            listed_offsets = {entry["offset"] for entry in partitions}
-            for volume in volumes_by_offset.values():
-                if volume.partition_offset in listed_offsets:
-                    continue
-                partitions.append({
-                    "partitionNumber": volume.partition_number,
-                    "offset": volume.partition_offset,
-                    "sizeBytes": volume.partition_size,
-                    "tableType": "discovered_ntfs",
-                    "name": volume.partition_name,
-                    "filesystem": "NTFS",
-                    "source": "full_disk_signature",
-                    "estimatedSize": bool(volume.partition_size_is_estimated),
-                })
-            unsupported_filesystems = {
-                item["filesystem"] for item in coverage.filesystem_signatures
-                if item["filesystem"] != "NTFS"
-            }
-            unsupported_filesystems.update(
-                item["filesystem"] for item in partitions
-                if item["filesystem"] != "NTFS"
+            return self._attach_snapshot(
+                report,
+                physical_disk,
+                coverage,
+                offsets,
+                partitions,
+                volumes,
+                volume_results,
+                mbr_signature_found,
+                validation_snapshot,
             )
-            try:
-                mbr_data = coverage.read_at(0, 512)
-                mbr_signature_found = len(mbr_data) == 512 and mbr_data[510:512] == b"\x55\xAA"
-            except (OSError, ValueError):
-                mbr_signature_found = False
-            report = {
-                "disk": physical_disk,
-                "coverage": coverage,
-                "partitions": partitions,
-                "partition_table_checks": partition_table_checks,
-                "mbr_signature_found": mbr_signature_found,
-                "ntfs_checks": ntfs_checks,
-                "unsupported_filesystems": sorted(unsupported_filesystems),
-                "filesystem_signatures": coverage.filesystem_signatures,
-                "capacity_mismatch": int(disk.size) != int(physical_disk.size_bytes),
-                "orphan_records_by_partition": orphan_records_by_partition,
-                "content_carving_ranges_by_partition": content_carving_ranges_by_partition,
-                "content_carving_ranges_truncated_by_partition": content_carving_ranges_truncated_by_partition,
-                "uncertain_content_carving_ranges_by_partition": uncertain_content_carving_ranges_by_partition,
-                "uncertain_content_carving_ranges_truncated_by_partition":
-                    uncertain_content_carving_ranges_truncated_by_partition,
-                "validation_snapshot_used": coverage.cached_scan_used,
-                "validation_snapshot_scanned_at": coverage.scanned_at,
-            }
-            if coverage.cached_scan_used:
-                cached_metadata_matches = self._snapshot_metadata_matches(
-                    validation_snapshot,
-                    partitions,
-                    volumes_by_offset,
-                    ntfs_checks,
-                    mbr_signature_found,
-                )
-                old_issues = len((validation_snapshot or {}).get("issues", ()))
-                snapshot_mismatch |= not cached_metadata_matches or len(coverage.issues) > old_issues
-                report["validation_snapshot_mismatch"] = snapshot_mismatch
-                if not snapshot_mismatch:
-                    report["validation_scan_snapshot"] = dict(validation_snapshot)
-                    report["validation_scan_snapshot"]["orphanRecordRefsByPartition"] = (
-                        current_orphan_references
-                    )
-                return report
-
-            if (coverage.bytes_read == int(physical_disk.size_bytes) and not coverage.issues):
-                snapshot = coverage.to_scan_snapshot(physical_disk, offsets)
-                snapshot.update(self._snapshot_metadata(
-                    partitions, volumes_by_offset, ntfs_checks, mbr_signature_found,
-                ))
-                snapshot["orphanRecordRefsByPartition"] = current_orphan_references
-                report["validation_scan_snapshot"] = snapshot
-            report["validation_snapshot_mismatch"] = False
-            return report
         finally:
             disk.close()
+
+    def _find_physical_disk(self, disk_number):
+        disk_number = int(disk_number)
+        return next((item for item in self.disk_enumerator.list_disks()
+                     if item.number == disk_number), None)
+
+    def _create_coverage(self, disk, validation_snapshot):
+        try:
+            return DiskReadCoverage(disk, self.chunk_size, scan_snapshot=validation_snapshot)
+        except (TypeError, ValueError, OverflowError):
+            return DiskReadCoverage(disk, self.chunk_size)
+
+    @staticmethod
+    def _create_orphan_stream(disk, volume, retain_offset):
+        if volume is None or int(volume.partition_offset) != retain_offset:
+            return None
+        return GhostMFTCarver(disk).stream(volume)
+
+    @staticmethod
+    def _scan_disk(coverage, progress_callback, orphan_stream):
+        if coverage.cached_scan_used:
+            return coverage.ntfs_boot_offsets
+        return coverage.scan_full_disk(
+            progress_callback,
+            on_chunk=orphan_stream.feed if orphan_stream is not None else None,
+            on_gap=orphan_stream.gap if orphan_stream is not None else None,
+            combined_orphan_scan=orphan_stream is not None,
+        )
+
+    def _discover_volumes(self, coverage, disk, disk_number, offsets):
+        try:
+            partition_entries = PartitionTableScanner(coverage).partitions()
+        except (OSError, ValueError, struct.error):
+            partition_entries = []
+
+        partition_checks, gpt_partitions = self._discover_gpt_partitions(coverage)
+        known_offsets = {entry.offset for entry in partition_entries}
+        partition_entries.extend(
+            entry for offset, entry in gpt_partitions.items() if offset not in known_offsets
+        )
+        volume_scanner = NTFSVolumeScanner(coverage, disk_number)
+        volumes_by_offset = {}
+        for partition in partition_entries:
+            try:
+                volume = volume_scanner._probe_partition(partition)
+            except (OSError, ValueError, struct.error):
+                volume = None
+            if volume:
+                volumes_by_offset[volume.partition_offset] = volume
+
+        self._discover_signature_volumes(
+            coverage, disk, offsets, volume_scanner, volumes_by_offset,
+        )
+        return partition_entries, partition_checks, volumes_by_offset
+
+    def _discover_gpt_partitions(self, coverage):
+        checks = []
+        partitions = {}
+        for header_offset in coverage.gpt_header_offsets:
+            try:
+                check, entries = self._validate_gpt_header(coverage, header_offset)
+            except (OSError, ValueError, struct.error) as exc:
+                check, entries = ({
+                    "offset": header_offset,
+                    "valid": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }, ())
+            checks.append(check)
+            for entry in entries:
+                partitions.setdefault(entry.offset, entry)
+        return checks, partitions
+
+    @staticmethod
+    def _discover_signature_volumes(coverage, disk, offsets, volume_scanner, volumes_by_offset):
+        # Full-disk boot-sector hits include volumes whose partition table was lost.
+        for boot_offset in offsets:
+            try:
+                boot = coverage.read_at(boot_offset, max(512, disk.bytes_per_sector))
+                geometry = NTFSBootSectorParser.parse(boot)
+                if geometry is None:
+                    continue
+                starts = {boot_offset}
+                estimated_start = boot_offset + geometry.bytes_per_sector - geometry.volume_size
+                if 0 <= estimated_start < boot_offset:
+                    starts.add(estimated_start)
+                for start in starts:
+                    size = min(geometry.volume_size, int(disk.size) - start)
+                    if size <= 0:
+                        continue
+                    candidate = PartitionEntry(
+                        0, start, size, "NTFS signature", "Full-disk NTFS signature",
+                    )
+                    volume = volume_scanner._probe_partition(candidate)
+                    if volume:
+                        volumes_by_offset[volume.partition_offset] = volume
+            except (OSError, ValueError, struct.error):
+                continue
+
+    def _validate_volumes(
+        self, coverage, disk, volumes, offsets, retain_offset, orphan_stream,
+        progress_callback, validation_snapshot, content_carving_range_budget_bytes,
+    ):
+        results = _NTFSVolumeResults(
+            checks=[],
+            orphan_records_by_partition={},
+            content_carving_ranges_by_partition={},
+            content_carving_ranges_truncated_by_partition={},
+            uncertain_content_carving_ranges_by_partition={},
+            uncertain_content_carving_ranges_truncated_by_partition={},
+            orphan_references=dict(
+                (validation_snapshot or {}).get("orphanRecordRefsByPartition", {})
+            ),
+        )
+        for volume in sorted(volumes.values(), key=lambda item: item.partition_offset):
+            try:
+                self._validate_volume(
+                    coverage, disk, volume, offsets, retain_offset, orphan_stream,
+                    progress_callback, results, content_carving_range_budget_bytes,
+                )
+            except (OSError, ValueError, struct.error) as exc:
+                results.checks.append({
+                    "partitionOffset": int(volume.partition_offset),
+                    "validationError": f"{type(exc).__name__}: {exc}",
+                })
+        return results
+
+    def _validate_volume(
+        self, coverage, disk, volume, offsets, retain_offset, orphan_stream,
+        progress_callback, results, content_carving_range_budget_bytes,
+    ):
+        partition_offset = int(volume.partition_offset)
+        retain_orphans = partition_offset == retain_offset
+        cached_orphans = self._cached_orphans(
+            coverage, disk, volume, retain_orphans, results,
+        )
+        checked = self._validate_ntfs_volume(
+            coverage,
+            volume,
+            offsets,
+            retain_orphans=retain_orphans,
+            progress_callback=progress_callback,
+            precomputed_orphans=(
+                orphan_stream.finish() if retain_orphans and orphan_stream is not None
+                else cached_orphans
+            ),
+            content_carving_range_budget_bytes=content_carving_range_budget_bytes,
+        )
+        if not retain_orphans:
+            results.checks.append(checked)
+            return
+
+        check, orphan_records, carving_ranges, uncertain_ranges = checked
+        key = str(partition_offset)
+        results.orphan_references[key] = self._orphan_record_references(orphan_records)
+        results.orphan_records_by_partition[partition_offset] = orphan_records
+        results.content_carving_ranges_by_partition[partition_offset] = carving_ranges
+        results.content_carving_ranges_truncated_by_partition[partition_offset] = bool(
+            check.get("contentCarvingRangesTruncated", False)
+        )
+        results.uncertain_content_carving_ranges_by_partition[partition_offset] = {
+            "bitmapUnobserved": uncertain_ranges["bitmapUnobserved"],
+            "possiblyReused": uncertain_ranges["possiblyReused"],
+        }
+        results.uncertain_content_carving_ranges_truncated_by_partition[partition_offset] = {
+            "bitmapUnobserved": uncertain_ranges["bitmapUnobservedTruncated"],
+            "possiblyReused": uncertain_ranges["possiblyReusedTruncated"],
+        }
+        results.checks.append(check)
+
+    def _cached_orphans(self, coverage, disk, volume, retain_orphans, results):
+        if not retain_orphans or not coverage.cached_scan_used:
+            return None
+        key = str(int(volume.partition_offset))
+        references = results.orphan_references.get(key)
+        if references is None:
+            return None
+        cached_orphans = self._revalidate_cached_orphans(coverage, disk, volume, references)
+        if cached_orphans is None:
+            results.snapshot_mismatch = True
+            return {}
+        return cached_orphans
+
+    @staticmethod
+    def _partition_report(coverage, entries, volumes, offsets):
+        filesystem_by_offset = {
+            int(item["offset"]): item["filesystem"]
+            for item in coverage.filesystem_signatures
+        }
+        filesystem_by_offset.update({offset: "NTFS" for offset in offsets})
+        partitions = [
+            {
+                "partitionNumber": entry.number,
+                "offset": entry.offset,
+                "sizeBytes": entry.size_bytes,
+                "tableType": str(entry.table_type),
+                "name": entry.name,
+                "filesystem": "NTFS" if entry.offset in volumes
+                    else filesystem_by_offset.get(entry.offset, "unvalidated"),
+                "source": "partition_table",
+            }
+            for entry in entries
+        ]
+        listed_offsets = {entry["offset"] for entry in partitions}
+        for volume in volumes.values():
+            if volume.partition_offset in listed_offsets:
+                continue
+            partitions.append({
+                "partitionNumber": volume.partition_number,
+                "offset": volume.partition_offset,
+                "sizeBytes": volume.partition_size,
+                "tableType": "discovered_ntfs",
+                "name": volume.partition_name,
+                "filesystem": "NTFS",
+                "source": "full_disk_signature",
+                "estimatedSize": bool(volume.partition_size_is_estimated),
+            })
+        return partitions
+
+    @staticmethod
+    def _mbr_signature_found(coverage):
+        try:
+            mbr_data = coverage.read_at(0, 512)
+            return len(mbr_data) == 512 and mbr_data[510:512] == b"\x55\xAA"
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _build_report(
+        physical_disk, disk, coverage, partitions, partition_checks, volumes,
+        results, mbr_signature_found,
+    ):
+        unsupported_filesystems = {
+            item["filesystem"] for item in coverage.filesystem_signatures
+            if item["filesystem"] != "NTFS"
+        }
+        unsupported_filesystems.update(
+            item["filesystem"] for item in partitions if item["filesystem"] != "NTFS"
+        )
+        return {
+            "disk": physical_disk,
+            "coverage": coverage,
+            "partitions": partitions,
+            "partition_table_checks": partition_checks,
+            "mbr_signature_found": mbr_signature_found,
+            "ntfs_checks": results.checks,
+            "unsupported_filesystems": sorted(unsupported_filesystems),
+            "filesystem_signatures": coverage.filesystem_signatures,
+            "capacity_mismatch": int(disk.size) != int(physical_disk.size_bytes),
+            "orphan_records_by_partition": results.orphan_records_by_partition,
+            "content_carving_ranges_by_partition": results.content_carving_ranges_by_partition,
+            "content_carving_ranges_truncated_by_partition":
+                results.content_carving_ranges_truncated_by_partition,
+            "uncertain_content_carving_ranges_by_partition":
+                results.uncertain_content_carving_ranges_by_partition,
+            "uncertain_content_carving_ranges_truncated_by_partition":
+                results.uncertain_content_carving_ranges_truncated_by_partition,
+            "validation_snapshot_used": coverage.cached_scan_used,
+            "validation_snapshot_scanned_at": coverage.scanned_at,
+        }
+
+    def _attach_snapshot(
+        self, report, physical_disk, coverage, offsets, partitions, volumes,
+        results, mbr_signature_found, validation_snapshot,
+    ):
+        if coverage.cached_scan_used:
+            return self._attach_cached_snapshot(
+                report, coverage, partitions, volumes, results,
+                mbr_signature_found, validation_snapshot,
+            )
+        if coverage.bytes_read == int(physical_disk.size_bytes) and not coverage.issues:
+            snapshot = coverage.to_scan_snapshot(physical_disk, offsets)
+            snapshot.update(self._snapshot_metadata(
+                partitions, volumes, results.checks, mbr_signature_found,
+            ))
+            snapshot["orphanRecordRefsByPartition"] = results.orphan_references
+            report["validation_scan_snapshot"] = snapshot
+        report["validation_snapshot_mismatch"] = False
+        return report
+
+    def _attach_cached_snapshot(
+        self, report, coverage, partitions, volumes, results,
+        mbr_signature_found, validation_snapshot,
+    ):
+        metadata_matches = self._snapshot_metadata_matches(
+            validation_snapshot, partitions, volumes, results.checks, mbr_signature_found,
+        )
+        old_issues = len((validation_snapshot or {}).get("issues", ()))
+        mismatch = results.snapshot_mismatch or not metadata_matches or len(coverage.issues) > old_issues
+        report["validation_snapshot_mismatch"] = mismatch
+        if not mismatch:
+            report["validation_scan_snapshot"] = dict(validation_snapshot)
+            report["validation_scan_snapshot"]["orphanRecordRefsByPartition"] = (
+                results.orphan_references
+            )
+        return report
 
     @staticmethod
     def _snapshot_matches_disk(snapshot, disk_info):
