@@ -1,3 +1,14 @@
+from dataclasses import dataclass
+import os
+
+from modules.disk.entities import NTFSVolume
+
+SUPPORTED_CATALOG_EXTENSIONS = (
+    ".doc", ".docm", ".docx", ".jpeg", ".jpg", ".mp4",
+    ".pdf", ".png", ".rtf", ".xls", ".xlsm", ".xlsx",
+)
+
+
 import os
 
 
@@ -67,3 +78,53 @@ class RecoveryCatalog:
                 selected_keys.add(key)
             pending.extend(reversed(tuple(getattr(node, "children", ()))))
         return [node for key, node in eligible_by_key.items() if key in selected_keys]
+
+
+@dataclass(frozen=True)
+class RecoveryCatalogSnapshot:
+    catalog: RecoveryCatalog
+    volume: NTFSVolume
+    orphan_scan_performed: bool = False
+    content_carving_summary: dict | None = None
+    parent_reference_issue_count: int = 0
+    low_confidence_carving_summary: dict | None = None
+    recycle_bin_summary: dict | None = None
+    usn_journal_summary: dict | None = None
+    ntfs_log_file_summary: dict | None = None
+
+    @property
+    def volume_start(self):
+        return self.volume.partition_offset
+
+    @property
+    def cluster_size(self):
+        return self.volume.cluster_size
+
+
+@dataclass(frozen=True)
+class CarvedContentRecord:
+    """Catalog-facing candidate with bytes found outside filesystem metadata."""
+
+    index: int
+    offset: int
+    name: str
+    resident_data: bytes
+    cluster_allocation_status: str = "free"
+    sequence_number: int = 0
+    is_valid: bool = True
+    # Raw carving cannot prove this file was deleted; do not label it as such.
+    is_allocated: bool = True
+    is_dir: bool = False
+    file_size: int = 0
+    data_is_complete: bool = True
+    data_runs: tuple = ()
+    raw_data: bytes = b""
+    catalog_content_validation: str = "format_structure_match"
+    catalog_content_validation_reason: str = (
+        "Contiguous file structure and format markers passed validation"
+    )
+
+    def __post_init__(self):
+        data = bytes(self.resident_data)
+        object.__setattr__(self, "resident_data", data)
+        object.__setattr__(self, "file_size", len(data))

@@ -7,8 +7,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from presentation.controller import RecoveryCommandHandler
 from presentation.transport import CommandRequestDto, ProgressEventDto
 from modules.catalog.dto import CarvingOptionsDto, VolumeSelectionRequestDto
-from modules.disk.dto import PartitionScanRequestDto
-from modules.disk.service import DiskDiscoveryService
+from modules.deep_scan.dto import PartitionScanRequestDto
+from modules.disk.service import DiskService
+from modules.deep_scan.service import DeepScanService
+from modules.validation.service import ValidationService
 from modules.recovery.dto import RecoveryRequestDto
 
 
@@ -31,8 +33,13 @@ class EmptyCatalogService:
 
 
 def make_handler():
-    discovery = DiskDiscoveryService(EmptyInventory(), EmptyRepository())
-    return RecoveryCommandHandler(discovery, EmptyCatalogService(), EmptyWorkflow())
+    inventory, repository = EmptyInventory(), EmptyRepository()
+    disk_service = DiskService(inventory, repository)
+    return RecoveryCommandHandler(
+        disk_service, DeepScanService(inventory, disk_service, repository, repository),
+        ValidationService(inventory, disk_service, repository),
+        EmptyCatalogService(), EmptyCatalogService(), EmptyWorkflow(),
+    )
 
 
 class CommandContractTests(unittest.TestCase):

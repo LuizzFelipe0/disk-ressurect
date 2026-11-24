@@ -5,7 +5,7 @@ from infrastructure.disk.factory import create_disk_enumerator, disk_reader_fact
 from infrastructure.disk.lost_partition_scanner import LostPartitionScanner
 from infrastructure.filesystems.ntfs.discovery.mft_anchor_scan import MFTAnchorScanner
 from modules.disk.entities import NTFSVolume, PhysicalDisk
-from modules.deep_scan.entities import ScanCheckpoint
+from modules.disk.entities import ScanCheckpoint
 from infrastructure.filesystems.ntfs.discovery.anchor_resolver import MFTAnchorVolumeResolver
 from infrastructure.filesystems.ntfs.discovery.volume_scanner import NTFSVolumeScanner
 from infrastructure.validation.disk_auditor import DiskValidationAuditor

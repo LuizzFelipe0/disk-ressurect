@@ -5,10 +5,10 @@ import unittest
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-from modules.catalog.models import RecoveryCatalogSnapshot
-from modules.recovery.service import RecoveryWorkflow
+from modules.catalog.entities import RecoveryCatalogSnapshot
+from helpers import make_recovery_workflow
 from modules.disk.entities import NTFSVolume
-from domain.recovery_catalog import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalog
 
 
 class FakeDisk:
@@ -38,7 +38,7 @@ class RecoveryWorkflowTests(unittest.TestCase):
                             ((8192, 1, 0),))
         snapshot = RecoveryCatalogSnapshot(RecoveryCatalog({}, []), volume)
         opened_disks = []
-        workflow = RecoveryWorkflow(
+        workflow = make_recovery_workflow(
             disk_factory=lambda disk_number: opened_disks.append(disk_number),
             output_guard=FakeOutputGuard(),
         )
@@ -79,7 +79,7 @@ class RecoveryWorkflowTests(unittest.TestCase):
             return disk
 
         output_guard = FakeOutputGuard()
-        workflow = RecoveryWorkflow(disk_factory=disk_factory, output_guard=output_guard)
+        workflow = make_recovery_workflow(disk_factory=disk_factory, output_guard=output_guard)
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         progress = []
         with tempfile.TemporaryDirectory(dir=repo_root) as output_directory:
@@ -121,7 +121,7 @@ class RecoveryWorkflowTests(unittest.TestCase):
         volume = NTFSVolume(2, 1, 0, 1024 * 1024, 512, 4096, 1024, 8192, 1024,
                             ((8192, 1, 0),))
         snapshot = RecoveryCatalogSnapshot(catalog, volume)
-        workflow = RecoveryWorkflow(
+        workflow = make_recovery_workflow(
             disk_factory=lambda disk_number: FakeDisk(disk_number),
             output_guard=FakeOutputGuard(),
         )

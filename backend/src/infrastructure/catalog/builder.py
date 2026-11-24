@@ -1,0 +1,625 @@
+import os
+import copy
+import hashlib
+from dataclasses import dataclass
+
+from infrastructure.disk.factory import disk_reader_factory
+from modules.catalog.entities import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalogSnapshot
+from modules.disk.service import DiskReaderFactory
+from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
+from infrastructure.carving.content_carver import RawContentCarver
+
+
+from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence
+from infrastructure.filesystems.ntfs.artifacts.models import has_path_component
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode, TreeBuilder
+from infrastructure.filesystems.ntfs.artifacts.recycle_bin import RecycleBinRecoveryHelper
+from infrastructure.filesystems.ntfs.artifacts.usn_journal import UsnJournalEvidenceScanner
+from infrastructure.filesystems.ntfs.artifacts.usn_mft_correlator import UsnMftCorrelator
+from infrastructure.filesystems.ntfs.artifacts.logfile import NTFSLogFileEvidenceScanner
+from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from modules.catalog.entities import CarvedContentRecord
+
+
+class CatalogBuilder:
+    LOW_CONFIDENCE_MAX_SCAN_BYTES = 128 * 1024 * 1024
+    LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES = 48 * 1024 * 1024
+    LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES_PER_FORMAT = 16 * 1024 * 1024
+    LOW_CONFIDENCE_MAX_FILE_BYTES = 16 * 1024 * 1024
+    LOW_CONFIDENCE_MAX_TOTAL_FILE_BYTES = 32 * 1024 * 1024
+    LOW_CONFIDENCE_MAX_FILES = 64
+
+    def __init__(self, disk_factory: DiskReaderFactory | None = None):
+        self.disk_factory = disk_factory if disk_factory is not None else disk_reader_factory()
+
+    def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
+              precomputed_orphans=None, precomputed_carving_ranges=None,
+              carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
+              uncertain_carving_ranges_truncated=None, carving_options=None,
+              carving_checkpoint=None, carving_checkpoint_callback=None):
+        disk = self.disk_factory(volume.disk_number)
+        try:
+            builder = TreeBuilder(
+                disk,
+                volume.fragments_as_dicts(),
+                volume.partition_offset,
+                volume.record_size,
+                cluster_size=volume.cluster_size,
+                volume_size_bytes=volume.partition_size,
+            )
+            nodes = builder.build(progress_callback=progress_callback, phase_callback=phase_callback)
+            content_carving_summary = None
+            low_confidence_carving_summary = None
+            recycle_bin_summary = None
+            usn_journal_summary = None
+            ntfs_log_file_summary = None
+            if include_orphaned:
+                from infrastructure.recovery.extractor import Extractor
+
+                if precomputed_orphans is None:
+                    ghosts = GhostMFTCarver(disk).hunt(
+                        volume,
+                        allowed_extensions=Extractor.supported_extensions(),
+                        existing_records=(node.record for node in nodes.values()),
+                        progress_callback=progress_callback,
+                        phase_callback=phase_callback,
+                    )
+                else:
+                    allowed_extensions = {item.casefold() for item in Extractor.supported_extensions()}
+                    existing_fingerprints = {
+                        bytes(node.record.raw_data)
+                        for node in nodes.values()
+                        if getattr(node.record, "is_valid", False)
+                    }
+                    ghosts = {
+                        synthetic_id: record for synthetic_id, record in precomputed_orphans.items()
+                        if os.path.splitext(record.name)[1].casefold() in allowed_extensions
+                        and bytes(record.raw_data) not in existing_fingerprints
+                    }
+                content_validator = CatalogContentValidator(
+                    disk,
+                    volume.partition_offset,
+                    volume.partition_offset + volume.partition_size,
+                    volume.cluster_size,
+                )
+                ghosts = self._validate_orphan_content(ghosts, content_validator)
+                builder.inject_ghosts(ghosts)
+                evidence_reader = NTFSFileContentReader(
+                    disk,
+                    volume.partition_offset,
+                    volume.cluster_size,
+                    volume_size_bytes=volume.partition_size,
+                )
+                ntfs_log_file_summary = NTFSLogFileEvidenceScanner().scan(
+                    builder.nodes.values(), evidence_reader.iter_chunks,
+                ).to_dict()
+                recycle_bin_summary = self._add_recycle_bin_aliases(
+                    builder, evidence_reader,
+                )
+                usn_journal_summary, usn_delete_events = self._scan_usn_journal(
+                    builder.nodes.values(), evidence_reader,
+                )
+                usn_journal_summary.update(UsnMftCorrelator().correlate(
+                    usn_delete_events,
+                    builder,
+                    content_validator,
+                    Extractor.supported_extensions(),
+                ))
+                if precomputed_carving_ranges is not None:
+                    (content_carving_summary, low_confidence_carving_summary) = (
+                        self._scan_content_carving(
+                            disk,
+                            builder,
+                            precomputed_carving_ranges,
+                            carving_ranges_truncated,
+                            carving_options,
+                            carving_checkpoint,
+                            carving_checkpoint_callback,
+                            precomputed_uncertain_carving_ranges,
+                            uncertain_carving_ranges_truncated,
+                            phase_callback,
+                        )
+                    )
+                nodes = builder.nodes
+            return RecoveryCatalogSnapshot(
+                catalog=RecoveryCatalog(nodes, builder.root_nodes),
+                volume=volume,
+                orphan_scan_performed=bool(include_orphaned),
+                content_carving_summary=content_carving_summary,
+                parent_reference_issue_count=int(builder.parent_reference_issue_count),
+                low_confidence_carving_summary=low_confidence_carving_summary,
+                recycle_bin_summary=recycle_bin_summary,
+                usn_journal_summary=usn_journal_summary,
+                ntfs_log_file_summary=ntfs_log_file_summary,
+            )
+        finally:
+            disk.close()
+
+    def _scan_content_carving(
+        self, disk, builder, ranges, ranges_truncated, options, checkpoint,
+        checkpoint_callback, uncertain_ranges, uncertain_ranges_truncated,
+        phase_callback,
+    ):
+        """Run trusted and bounded low-confidence carving passes for one volume."""
+        carver_options = {}
+        if options is not None:
+            candidate_read_bytes_per_format = (
+                int(getattr(options, "max_candidate_read_mib_per_format", 256))
+                * 1024**2
+            )
+            carver_options = {
+                "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
+                "max_files": int(options.max_files),
+                "max_total_file_bytes": int(
+                    getattr(options, "max_retained_mib", 128)
+                ) * 1024**2,
+                "max_candidate_read_bytes_per_format": candidate_read_bytes_per_format,
+                "max_candidate_read_bytes": candidate_read_bytes_per_format * 3,
+            }
+        carving = RawContentCarver(disk, **carver_options).scan(
+            ranges,
+            progress_callback=self._phase_progress(phase_callback, "content_carving"),
+            resume_checkpoint=checkpoint,
+            checkpoint_callback=checkpoint_callback,
+            ranges_truncated=bool(ranges_truncated),
+        )
+        candidate_catalog = CarvedCandidateCatalog(builder, disk.size)
+        candidate_catalog.add(carving.files, ("Lost_Files_DeepScan", "ContentCarving"))
+        budget_gib = options.scan_budget_gib if options is not None else 1
+        retained_budget_mib = (
+            getattr(options, "max_retained_mib", 128) if options is not None else 128
+        )
+        trusted_summary = {
+            "filesFound": len(carving.files),
+            **self._format_metrics(carving),
+            "candidateReadCapBytes": carving.candidate_read_cap_bytes,
+            "candidateReadCapBytesPerFormat": carving.candidate_read_cap_bytes_per_format,
+            "maxFileBytes": carving.max_file_bytes,
+            "maxDecodedPngBytes": carving.max_decoded_png_bytes,
+            "scanByteCap": carving.max_scan_bytes,
+            "scanBudgetGiB": budget_gib,
+            "rangeCollectionCapBytes": budget_gib * 1024**3,
+            "retainedBudgetMiB": retained_budget_mib,
+            "rangeBytesRetained": sum(end - start for start, end in ranges),
+            "retainedBytesCap": carving.max_total_file_bytes,
+            "fileCountCap": carving.max_files,
+            "bytesScanned": carving.bytes_scanned,
+            "cumulativeBytesScanned": carving.cumulative_bytes_scanned,
+            "resumeAvailable": carving.checkpoint is not None,
+            "candidateRestoreBytesRead": carving.candidate_restore_bytes_read,
+            "scanLimitReached": carving.scan_limit_reached,
+            "candidateBytesRead": carving.candidate_bytes_read,
+            "candidateLimitReached": carving.candidate_limit_reached,
+            "fileCountLimitReached": carving.file_count_limit_reached,
+            "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
+            "rangeCount": len(ranges),
+            "rangeCollectionTruncated": bool(ranges_truncated),
+            "confidence": "trusted_free_space",
+        }
+        low_confidence_summary = None
+        if uncertain_ranges is not None:
+            low_confidence_summary = self._scan_low_confidence_ranges(
+                disk,
+                candidate_catalog,
+                uncertain_ranges,
+                uncertain_ranges_truncated or {},
+                phase_callback,
+            )
+        return trusted_summary, low_confidence_summary
+
+    def _scan_low_confidence_ranges(
+        self, disk, candidate_catalog, uncertain_ranges, truncation, phase_callback,
+    ):
+        summary = {}
+        passes = (
+            ("bitmapUnobserved", "bitmap_unobserved", "BitmapUnobserved",
+             "content_carving_unobserved"),
+            ("possiblyReused", "possibly_reused", "PossiblyReused",
+             "content_carving_reused"),
+        )
+        for key, allocation_status, folder_name, phase_name in passes:
+            ranges = tuple(uncertain_ranges.get(key, ()))
+            low_carver = RawContentCarver(
+                disk,
+                max_scan_bytes=self.LOW_CONFIDENCE_MAX_SCAN_BYTES,
+                max_candidate_read_bytes=self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES,
+                max_candidate_read_bytes_per_format=(
+                    self.LOW_CONFIDENCE_MAX_CANDIDATE_READ_BYTES_PER_FORMAT
+                ),
+                max_file_bytes=self.LOW_CONFIDENCE_MAX_FILE_BYTES,
+                max_total_file_bytes=self.LOW_CONFIDENCE_MAX_TOTAL_FILE_BYTES,
+                max_files=self.LOW_CONFIDENCE_MAX_FILES,
+            )
+            low_carving = low_carver.scan(
+                ranges,
+                progress_callback=self._phase_progress(phase_callback, phase_name),
+            )
+            added = candidate_catalog.add(
+                low_carving.files,
+                ("Lost_Files_DeepScan", "LowConfidence", folder_name),
+                allocation_status=allocation_status,
+            )
+            summary[key] = self._carving_summary(
+                low_carving,
+                ranges,
+                bool(truncation.get(key, False)),
+                confidence="low",
+                allocation_status=allocation_status,
+                catalog_items_added=added,
+            )
+            summary[key]["rangeBytesRetained"] = sum(
+                end - start for start, end in ranges
+            )
+            summary[key]["rangeCollectionCapBytes"] = (
+                ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
+            )
+        return summary
+
+    @staticmethod
+    def _phase_progress(phase_callback, phase_name):
+        if phase_callback is None:
+            return None
+
+        def report(completed, total):
+            phase_callback(phase_name, completed, total)
+
+        return report
+
+    @staticmethod
+    def supported_extensions():
+        from infrastructure.recovery.extractor import Extractor
+
+        return Extractor.supported_extensions()
+
+    @staticmethod
+    def _validate_orphan_content(ghosts, validator):
+        """Filter known-bad headers and retain bounded evidence on each candidate."""
+        validated = {}
+        for synthetic_id, record in ghosts.items():
+            evidence = validator.validate(record)
+            record.catalog_content_validation = evidence.status
+            record.catalog_content_validation_reason = evidence.reason
+            if evidence.status != "signature_mismatch":
+                validated[synthetic_id] = record
+        return validated
+
+    @staticmethod
+    def _add_recycle_bin_aliases(builder, reader):
+        """Expose supported, size-matched $R data under generated safe paths."""
+        from infrastructure.recovery.extractor import Extractor
+
+        supported = {extension.casefold() for extension in Extractor.supported_extensions()}
+        helper = RecycleBinRecoveryHelper()
+
+        def read_index(node, _max_bytes):
+            return b"".join(reader.iter_chunks(node))
+
+        recycle_bin_nodes = tuple(
+            node for node in builder.nodes.values()
+            if has_path_component(node, "$Recycle.Bin")
+        )
+        associations = helper.associate(recycle_bin_nodes, read_index)
+        counts = {
+            "indexCount": len(associations),
+            "aliasesAdded": 0,
+            "pairedCount": 0,
+            "missingContentCount": 0,
+            "ambiguousContentCount": 0,
+            "metadataMismatchCount": 0,
+            "invalidIndexCount": 0,
+            "readErrorCount": 0,
+            "limitedIndexCount": 0,
+            "incompleteContentCount": 0,
+            "unsupportedExtensionCount": 0,
+            "directoryContentCount": 0,
+        }
+        inconclusive_statuses = {
+            "missing_content", "ambiguous", "metadata_mismatch", "invalid_index",
+            "read_error", "incomplete", "limited", "unpaired",
+        }
+        inconclusive = not associations
+        for association in associations:
+            status_key = {
+                "missing_content": "missingContentCount",
+                "ambiguous": "ambiguousContentCount",
+                "metadata_mismatch": "metadataMismatchCount",
+                "invalid_index": "invalidIndexCount",
+                "read_error": "readErrorCount",
+                "incomplete": "invalidIndexCount",
+                "limited": "limitedIndexCount",
+                "unpaired": "invalidIndexCount",
+            }.get(association.status)
+            if status_key is not None:
+                counts[status_key] += 1
+            if association.status in inconclusive_statuses:
+                inconclusive = True
+            if association.status != "paired" or association.content_node is None:
+                continue
+
+            counts["pairedCount"] += 1
+            source_record = association.content_node.record
+            if bool(getattr(source_record, "is_dir", False)):
+                counts["directoryContentCount"] += 1
+                continue
+            if getattr(source_record, "data_is_complete", True) is False:
+                counts["incompleteContentCount"] += 1
+                inconclusive = True
+                continue
+
+            extension = os.path.splitext(association.metadata.name or "")[1].casefold()
+            if extension not in supported:
+                counts["unsupportedExtensionCount"] += 1
+                continue
+            if not association.target_name:
+                counts["invalidIndexCount"] += 1
+                inconclusive = True
+                continue
+
+            alias_record = copy.copy(source_record)
+            alias_record.name = association.target_name
+            alias_record.recovery_source = "recycle_bin"
+            alias_record.original_path = association.metadata.original_path
+            alias_record.deletion_timestamp_utc = (
+                association.metadata.timestamp_utc.isoformat()
+                if association.metadata.timestamp_utc is not None else None
+            )
+            alias_record.recycle_bin_original_size_bytes = association.metadata.size_bytes
+            source_index = int(getattr(source_record, "index", 0) or 0)
+            synthetic_id = -(abs(source_index) + 1)
+            while synthetic_id in builder.nodes:
+                synthetic_id -= 1
+            alias_record.index = synthetic_id
+            alias_node = FileNode(alias_record)
+            alias_node.is_recycle_bin_alias = True
+            alias_node.full_path = os.path.join(
+                "Lost_Files_DeepScan", "RecycleBin", association.target_name,
+            )
+            builder.nodes[synthetic_id] = alias_node
+            builder.root_nodes.append(alias_node)
+            counts["aliasesAdded"] += 1
+
+        status = "inconclusive" if inconclusive else "complete"
+        return {
+            "status": status,
+            "inconclusive": inconclusive,
+            "reason": "no_recycle_bin_index_found" if not associations else None,
+            **counts,
+        }
+
+    @staticmethod
+    def _scan_usn_journal(nodes, reader):
+        """Summarize bounded USN metadata without exposing journal events."""
+        try:
+            evidence = UsnJournalEvidenceScanner().scan(nodes, reader.read_named_stream)
+        except Exception:
+            return {
+                "status": "inconclusive",
+                "inconclusive": True,
+                "journalCount": 0,
+                "streamCount": 0,
+                "bytesRead": 0,
+                "recordsExamined": 0,
+                "parsedRecords": 0,
+                "deletedEvents": 0,
+                "malformedRecords": 0,
+                "limitReached": False,
+                "errorCount": 1,
+            }, ()
+
+        scans = [item.scan for item in evidence if item.scan is not None]
+        inconclusive = any(item.status != "complete" for item in evidence)
+        summary = {
+            "status": "inconclusive" if inconclusive else "complete",
+            "inconclusive": inconclusive,
+            "journalCount": sum(item.journal_node is not None for item in evidence),
+            "streamCount": len(scans),
+            "bytesRead": sum(item.bytes_read for item in evidence),
+            "recordsExamined": sum(item.records_examined for item in scans),
+            "parsedRecords": sum(len(item.artifacts) for item in scans),
+            "deletedEvents": sum(
+                artifact.indicates_delete
+                for scan in scans for artifact in scan.artifacts
+            ),
+            "malformedRecords": sum(item.malformed_records for item in scans),
+            "limitReached": any(
+                item.status == "partial" or item.scan is not None and item.scan.limit_reached
+                for item in evidence
+            ),
+            "errorCount": sum(item.status in {"read_error", "invalid_stream"} for item in evidence),
+        }
+        delete_events = tuple(
+            artifact for item in evidence for artifact in item.events
+            if artifact.indicates_delete
+        )
+        return summary, delete_events
+
+    @staticmethod
+    def _format_metrics(carving):
+        """Build the shared per-format diagnostics for every carving tier."""
+        return {
+            "filesFoundByExtension": {
+                item.extension: item.files_found for item in carving.format_stats
+            },
+            "candidatesExaminedByExtension": {
+                item.extension: item.candidates_examined for item in carving.format_stats
+            },
+            "candidateBytesReadByExtension": {
+                item.extension: item.candidate_bytes_read for item in carving.format_stats
+            },
+            "candidateLimitReachedByExtension": {
+                item.extension: item.candidate_limit_reached for item in carving.format_stats
+            },
+            "fileSizeLimitReachedByExtension": {
+                item.extension: item.file_size_limit_reached for item in carving.format_stats
+            },
+            "decodedDataLimitReachedByExtension": {
+                item.extension: item.decoded_data_limit_reached for item in carving.format_stats
+            },
+            "formatsAttempted": [item.extension for item in carving.format_stats],
+            "validationScope": "contiguous_structure_and_signature",
+        }
+
+    @staticmethod
+    def _carving_summary(
+        carving, ranges, range_collection_truncated, *, confidence, allocation_status,
+        catalog_items_added,
+    ):
+        return {
+            "filesFound": len(carving.files),
+            **CatalogBuilder._format_metrics(carving),
+            "confidence": confidence,
+            "allocationStatus": allocation_status,
+            "catalogItemsAdded": catalog_items_added,
+            "bytesScanned": carving.bytes_scanned,
+            "scanLimitReached": carving.scan_limit_reached,
+            "candidateBytesRead": carving.candidate_bytes_read,
+            "candidateReadCapBytes": carving.candidate_read_cap_bytes,
+            "candidateReadCapBytesPerFormat": carving.candidate_read_cap_bytes_per_format,
+            "maxFileBytes": carving.max_file_bytes,
+            "maxDecodedPngBytes": carving.max_decoded_png_bytes,
+            "scanByteCap": carving.max_scan_bytes,
+            "retainedBytesCap": carving.max_total_file_bytes,
+            "fileCountCap": carving.max_files,
+            "candidateLimitReached": carving.candidate_limit_reached,
+            "fileCountLimitReached": carving.file_count_limit_reached,
+            "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
+            "rangeCount": len(ranges),
+            "rangeCollectionTruncated": bool(range_collection_truncated),
+        }
+
+    @staticmethod
+    def search(snapshot, query, limit=500):
+        normalized = query.casefold()
+        if not normalized:
+            return (), 0
+        matches = [
+            node for node in snapshot.catalog.nodes.values()
+            if normalized in node.record.name.casefold()
+            or normalized in node.full_path.casefold()
+        ]
+        matches.sort(key=lambda node: (node.full_path.casefold(), node.full_path))
+        return tuple(matches[:limit]), len(matches)
+
+
+
+class CarvedCandidateCatalog:
+    """Keep carving deduplication and synthetic-node construction in one place."""
+
+    def __init__(self, builder, disk_size):
+        self.builder = builder
+        self.disk_size = int(disk_size)
+        self.content_digests = set()
+        self.physical_offsets = set()
+
+    def add(self, candidates, path_parts, allocation_status=None):
+        added = 0
+        for candidate in candidates:
+            digest = hashlib.sha256(candidate.data).digest()
+            offset = int(candidate.offset)
+            if digest in self.content_digests or offset in self.physical_offsets:
+                continue
+            self.content_digests.add(digest)
+            self.physical_offsets.add(offset)
+
+            synthetic_id = -(self.disk_size + offset + 1)
+            while synthetic_id in self.builder.nodes:
+                synthetic_id -= 1
+            record = CarvedContentRecord(
+                index=synthetic_id,
+                offset=offset,
+                name=f"Carved_{offset:016X}{candidate.extension}",
+                resident_data=candidate.data,
+                cluster_allocation_status=allocation_status or "free",
+                catalog_content_validation_reason=(
+                    "Contiguous format structure passed validation; allocation "
+                    "is unknown or may describe current/reused data"
+                    if allocation_status is not None else
+                    "Contiguous file structure and format markers passed validation"
+                ),
+            )
+            node = FileNode(record, is_orphaned=True, is_content_carved=True)
+            node.full_path = os.path.join(*path_parts, record.name)
+            self.builder.nodes[synthetic_id] = node
+            self.builder.root_nodes.append(node)
+            added += 1
+        return added
+
+
+@dataclass(frozen=True)
+class CandidateContentValidation:
+    """Bounded signature evidence gathered while building the catalog."""
+
+    status: str
+    reason: str
+
+
+class CatalogContentValidator:
+    """Check only the header window; full file/container validation stays in extraction."""
+
+    def __init__(self, disk, volume_start, volume_end, cluster_size):
+        self.disk = disk
+        self.volume_start = int(volume_start)
+        self.volume_end = int(volume_end)
+        self.cluster_size = int(cluster_size)
+
+    def validate(self, record):
+        extension = self._extension(record.name)
+        if extension not in FileSignatureValidator.supported_extensions():
+            return CandidateContentValidation("unsupported", "No signature rule is available")
+        if not getattr(record, "data_is_complete", True):
+            return CandidateContentValidation("incomplete_metadata", "MFT data attributes are incomplete")
+
+        size = int(record.file_size)
+        if size <= 0:
+            return CandidateContentValidation("invalid_size", "File has no content bytes")
+        window_size = min(size, FileSignatureValidator.header_window(extension))
+        try:
+            header = self._read_prefix(record, window_size)
+        except (OSError, ValueError, TypeError, OverflowError) as exc:
+            return CandidateContentValidation("unavailable", str(exc))
+
+        if len(header) != window_size:
+            return CandidateContentValidation("unavailable", "File data runs ended before the signature window")
+        if not FileSignatureValidator.matches(extension, header):
+            return CandidateContentValidation("signature_mismatch", "File header does not match its extension")
+        return CandidateContentValidation("signature_match", "File header matches its extension")
+
+    def _read_prefix(self, record, size):
+        resident_data = getattr(record, "resident_data", None)
+        if resident_data is not None:
+            return bytes(resident_data[:size])
+
+        runs = tuple(getattr(record, "data_runs", ()))
+        if not runs:
+            raise ValueError("No data runs are available")
+        if self.cluster_size <= 0:
+            raise ValueError("Invalid NTFS cluster size")
+
+        header = bytearray()
+        remaining = size
+        for lcn, cluster_count in runs:
+            if remaining <= 0:
+                break
+            cluster_count = int(cluster_count)
+            if cluster_count <= 0:
+                raise ValueError("A data run has a non-positive length")
+            run_size = min(cluster_count * self.cluster_size, remaining)
+            if lcn is None:
+                header.extend(bytes(run_size))
+            else:
+                run_start = self.volume_start + int(lcn) * self.cluster_size
+                run_end = run_start + run_size
+                if run_start < self.volume_start or run_end > self.volume_end:
+                    raise ValueError("A file data run is outside the selected volume")
+                chunk = self.disk.read_at(run_start, run_size)
+                if len(chunk) != run_size:
+                    raise OSError(f"Short header read at {run_start:#x}: {len(chunk)} of {run_size} bytes")
+                header.extend(chunk)
+            remaining -= run_size
+        return bytes(header)
+
+    @staticmethod
+    def _extension(name):
+        return os.path.splitext(str(name))[1].casefold()

@@ -6,9 +6,10 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume, PhysicalDisk
-from modules.deep_scan.entities import ScanCheckpoint
+from modules.disk.entities import ScanCheckpoint
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
-from modules.disk.service import DiskDiscoveryService
+from modules.disk.service import DiskService
+from modules.deep_scan.service import DeepScanService
 
 
 class InterruptibleInventory:
@@ -40,7 +41,8 @@ class DiskDiscoveryServiceCheckpointTests(unittest.TestCase):
         inventory = InterruptibleInventory()
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
             repository = JsonDeepScanRepository(os.path.join(directory, "scans.json"))
-            service = DiskDiscoveryService(inventory, repository)
+            disk_service = DiskService(inventory, repository)
+            service = DeepScanService(inventory, disk_service, repository, repository)
 
             with self.assertRaisesRegex(OSError, "USB disconnected"):
                 service.scan_partitions(3, True)

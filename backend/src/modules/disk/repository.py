@@ -1,22 +1,13 @@
 from typing import Protocol
 
+from modules.disk.entities import ScanCheckpoint
 from modules.disk.entities import CachedDeepScan, NTFSVolume, PhysicalDisk
-from modules.deep_scan.entities import CarvingCheckpoint
 
 
-class DeepScanRepository(Protocol):
+class DiskRepository(Protocol):
     def load(self, disk: PhysicalDisk) -> CachedDeepScan | None: ...
 
-    def save(self, disk: PhysicalDisk, volumes: tuple[NTFSVolume, ...] | list[NTFSVolume], checkpoint=None) -> CachedDeepScan: ...
-
-    def load_carving_checkpoint(self, disk: PhysicalDisk, volume: NTFSVolume) -> CarvingCheckpoint | None: ...
-
-    def save_carving_checkpoint(
-        self, disk: PhysicalDisk, volume: NTFSVolume, checkpoint: CarvingCheckpoint | None,
-    ) -> CarvingCheckpoint | None: ...
-
-    def load_validation_snapshot(self, disk: PhysicalDisk) -> dict | None: ...
-
-    def save_validation_snapshot(self, disk: PhysicalDisk, snapshot: dict) -> dict | None: ...
-
-    def invalidate_validation_snapshot(self, disk: PhysicalDisk) -> None: ...
+    def save(
+        self, disk: PhysicalDisk, volumes: tuple[NTFSVolume, ...] | list[NTFSVolume],
+        checkpoint: ScanCheckpoint | None = None,
+    ) -> CachedDeepScan: ...

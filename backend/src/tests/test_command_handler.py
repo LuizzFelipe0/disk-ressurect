@@ -6,11 +6,13 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.recovery.models import RecoveryProgress
+from modules.recovery.entities import RecoveryProgress
 from modules.disk.entities import CachedDeepScan
-from modules.disk.service import DiskDiscoveryService
+from modules.disk.service import DiskService
+from modules.deep_scan.service import DeepScanService
+from modules.validation.service import ValidationService
 from modules.disk.entities import NTFSVolume
-from domain.recovery_catalog import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalog
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.deep_scan.entities import CarvingCheckpoint
 from presentation.controller import RecoveryCommandHandler
@@ -134,12 +136,23 @@ class FakeRepository:
         return checkpoint
 
 
+def make_command_handler(inventory, catalog_service, workflow, repository):
+    disk_service = DiskService(inventory, repository)
+    return RecoveryCommandHandler(
+        disk_service,
+        DeepScanService(inventory, disk_service, repository, repository),
+        ValidationService(inventory, disk_service, repository),
+        catalog_service,
+        catalog_service,
+        workflow,
+    )
+
+
 def make_handler(inventory=None, workflow=None, repository=None):
     workflow = workflow or FakeWorkflow()
-    return RecoveryCommandHandler(
-        DiskDiscoveryService(inventory or FakeInventory(), repository or FakeRepository()),
-        FakeCatalogService(workflow),
-        workflow,
+    return make_command_handler(
+        inventory or FakeInventory(), FakeCatalogService(workflow),
+        workflow, repository or FakeRepository(),
     )
 
 
@@ -223,9 +236,7 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
     def test_orphan_scan_flag_is_forwarded_and_reported_in_catalog_progress(self):
         workflow = FakeWorkflow()
         catalog_service = FakeCatalogService(workflow)
-        handler = RecoveryCommandHandler(
-            DiskDiscoveryService(FakeInventory(), FakeRepository()), catalog_service, workflow,
-        )
+        handler = make_command_handler(FakeInventory(), catalog_service, workflow, FakeRepository())
         handler.session.volumes["1:4096"] = make_volume()
         events = []
 
@@ -297,9 +308,8 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
             "b" * 64, 0, 8192, inventory.list_disks()[0].size_bytes, 512, "profile-v1",
         )
         repository.save_carving_checkpoint(inventory.list_disks()[0], volume, checkpoint)
-        handler = RecoveryCommandHandler(
-            DiskDiscoveryService(inventory, repository),
-            OrderedCatalogService(workflow), workflow,
+        handler = make_command_handler(
+            inventory, OrderedCatalogService(workflow), workflow, repository,
         )
         handler.session.volumes["1:4096"] = volume
         events = []
@@ -372,9 +382,8 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
                 raise OSError("Simulated carving interruption")
 
         workflow = FakeWorkflow()
-        handler = RecoveryCommandHandler(
-            DiskDiscoveryService(AuditedInventory([volume]), repository),
-            InterruptingCatalogService(workflow), workflow,
+        handler = make_command_handler(
+            AuditedInventory([volume]), InterruptingCatalogService(workflow), workflow, repository,
         )
         handler.session.volumes["1:4096"] = volume
 

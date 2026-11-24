@@ -8,8 +8,16 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from infrastructure.disk.inventory import DiskInventory
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
+from infrastructure.catalog.builder import CatalogBuilder
+from infrastructure.disk.factory import disk_reader_factory
+from infrastructure.disk.output_safety import OutputSafetyGuard
+from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
+from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
+from infrastructure.recovery.extractor import Extractor
 from modules.catalog.service import CatalogService
-from modules.disk.service import DiskDiscoveryService
+from modules.disk.service import DiskService
+from modules.deep_scan.service import DeepScanService
+from modules.validation.service import ValidationService
 from modules.recovery.service import RecoveryWorkflow
 from presentation.controller import RecoveryCommandHandler
 from presentation.transport import serve
@@ -39,14 +47,21 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
         cache_path = cache_path_for_data_directory()
     elif os.path.isdir(cache_path):
         cache_path = os.path.join(cache_path, "deep_scan_cache.json")
-    discovery = DiskDiscoveryService(
-        inventory=inventory if inventory is not None else DiskInventory(),
-        scan_repository=(scan_repository if scan_repository is not None else JsonDeepScanRepository(cache_path)),
-    )
+    disk_inventory = inventory if inventory is not None else DiskInventory()
+    repository = scan_repository if scan_repository is not None else JsonDeepScanRepository(cache_path)
+    disk_service = DiskService(disk_inventory, repository)
+    deep_scan_service = DeepScanService(disk_inventory, disk_service, repository, repository)
+    validation_service = ValidationService(disk_inventory, disk_service, repository)
     return RecoveryCommandHandler(
-        discovery,
+        disk_service,
+        deep_scan_service,
+        validation_service,
+        CatalogBuilder(),
         CatalogService(),
-        workflow if workflow is not None else RecoveryWorkflow(),
+        workflow if workflow is not None else RecoveryWorkflow(
+            disk_reader_factory(), OutputSafetyGuard(), NTFSFileContentReader,
+            FileSignatureValidator, Extractor,
+        ),
     )
 
 

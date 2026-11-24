@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.catalog.mapper import CatalogMapper
-from modules.disk.dto import DiskDiscoveryMapper
+from modules.catalog.dto import CatalogMapper
+from modules.disk.dto import DiskDtoMapper
 
 
 class ModuleMapperTests(unittest.TestCase):
@@ -51,7 +51,7 @@ class ModuleMapperTests(unittest.TestCase):
         )
         registered = []
 
-        result = DiskDiscoveryMapper.disk(discovered, lambda item: registered.append(item) or "2:4096").to_dict()
+        result = DiskDtoMapper.disk(discovered, lambda item: registered.append(item) or "2:4096").to_dict()
 
         self.assertEqual(registered, [volume])
         self.assertEqual(result["cachedPartitions"][0]["id"], "2:4096")

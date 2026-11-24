@@ -1,6 +1,8 @@
 import zlib
 import zipfile
 
+from modules.catalog.entities import SUPPORTED_CATALOG_EXTENSIONS
+
 
 class FileSignatureValidator:
     ZIP_SIGNATURE = b"PK\x03\x04"
@@ -29,7 +31,7 @@ class FileSignatureValidator:
 
     @classmethod
     def supported_extensions(cls):
-        return tuple(sorted(cls.SIGNATURES))
+        return SUPPORTED_CATALOG_EXTENSIONS
 
     @classmethod
     def header_window(cls, extension):

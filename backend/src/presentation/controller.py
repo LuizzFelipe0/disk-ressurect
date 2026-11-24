@@ -1,10 +1,13 @@
 from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
-from modules.catalog.mapper import CatalogMapper
+from modules.catalog.dto import CatalogMapper
 from application.session import RecoverySession
 from application.workflows.catalog_scan import CatalogScanWorkflow
-from modules.disk.dto import DiskValidationRequestDto, PartitionScanRequestDto
-from modules.disk.dto import DiskDiscoveryMapper
-from modules.disk.service import DiskDiscoveryService
+from modules.disk.dto import DiskDtoMapper
+from modules.deep_scan.dto import PartitionScanRequestDto
+from modules.deep_scan.service import DeepScanService
+from modules.disk.service import DiskService
+from modules.validation.dto import DiskValidationRequestDto
+from modules.validation.service import ValidationService
 from modules.recovery.dto import RecoveryRequestDto, RecoveryResultDto
 from presentation.transport import (
     CommandErrorDto,
@@ -17,15 +20,23 @@ from presentation.transport import (
 class RecoveryCommandHandler:
     """Validate commands, invoke feature services and map stable response DTOs."""
 
-    def __init__(self, disk_discovery: DiskDiscoveryService, catalog_service, recovery_service, session=None):
-        self.disk_discovery = disk_discovery
+    def __init__(
+        self, disk_service: DiskService, deep_scan_service: DeepScanService,
+        validation_service: ValidationService, catalog_builder, catalog_service,
+        recovery_service, session=None,
+    ):
+        self.disk_service = disk_service
+        self.deep_scan_service = deep_scan_service
+        self.validation_service = validation_service
+        self.catalog_builder = catalog_builder
         self.catalog_service = catalog_service
         self.recovery_service = recovery_service
         self.session = session if session is not None else RecoverySession()
         self.catalog_scan_workflow = CatalogScanWorkflow(
-            disk_discovery,
-            catalog_service,
-            self._validation_summary_from_report,
+            disk_service,
+            deep_scan_service,
+            validation_service,
+            catalog_builder,
         )
 
     def handle(self, message, emit):
@@ -40,20 +51,20 @@ class RecoveryCommandHandler:
     def dispatch(self, operation, payload, emit):
         if operation == "list_disks":
             result = []
-            for item in self.disk_discovery.list_disks():
-                dto = DiskDiscoveryMapper.disk(item, self.session.register_volume)
+            for item in self.disk_service.list_disks():
+                dto = DiskDtoMapper.disk(item, self.session.register_volume)
                 result.append(dto.to_dict())
             return result
         if operation == "list_partitions":
             request = PartitionScanRequestDto.from_payload(payload)
-            volumes, scanned_at = self.disk_discovery.scan_partitions(
+            volumes, scanned_at = self.deep_scan_service.scan_partitions(
                 request.disk_number,
                 request.deep_scan,
                 self._inventory_progress(emit),
                 resume=request.resume,
             )
             return [
-                DiskDiscoveryMapper.partition(
+                DiskDtoMapper.partition(
                     volume,
                     self.session.register_volume(volume),
                     scanned_at,
@@ -62,11 +73,11 @@ class RecoveryCommandHandler:
             ]
         if operation == "validate_disk":
             request = DiskValidationRequestDto.from_payload(payload)
-            report = self.disk_discovery.validate_disk(
+            report = self.validation_service.validate_disk(
                 request.disk_number,
                 self._validation_progress(emit),
             )
-            return DiskDiscoveryMapper.validation(report).to_dict()
+            return self.validation_service.to_dto(report).to_dict()
         if operation == "scan_catalog":
             return self._scan_catalog(payload, emit)
         if operation == "search_catalog":
@@ -177,51 +188,3 @@ class RecoveryCommandHandler:
                 phase_messages.get(phase, "Building the recovery catalog…"),
             ).to_dict())
         return report
-
-    @staticmethod
-    def _validation_summary_from_report(report):
-        return RecoveryCommandHandler._validation_summary(
-            DiskDiscoveryMapper.validation(report).to_dict(),
-        )
-
-    @staticmethod
-    def _validation_summary(report):
-        ntfs_checks = report.get("ntfsChecks", [])
-        return {
-            "coverageStatus": report["coverageStatus"],
-            "evidenceFreshness": report.get("evidenceFreshness", "fresh"),
-            "evidenceScannedAt": report.get("evidenceScannedAt"),
-            "assessment": report["assessment"],
-            "bytesRead": report["bytesRead"],
-            "sizeBytes": report["sizeBytes"],
-            "readErrorCount": len(report.get("readErrors", [])),
-            "partitionCount": len(report.get("partitions", [])),
-            "ntfsVolumeCount": len(ntfs_checks),
-            "deletedMftRecordCount": sum(
-                int(item.get("mftRecords", {}).get("deleted", 0)) for item in ntfs_checks
-            ),
-            "orphanedFileRecordCount": sum(
-                int(item.get("orphanedFileRecordCount", 0)) for item in ntfs_checks
-            ),
-            "inconsistentMftRecordCount": sum(
-                int(item.get("mftRecords", {}).get("metadataInconsistent", 0))
-                for item in ntfs_checks
-            ),
-            "orphanRecordsByAllocationStatus": RecoveryCommandHandler._orphan_record_allocation_counts(
-                ntfs_checks,
-            ),
-            "unsupportedFilesystems": list(report.get("unsupportedFilesystems", [])),
-        }
-
-    @staticmethod
-    def _orphan_record_allocation_counts(ntfs_checks):
-        counts = {"free": 0, "allocated": 0, "mixed": 0, "unknown": 0}
-        for check in ntfs_checks:
-            evidence = check.get("bitmapAllocation", {}).get("orphanDataAllocation", [])
-            for item in evidence:
-                status = item.get("status")
-                if status in ("partially_observed", "unavailable", "no_non_sparse_runs"):
-                    counts["unknown"] += 1
-                elif status in counts:
-                    counts[status] += 1
-        return counts

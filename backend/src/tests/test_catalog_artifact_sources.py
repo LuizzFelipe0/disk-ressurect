@@ -8,8 +8,8 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
-from modules.catalog.mapper import CatalogMapper
-from modules.catalog.service import CatalogService
+from modules.catalog.dto import CatalogMapper
+from infrastructure.catalog.builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.filesystems.ntfs.mft.parser import NTFSDataStream
 from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
@@ -131,17 +131,17 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
         FakeTreeBuilder.nodes = nodes
         FakeTreeBuilder.root_nodes = roots
         patches = [
-            patch("modules.catalog.service.TreeBuilder", FakeTreeBuilder),
-            patch("modules.catalog.service.GhostMFTCarver"),
-            patch("modules.recovery.extractor.Extractor.supported_extensions",
+            patch("infrastructure.catalog.builder.TreeBuilder", FakeTreeBuilder),
+            patch("infrastructure.catalog.builder.GhostMFTCarver"),
+            patch("infrastructure.recovery.extractor.Extractor.supported_extensions",
                   return_value=(".jpg",)),
         ]
         if reader_factory is not None:
-            patches.append(patch("modules.catalog.service.NTFSFileContentReader", reader_factory))
+            patches.append(patch("infrastructure.catalog.builder.NTFSFileContentReader", reader_factory))
         for active in patches:
             active.start()
             self.addCleanup(active.stop)
-        snapshot = CatalogService(lambda _number: disk).build(
+        snapshot = CatalogBuilder(lambda _number: disk).build(
             self.volume,
             include_orphaned=True,
             precomputed_orphans={},

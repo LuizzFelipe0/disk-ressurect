@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.disk.entities import NTFSVolume, PhysicalDisk
-from modules.deep_scan.entities import ScanCheckpoint
+from modules.disk.entities import ScanCheckpoint
 from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
 from unittest.mock import patch
 

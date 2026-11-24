@@ -15,7 +15,7 @@ class BackendCachePathTests(unittest.TestCase):
             handler = create_handler(cache_path=directory)
 
         self.assertEqual(
-            os.path.basename(handler.disk_discovery.scan_repository.path),
+            os.path.basename(handler.disk_service.scan_repository.path),
             "deep_scan_cache.json",
         )
 

@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from infrastructure.carving.content_carver import RawContentCarver
 from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
 from infrastructure.carving.validators.additional import COMPOUND_FILE_SIGNATURE
-from modules.recovery.extractor import Extractor
+from infrastructure.recovery.extractor import Extractor
 
 
 def jpeg(payload=b"entropy-data"):

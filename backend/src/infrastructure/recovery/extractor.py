@@ -1,9 +1,9 @@
 import os
-from typing import Callable, Iterable
+from typing import Iterable
 
-from modules.recovery.planner import RecoveryPlanner
-from modules.recovery.models import ExtractionResult
-from domain.recovery_catalog import RecoveryCatalog
+from modules.catalog.entities import RecoveryCatalog
+from modules.recovery.service import RecoveryPlanner
+from modules.recovery.entities import ExtractionResult
 from infrastructure.filesystems.ntfs.readers.file_content_reader import FileContentError, NTFSFileContentReader
 from infrastructure.filesystems.ntfs.readers.file_signature_validator import FileSignatureValidator
 from infrastructure.filesystem.recovery_output_writer import RecoveryOutputWriter, UnsafeRecoveryPath

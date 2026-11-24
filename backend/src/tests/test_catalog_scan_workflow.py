@@ -73,6 +73,9 @@ class RecordingDiscovery:
         args[1](4, 8, "audit progress")
         return self.report
 
+    def summary(self, report):
+        return {"coverageStatus": "complete"}
+
     def get_disk(self, disk_number):
         self.events.append("get_disk")
         self.assert_disk_number = disk_number
@@ -124,9 +127,7 @@ class CatalogScanWorkflowTests(unittest.TestCase):
                 return snapshot
 
         workflow = CatalogScanWorkflow(
-            self.discovery,
-            CatalogService(),
-            lambda _report: {"coverageStatus": "complete"},
+            self.discovery, self.discovery, self.discovery, CatalogService(),
         )
         result = workflow.run(
             self.volume,
@@ -162,9 +163,7 @@ class CatalogScanWorkflowTests(unittest.TestCase):
                 raise failure
 
         workflow = CatalogScanWorkflow(
-            self.discovery,
-            FailingCatalogService(),
-            lambda _report: {"coverageStatus": "complete"},
+            self.discovery, self.discovery, self.discovery, FailingCatalogService(),
         )
         with self.assertRaisesRegex(OSError, "catalog interrupted") as raised:
             workflow.run(
@@ -198,9 +197,7 @@ class CatalogScanWorkflowTests(unittest.TestCase):
 
         discovery = FailingDiscovery(self.events, self.report)
         result = CatalogScanWorkflow(
-            discovery,
-            PlainCatalogService(),
-            lambda _report: {"coverageStatus": "complete"},
+            discovery, discovery, discovery, PlainCatalogService(),
         ).run(
             self.volume,
             include_orphaned=True,

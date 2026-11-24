@@ -1,6 +1,12 @@
 from dataclasses import dataclass
 
-from modules.deep_scan.entities import ScanCheckpoint
+
+@dataclass(frozen=True)
+class ScanCheckpoint:
+    range_index: int
+    next_offset: int
+    disk_size: int
+    bytes_per_sector: int
 
 
 @dataclass(frozen=True)

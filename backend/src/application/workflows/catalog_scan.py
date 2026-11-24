@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from modules.catalog.models import RecoveryCatalogSnapshot
+from modules.catalog.entities import RecoveryCatalogSnapshot
 
 
 @dataclass(frozen=True)
@@ -16,10 +16,11 @@ class CatalogScanWorkflow:
 
     CHECKPOINT_INTERVAL_BYTES = 256 * 1024 * 1024
 
-    def __init__(self, disk_discovery, catalog_service, validation_summary_mapper):
-        self.disk_discovery = disk_discovery
-        self.catalog_service = catalog_service
-        self.validation_summary_mapper = validation_summary_mapper
+    def __init__(self, disk_service, deep_scan_service, validation_service, catalog_builder):
+        self.disk_service = disk_service
+        self.deep_scan_service = deep_scan_service
+        self.validation_service = validation_service
+        self.catalog_builder = catalog_builder
 
     def run(
         self,
@@ -49,7 +50,7 @@ class CatalogScanWorkflow:
                 validation_options = {}
                 if force_fresh_validation:
                     validation_options["force_fresh"] = True
-                report = self.disk_discovery.validate_disk(
+                report = self.validation_service.validate_disk(
                     volume.disk_number,
                     validation_progress_callback,
                     retain_orphans_for_offset=int(volume.partition_offset),
@@ -59,7 +60,7 @@ class CatalogScanWorkflow:
                     ),
                     **validation_options,
                 )
-                validation_summary = self.validation_summary_mapper(report)
+                validation_summary = self.validation_service.summary(report)
                 partition_offset = int(volume.partition_offset)
                 precomputed_orphans = report.get("orphan_records_by_partition", {}).get(
                     partition_offset,
@@ -80,8 +81,8 @@ class CatalogScanWorkflow:
                 validation_summary = self._unavailable_validation_summary(exc)
 
         if include_orphaned and precomputed_carving_ranges is not None:
-            carving_source_disk = self.disk_discovery.get_disk(volume.disk_number)
-            carving_checkpoint = self.disk_discovery.load_carving_checkpoint(
+            carving_source_disk = self.disk_service.get_disk(volume.disk_number)
+            carving_checkpoint = self.deep_scan_service.load_carving_checkpoint(
                 carving_source_disk, volume,
             )
             latest_carving_checkpoint = carving_checkpoint
@@ -93,13 +94,13 @@ class CatalogScanWorkflow:
                 nonlocal latest_carving_checkpoint, last_persisted_bytes
                 latest_carving_checkpoint = checkpoint
                 if checkpoint is None:
-                    self.disk_discovery.save_carving_checkpoint(
+                    self.deep_scan_service.save_carving_checkpoint(
                         carving_source_disk, volume, None,
                     )
                     last_persisted_bytes = 0
                 elif (force or checkpoint.bytes_scanned - last_persisted_bytes
                       >= self.CHECKPOINT_INTERVAL_BYTES):
-                    self.disk_discovery.save_carving_checkpoint(
+                    self.deep_scan_service.save_carving_checkpoint(
                         carving_source_disk, volume, checkpoint,
                     )
                     last_persisted_bytes = checkpoint.bytes_scanned
@@ -108,7 +109,7 @@ class CatalogScanWorkflow:
 
         try:
             if include_orphaned:
-                snapshot = self.catalog_service.build(
+                snapshot = self.catalog_builder.build(
                     volume,
                     progress_callback,
                     include_orphaned=True,
@@ -123,7 +124,7 @@ class CatalogScanWorkflow:
                     phase_callback=phase_callback,
                 )
             else:
-                snapshot = self.catalog_service.build(
+                snapshot = self.catalog_builder.build(
                     volume,
                     progress_callback,
                     phase_callback=phase_callback,

@@ -10,9 +10,9 @@ from modules.disk.entities import NTFSVolume
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExtentResolver
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
-from modules.catalog.service import CatalogService
-from modules.catalog.mapper import CatalogMapper
-from modules.recovery.service import RecoveryWorkflow
+from infrastructure.catalog.builder import CatalogBuilder
+from modules.catalog.dto import CatalogMapper
+from helpers import make_recovery_workflow
 
 
 def resident_attribute(attribute_type, content, attribute_id):
@@ -220,7 +220,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
             3, 1, 4096, 8192, 512, 4, 1024, 4096, 2048, ((4096, 2, 42),),
         )
 
-        snapshot = CatalogService(
+        snapshot = CatalogBuilder(
             lambda _disk_number: FakeDisk(disk_image),
         ).build(volume)
 
@@ -240,7 +240,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
                 return None
 
         with tempfile.TemporaryDirectory() as output_directory:
-            result = RecoveryWorkflow(
+            result = make_recovery_workflow(
                 disk_factory=lambda _disk_number: FakeDisk(disk_image),
                 output_guard=SafeDestination(),
             ).extract_selection(
@@ -263,7 +263,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
             3, 1, 4096, 8192, 512, 4, 1024, 4096, 2048, ((4096, 2, 42),),
         )
 
-        snapshot = CatalogService(
+        snapshot = CatalogBuilder(
             lambda _disk_number: FakeDisk(disk_image),
         ).build(volume)
 
@@ -286,7 +286,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
                 return None
 
         with tempfile.TemporaryDirectory() as output_directory:
-            result = RecoveryWorkflow(
+            result = make_recovery_workflow(
                 disk_factory=lambda _disk_number: FakeDisk(disk_image),
                 output_guard=SafeDestination(),
             ).extract_selection(

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class ExtractionResult:
     """Outcome for one file, shared by recovery services and reports."""

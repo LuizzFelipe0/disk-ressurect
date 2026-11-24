@@ -7,9 +7,9 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
-from modules.catalog.content_validation import CatalogContentValidator
-from modules.catalog.service import CatalogService
-from modules.recovery.service import RecoveryWorkflow
+from infrastructure.catalog.builder import CatalogContentValidator
+from infrastructure.catalog.builder import CatalogBuilder
+from helpers import make_recovery_workflow
 from types import SimpleNamespace
 
 
@@ -45,7 +45,7 @@ class CatalogServiceTests(unittest.TestCase):
             return disk
 
         volume = NTFSVolume(3, 1, 0, 8192, 512, 4096, 1024, 0, 0, ())
-        snapshot = CatalogService(disk_factory).build(volume)
+        snapshot = CatalogBuilder(disk_factory).build(volume)
 
         self.assertEqual(snapshot.volume, volume)
         self.assertEqual(snapshot.catalog.nodes, {})
@@ -87,7 +87,7 @@ class CatalogServiceTests(unittest.TestCase):
                 status = "signature_mismatch" if record is bad else "unavailable"
                 return SimpleNamespace(status=status, reason=status)
 
-        remaining = CatalogService._validate_orphan_content(
+        remaining = CatalogBuilder._validate_orphan_content(
             {-1: bad, -2: uncertain}, Validator(),
         )
 
@@ -104,8 +104,8 @@ class CatalogServiceTests(unittest.TestCase):
             opened.append(disk)
             return disk
 
-        with patch("modules.catalog.service.GhostMFTCarver") as carver_type:
-            snapshot = CatalogService(disk_factory).build(volume, include_orphaned=True)
+        with patch("infrastructure.catalog.builder.GhostMFTCarver") as carver_type:
+            snapshot = CatalogBuilder(disk_factory).build(volume, include_orphaned=True)
 
         carver_type.assert_called_once_with(opened[0])
         carver_type.return_value.hunt.assert_called_once()
@@ -126,9 +126,9 @@ class CatalogServiceTests(unittest.TestCase):
             opened.append(disk)
             return disk
 
-        with patch("modules.recovery.extractor.Extractor.supported_extensions", return_value=(".jpg",)):
-            with patch("modules.catalog.service.GhostMFTCarver") as carver_type:
-                snapshot = CatalogService(disk_factory).build(
+        with patch("infrastructure.recovery.extractor.Extractor.supported_extensions", return_value=(".jpg",)):
+            with patch("infrastructure.catalog.builder.GhostMFTCarver") as carver_type:
+                snapshot = CatalogBuilder(disk_factory).build(
                     volume,
                     include_orphaned=True,
                     precomputed_orphans={-101: orphan},
@@ -145,7 +145,7 @@ class CatalogServiceTests(unittest.TestCase):
         candidate = jpeg()
         disk.data[4096:4096 + len(candidate)] = candidate
 
-        snapshot = CatalogService(lambda _number: disk).build(
+        snapshot = CatalogBuilder(lambda _number: disk).build(
             volume,
             include_orphaned=True,
             precomputed_orphans={},
@@ -171,7 +171,7 @@ class CatalogServiceTests(unittest.TestCase):
             def validate(self, *_args):
                 return []
 
-        recovery = RecoveryWorkflow(
+        recovery = make_recovery_workflow(
             disk_factory=lambda _number: FakeDisk(3),
             output_guard=OutputGuard(),
         )
@@ -198,7 +198,7 @@ class CatalogServiceTests(unittest.TestCase):
             max_candidate_read_mib_per_format=1024,
         )
 
-        snapshot = CatalogService(lambda _number: disk).build(
+        snapshot = CatalogBuilder(lambda _number: disk).build(
             volume,
             include_orphaned=True,
             precomputed_orphans={},
@@ -220,7 +220,7 @@ class CatalogServiceTests(unittest.TestCase):
         disk = FakeDisk(3)
         saved_checkpoints = []
 
-        snapshot = CatalogService(lambda _number: disk).build(
+        snapshot = CatalogBuilder(lambda _number: disk).build(
             volume,
             include_orphaned=True,
             precomputed_orphans={},
@@ -242,7 +242,7 @@ class CatalogServiceTests(unittest.TestCase):
         uncertain_candidate = jpeg(b"uncertain-data")
         disk.data[8192:8192 + len(uncertain_candidate)] = uncertain_candidate
 
-        snapshot = CatalogService(lambda _number: disk).build(
+        snapshot = CatalogBuilder(lambda _number: disk).build(
             volume,
             include_orphaned=True,
             precomputed_orphans={},

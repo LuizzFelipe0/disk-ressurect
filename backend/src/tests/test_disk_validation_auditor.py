@@ -11,9 +11,11 @@ from modules.disk.entities import NTFSVolume, PhysicalDisk
 from infrastructure.validation.disk_auditor import DiskReadCoverage, DiskValidationAuditor
 from infrastructure.disk.inventory import DiskInventory
 from presentation.controller import RecoveryCommandHandler
-from modules.disk.dto import DiskDto, DiskValidationRequestDto
-from modules.disk.dto import DiskDiscoveryMapper
-from modules.disk.service import DiskDiscoveryService
+from modules.disk.dto import DiskDto
+from modules.validation.dto import DiskValidationDto, DiskValidationRequestDto
+from modules.disk.service import DiskService
+from modules.validation.service import ValidationService
+from modules.deep_scan.service import DeepScanService
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence, FreeClusterRangeCollector
@@ -297,8 +299,8 @@ class DiskValidationAuditorTests(unittest.TestCase):
             "filesystem_signatures": (),
         }
 
-        validation = DiskDiscoveryMapper.validation(report).to_dict()
-        summary = RecoveryCommandHandler._validation_summary(validation)
+        validation = DiskValidationDto.from_report(report).to_dict()
+        summary = ValidationService.summary(report)
 
         self.assertEqual(validation["assessment"], "inconclusive")
         self.assertEqual(summary["inconsistentMftRecordCount"], 1)
@@ -314,9 +316,9 @@ class DiskValidationAuditorTests(unittest.TestCase):
 
         auditor = DiskValidationAuditor(FakeEnumerator([disk_info]), disk_factory, chunk_size=1024)
         report = auditor.validate(2)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
-        self.assertTrue(issubclass(type(DiskDiscoveryMapper.validation(report)), DiskDto))
+        self.assertTrue(issubclass(type(DiskValidationDto.from_report(report)), DiskDto))
         self.assertEqual(dto["serialNumber"], "serial-2")
         self.assertEqual(dto["sizeBytes"], 4096)
         self.assertEqual(dto["coverageStatus"], "complete")
@@ -335,17 +337,16 @@ class DiskValidationAuditorTests(unittest.TestCase):
             opened.append(disk)
             return disk
 
-        service = DiskDiscoveryService(
-            DiskInventory(FakeEnumerator([disk_info]), disk_factory),
-            JsonDeepScanRepository(),
-        )
+        inventory = DiskInventory(FakeEnumerator([disk_info]), disk_factory)
+        repository = JsonDeepScanRepository()
+        service = ValidationService(inventory, DiskService(inventory, repository), repository)
         first = service.validate_disk(0)
         first_read_count = len(opened[-1].reads)
         second = service.validate_disk(0)
         second_read_count = len(opened[-1].reads)
         forced = service.validate_disk(0, force_fresh=True)
         forced_read_count = len(opened[-1].reads)
-        dto = DiskDiscoveryMapper.validation(second).to_dict()
+        dto = DiskValidationDto.from_report(second).to_dict()
 
         self.assertFalse(first["validation_snapshot_used"])
         self.assertTrue(second["validation_snapshot_used"])
@@ -367,10 +368,9 @@ class DiskValidationAuditorTests(unittest.TestCase):
             opened.append(disk)
             return disk
 
-        service = DiskDiscoveryService(
-            DiskInventory(FakeEnumerator([disk_info]), disk_factory),
-            JsonDeepScanRepository(),
-        )
+        inventory = DiskInventory(FakeEnumerator([disk_info]), disk_factory)
+        repository = JsonDeepScanRepository()
+        service = ValidationService(inventory, DiskService(inventory, repository), repository)
         service.validate_disk(0)
         changed = bytearray(4096)
         changed[510:512] = b"\x55\xAA"
@@ -438,7 +438,7 @@ class DiskValidationAuditorTests(unittest.TestCase):
         report = DiskValidationAuditor(
             FakeEnumerator([disk_info]), disk_factory, chunk_size=1024,
         ).validate(0)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
         self.assertEqual(dto["coverageStatus"], "incomplete")
         self.assertEqual(dto["assessment"], "inconclusive")
@@ -524,7 +524,7 @@ class DiskValidationAuditorTests(unittest.TestCase):
             FakeEnumerator([disk_info]), lambda _number: fake_disk, chunk_size=64 * 1024,
         ).validate(0, lambda completed, total, message: progress.append(message),
             retain_orphans_for_offset=start, orphan_scan_volume=selected_volume)
-        dto = DiskDiscoveryMapper.validation(report).to_dict()
+        dto = DiskValidationDto.from_report(report).to_dict()
 
         self.assertEqual(len(dto["ntfsChecks"]), 1)
         check = dto["ntfsChecks"][0]
@@ -561,8 +561,16 @@ class DiskValidationAuditorTests(unittest.TestCase):
                     chunk_size=1024,
                 ).validate(disk_number)
 
+        repository = FakeRepository()
+        inventory = Inventory()
+        disk_service = DiskService(inventory, repository)
         handler = RecoveryCommandHandler(
-            DiskDiscoveryService(Inventory(), FakeRepository()), None, None,
+            disk_service,
+            DeepScanService(inventory, disk_service, repository, repository),
+            ValidationService(inventory, disk_service, repository),
+            None,
+            None,
+            None,
         )
         events = []
 

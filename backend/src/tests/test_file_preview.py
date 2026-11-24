@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from modules.recovery.service import RecoveryWorkflow
+from helpers import make_recovery_workflow
 
 
 class FakeDisk:
@@ -25,7 +25,7 @@ def make_node(name, payload, is_directory=False):
 class FilePreviewTests(unittest.TestCase):
     def setUp(self):
         self.disks = []
-        self.workflow = RecoveryWorkflow(disk_factory=self.open_disk)
+        self.workflow = make_recovery_workflow(disk_factory=self.open_disk)
         self.snapshot = SimpleNamespace(volume=SimpleNamespace(disk_number=3), volume_start=0, cluster_size=4096)
 
     def open_disk(self, number):

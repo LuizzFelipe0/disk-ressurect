@@ -4,14 +4,6 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class ScanCheckpoint:
-    range_index: int
-    next_offset: int
-    disk_size: int
-    bytes_per_sector: int
-
-
-@dataclass(frozen=True)
 class CarvedCandidateReference:
     """Identity of one previously validated candidate, without its file bytes."""
 
