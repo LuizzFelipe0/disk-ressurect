@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from backend_orchestrator import cache_path_for_data_directory, create_handler
+from bootstrap import cache_path_for_data_directory, create_handler
 
 
 class BackendCachePathTests(unittest.TestCase):

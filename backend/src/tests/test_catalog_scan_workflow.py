@@ -6,7 +6,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from disk.deep_scan.carving_checkpoint import CarvingCheckpoint
-from modules.commands.catalog_scan_workflow import CatalogScanWorkflow
+from application.workflows.catalog_scan import CatalogScanWorkflow
 
 
 def make_report(partition_offset, size_bytes=4096):

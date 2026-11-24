@@ -13,7 +13,7 @@ for package in ("disk", "domain", "infrastructure", "modules", "ntfs"):
     hidden_imports.extend(collect_submodules(package))
 
 analysis = Analysis(
-    [str(source_root / "backend_orchestrator.py")],
+    [str(source_root / "bootstrap.py")],
     pathex=[str(source_root)],
     binaries=[],
     datas=[],

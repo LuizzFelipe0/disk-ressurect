@@ -33,7 +33,7 @@ class PythonBackend {
     this.projectRoot = app.isPackaged
       ? process.resourcesPath
       : path.resolve(__dirname, "../../..");
-    this.pythonScript = path.join(this.projectRoot, "backend", "src", "backend_orchestrator.py");
+    this.pythonScript = path.join(this.projectRoot, "backend", "src", "bootstrap.py");
     this.backendArguments = app.isPackaged ? [] : [this.pythonScript];
     const configuredPython = process.env.DISK_RESURRECT_PYTHON
       || process.argv.find((argument) => argument.startsWith("--disk-resurrect-python="))?.split("=").slice(1).join("=");

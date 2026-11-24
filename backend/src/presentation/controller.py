@@ -1,12 +1,17 @@
 from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
 from modules.catalog.mapper import CatalogMapper
-from modules.commands.dto import CommandErrorDto, CommandRequestDto, CommandResultDto, ProgressEventDto
-from modules.commands.catalog_scan_workflow import CatalogScanWorkflow
-from modules.commands.session import RecoverySession
+from application.session import RecoverySession
+from application.workflows.catalog_scan import CatalogScanWorkflow
 from modules.disk_discovery.dto import DiskValidationRequestDto, PartitionScanRequestDto
 from modules.disk_discovery.mapper import DiskDiscoveryMapper
 from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.dto import RecoveryRequestDto, RecoveryResultDto
+from presentation.transport import (
+    CommandErrorDto,
+    CommandRequestDto,
+    CommandResultDto,
+    ProgressEventDto,
+)
 
 
 class RecoveryCommandHandler:

@@ -1,4 +1,7 @@
 from dataclasses import dataclass
+import json
+import sys
+import threading
 from typing import Any
 
 
@@ -62,3 +65,36 @@ class ProgressEventDto:
                 "message": self.message,
             },
         }
+
+
+def serve(handler):
+    """Adapt stdin/stdout JSON Lines to the command controller."""
+    write_lock = threading.Lock()
+    operation_lock = threading.Lock()
+
+    def emit(message):
+        with write_lock:
+            sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+
+    emit({"type": "ready", "payload": {"message": "Python recovery service is ready"}})
+
+    for line in sys.stdin:
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError as exc:
+            emit({"id": None, "type": "error", "error": f"Invalid request: {exc}", "errorType": "ValueError"})
+            continue
+        if not operation_lock.acquire(blocking=False):
+            request_id = request.get("id") if isinstance(request, dict) else None
+            emit({"id": request_id, "type": "error", "error": "Another disk operation is already running",
+                "errorType": "BusyError"})
+            continue
+
+        def run(current_request=request):
+            try:
+                handler.handle(current_request, emit)
+            finally:
+                operation_lock.release()
+
+        threading.Thread(target=run, name="recovery-command", daemon=True).start()

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from disk.models import NTFSVolume, PhysicalDisk
 from disk.validation.auditor import DiskReadCoverage, DiskValidationAuditor
 from disk.inventory import DiskInventory
-from modules.commands.controller import RecoveryCommandHandler
+from presentation.controller import RecoveryCommandHandler
 from modules.disk_discovery.dto import DiskDto, DiskValidationRequestDto
 from modules.disk_discovery.mapper import DiskDiscoveryMapper
 from modules.disk_discovery.service import DiskDiscoveryService

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
 import os
 import sys
-import threading
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -11,9 +9,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from disk.inventory import DiskInventory
 from infrastructure.persistence.deep_scan_repository import JsonDeepScanRepository
 from modules.catalog.service import CatalogService
-from modules.commands.controller import RecoveryCommandHandler
 from modules.disk_discovery.service import DiskDiscoveryService
 from modules.recovery.service import RecoveryWorkflow
+from presentation.controller import RecoveryCommandHandler
+from presentation.transport import serve
 
 
 def cache_path_for_data_directory(data_directory=None):
@@ -52,36 +51,7 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
 
 
 def main():
-    handler = create_handler()
-    write_lock = threading.Lock()
-    operation_lock = threading.Lock()
-
-    def emit(message):
-        with write_lock:
-            sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
-
-    emit({"type": "ready", "payload": {"message": "Python recovery service is ready"}})
-
-    for line in sys.stdin:
-        try:
-            request = json.loads(line)
-        except json.JSONDecodeError as exc:
-            emit({"id": None, "type": "error", "error": f"Invalid request: {exc}", "errorType": "ValueError"})
-            continue
-        if not operation_lock.acquire(blocking=False):
-            request_id = request.get("id") if isinstance(request, dict) else None
-            emit({"id": request_id, "type": "error", "error": "Another disk operation is already running",
-                "errorType": "BusyError"})
-            continue
-
-        def run(current_request=request):
-            try:
-                handler.handle(current_request, emit)
-            finally:
-                operation_lock.release()
-
-        threading.Thread(target=run, name="recovery-command", daemon=True).start()
+    serve(create_handler())
 
 
 if __name__ == "__main__":
