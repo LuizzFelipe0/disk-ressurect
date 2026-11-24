@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from disk.deep_scan.content_carver import RawContentCarver
 from ntfs.file_signature_validator import FileSignatureValidator
+from disk.deep_scan.additional_format_validators import COMPOUND_FILE_SIGNATURE
+from modules.recovery.extractor import Extractor
 
 
 def jpeg(payload=b"entropy-data"):
@@ -62,6 +64,55 @@ def mp4():
             + box(b"mdat", b"media") + box(b"moov", b"metadata"))
 
 
+def compound_office(kind="word"):
+    free, eoc, fat_sector = 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
+    data = bytearray(512 * 19)
+    header = memoryview(data)[:512]
+    header[:8] = COMPOUND_FILE_SIGNATURE
+    header[24:26] = (0x003E).to_bytes(2, "little")
+    header[26:28] = (3).to_bytes(2, "little")
+    header[28:30] = b"\xfe\xff"
+    header[30:32] = (9).to_bytes(2, "little")
+    header[32:34] = (6).to_bytes(2, "little")
+    header[44:48] = (1).to_bytes(4, "little")
+    header[48:52] = (1).to_bytes(4, "little")
+    header[56:60] = (4096).to_bytes(4, "little")
+    header[60:64] = eoc.to_bytes(4, "little")
+    header[68:72] = eoc.to_bytes(4, "little")
+    header[76:80] = (0).to_bytes(4, "little")
+    for index in range(80, 512, 4):
+        header[index:index + 4] = free.to_bytes(4, "little")
+    fat = [free] * 128
+    fat[0] = fat_sector
+    fat[1] = eoc
+    for first in (2, 10):
+        for sector in range(first, first + 8):
+            fat[sector] = eoc if sector == first + 7 else sector + 1
+    data[512:1024] = b"".join(value.to_bytes(4, "little") for value in fat)
+
+    def entry(name, object_type, *, right=free, child=free, first_sector=eoc, size=0):
+        value = bytearray(128)
+        encoded = (name + "\0").encode("utf-16le")
+        value[:len(encoded)] = encoded
+        value[64:66] = len(encoded).to_bytes(2, "little")
+        value[66] = object_type
+        value[68:72] = free.to_bytes(4, "little")
+        value[72:76] = right.to_bytes(4, "little")
+        value[76:80] = child.to_bytes(4, "little")
+        value[116:120] = first_sector.to_bytes(4, "little")
+        value[120:128] = size.to_bytes(8, "little")
+        return value
+
+    main_name = "WordDocument" if kind == "word" else "Workbook"
+    entries = [entry("Root Entry", 5, child=1)]
+    entries.append(entry(main_name, 2, right=2 if kind == "word" else free,
+                         first_sector=2, size=4096))
+    if kind == "word":
+        entries.append(entry("0Table", 2, first_sector=10, size=4096))
+    data[1024:1536] = b"".join(entries).ljust(512, b"\0")
+    return bytes(data)
+
+
 class FakeDisk:
     def __init__(self, size=4096, *, short_reads=False):
         self.data = bytearray(size)
@@ -78,6 +129,19 @@ class FakeDisk:
 
 
 class RawContentCarverTests(unittest.TestCase):
+    def test_carver_output_extensions_are_supported_by_extractor_and_signature_validator(self):
+        carved_extensions = {
+            extension
+            for extensions in RawContentCarver.EXTENSIONS_BY_FAMILY.values()
+            for extension in extensions
+        }
+        extractor_extensions = set(Extractor.supported_extensions())
+        signature_extensions = set(FileSignatureValidator.supported_extensions())
+
+        self.assertEqual(extractor_extensions, signature_extensions)
+        self.assertTrue(carved_extensions)
+        self.assertLessEqual(carved_extensions, extractor_extensions)
+
     def test_finds_complete_jpeg_across_scan_chunk_boundary(self):
         disk = FakeDisk()
         candidate = jpeg()
@@ -195,6 +259,49 @@ class RawContentCarverTests(unittest.TestCase):
         stats = {item.extension: item for item in result.format_stats}
         self.assertEqual(stats[".mp4"].candidates_examined, 1)
         self.assertEqual(stats[".mp4"].files_found, 1)
+
+    def test_finds_rtf_across_scan_boundary_and_cfb_office_candidate(self):
+        fixtures = (
+            (b"{\\rtf1\\ansi\\deff0 Hello {there}.}", 510, ".rtf"),
+            (compound_office("word"), 509, ".doc"),
+            (compound_office("excel"), 127, ".xls"),
+        )
+        for candidate, offset, extension in fixtures:
+            with self.subTest(extension=extension):
+                disk = FakeDisk(size=20_480)
+                disk.data[offset:offset + len(candidate)] = candidate
+
+                result = RawContentCarver(disk, chunk_size=512).scan([(0, disk.size)])
+
+                self.assertEqual([(item.offset, item.extension, item.data) for item in result.files],
+                                 [(offset, extension, candidate)])
+                stats = {item.extension: item for item in result.format_stats}
+                family = ".rtf" if extension == ".rtf" else ".ole_cfb"
+                self.assertEqual(stats[family].candidates_examined, 1)
+                self.assertEqual(stats[family].files_found, 1)
+
+    def test_carved_rtf_doc_and_xls_pass_existing_recovery_signature_rules(self):
+        candidates = (
+            (b"{\\rtf1\\ansi Example}", ".rtf"),
+            (compound_office("word"), ".doc"),
+            (compound_office("excel"), ".xls"),
+        )
+        for candidate, extension in candidates:
+            with self.subTest(extension=extension), tempfile.TemporaryDirectory() as directory:
+                disk = FakeDisk(size=max(4096, len(candidate) + 512))
+                disk.data[128:128 + len(candidate)] = candidate
+                carved = RawContentCarver(disk).scan([(0, disk.size)]).files[0]
+                self.assertEqual(carved.extension, extension)
+
+                recovered_path = os.path.join(directory, "recovered" + extension)
+                with open(recovered_path, "wb") as output:
+                    output.write(carved.data)
+                header = carved.data[:FileSignatureValidator.header_window(extension)]
+                self.assertTrue(FileSignatureValidator.matches(extension, header))
+                self.assertEqual(
+                    FileSignatureValidator.validate_container(recovered_path, extension, header),
+                    "",
+                )
 
     def test_new_format_families_have_independent_candidate_read_budgets(self):
         disk = FakeDisk(size=4096)
