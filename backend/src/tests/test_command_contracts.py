@@ -53,11 +53,17 @@ class CommandContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "resume requires deepScan"):
             PartitionScanRequestDto.from_payload({"diskNumber": 1, "resume": True})
 
-    def test_catalog_request_keeps_legacy_default_and_validates_orphan_scan_flag(self):
+    def test_catalog_request_defaults_to_maximum_recovery_and_validates_flags(self):
         default_request = VolumeSelectionRequestDto.from_payload({"volumeId": "0:4096"})
-        self.assertFalse(default_request.include_orphaned)
-        self.assertEqual(default_request.carving_options, CarvingOptionsDto())
-        self.assertFalse(default_request.force_fresh_validation)
+        self.assertTrue(default_request.include_orphaned)
+        self.assertEqual(default_request.carving_options, CarvingOptionsDto(64, 16384, 512, 1024))
+        self.assertTrue(default_request.force_fresh_validation)
+        self.assertFalse(VolumeSelectionRequestDto.from_payload({
+            "volumeId": "0:4096", "includeOrphaned": False,
+        }).include_orphaned)
+        self.assertFalse(VolumeSelectionRequestDto.from_payload({
+            "volumeId": "0:4096", "forceFreshValidation": False,
+        }).force_fresh_validation)
         self.assertTrue(VolumeSelectionRequestDto.from_payload({
             "volumeId": "0:4096", "includeOrphaned": True,
         }).include_orphaned)
