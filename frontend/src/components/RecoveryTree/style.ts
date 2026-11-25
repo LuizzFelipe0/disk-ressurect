@@ -7,30 +7,45 @@ export const TreeIndent = styled.span`
   flex: 0 0 20px;
 `;
 
-export const TreeContainer = styled.ul`
-  flex: 1 1 auto;
+export const TreeViewport = styled.div`
+  position: relative;
+  flex: 1 1 0;
+  height: 0;
   min-height: 0;
+  max-height: min(60vh, 600px);
   overflow-y: auto;
   overflow-x: hidden;
-  padding: ${spacing[2]} 0;
+  padding: 0;
+  scrollbar-gutter: stable;
+`;
+
+export const TreeContainer = styled.ul<{ $height: number }>`
+  position: relative;
+  width: 100%;
+  height: ${({ $height }) => $height}px;
+  margin: 0;
+  padding: 0;
   color: ${brandColors.ink};
   font-family: ${typography.fontFamily};
   font-size: ${typography.sizeSm};
-
-  &, ul { list-style: none; }
+  list-style: none;
 `;
 
-export const TreeChildren = styled.ul`
-  margin-left: ${spacing[5]};
-  padding-left: ${spacing[2]};
-  border-left: 1px solid ${brandColors.border};
+export const TreeItem = styled.li`
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 36px;
+  list-style: none;
 `;
 
 export const TreeRow = styled.div`
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  min-height: 36px;
-  padding: ${spacing[1]} ${spacing[2]};
+  height: 36px;
+  padding: 4px ${spacing[2]};
   gap: ${spacing[2]};
   border-radius: ${spacing.radiusMd};
   transition: background-color .15s ease;
@@ -55,12 +70,12 @@ export const TreeName = styled.span`
 export const TreeMeta = styled.span`
   flex: 0 1 240px;
   min-width: 0;
-  overflow: visible;
+  overflow: hidden;
   text-align: right;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
   color: ${brandColors.textTertiary};
   font-size: ${typography.sizeXs};
-  white-space: normal;
+  white-space: nowrap;
 `;
 
 export const PreviewAction = styled.span`
@@ -90,7 +105,11 @@ export const ExpandButton = styled.button`
 `;
 
 export const TreeLoading = styled.div`
-  margin: 0 0 ${spacing[2]} 48px;
-  color: ${brandColors.textTertiary};
-  font-size: ${typography.sizeXs};
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
 `;

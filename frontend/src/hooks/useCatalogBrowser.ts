@@ -10,7 +10,7 @@ export function useCatalogBrowser(setError: (message: string) => void) {
   const [searchResult, setSearchResult] = useState<CatalogSearchResult | null>(null);
   const [searchingCatalog, setSearchingCatalog] = useState(false);
   const [childrenById, setChildrenById] = useState<Record<string, CatalogNode[]>>({});
-  const [parentById, setParentById] = useState<Map<string, string | null>>(new Map());
+  const parentById = useRef(new Map<string, string | null>());
   const [loadingFolderIds, setLoadingFolderIds] = useState<Set<string>>(new Set());
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const generation = useRef(0);
@@ -28,13 +28,14 @@ export function useCatalogBrowser(setError: (message: string) => void) {
     setSearchResult(null);
     setSearchingCatalog(false);
     setChildrenById({});
-    setParentById(new Map());
+    parentById.current.clear();
     setLoadingFolderIds(new Set());
     setExpandedFolderIds(new Set());
   }, []);
 
   const setRootParents = useCallback((roots: CatalogNode[]) => {
-    setParentById(new Map(roots.map((node) => [node.id, node.parentId ?? null])));
+    parentById.current.clear();
+    roots.forEach((node) => parentById.current.set(node.id, node.parentId ?? null));
   }, []);
 
   useEffect(() => {
@@ -52,17 +53,13 @@ export function useCatalogBrowser(setError: (message: string) => void) {
       void recoveryService.searchCatalog(query).then((result) => {
         if (searchRequestId.current !== requestId || generation.current !== catalogGeneration) return;
         setSearchResult(result);
-        setParentById((current) => {
-          const next = new Map(current);
-          result.results.forEach((node) => {
-            let parentId: string | null = null;
-            (node.ancestorIds ?? []).forEach((ancestorId) => {
-              next.set(ancestorId, parentId);
-              parentId = ancestorId;
-            });
-            next.set(node.id, node.parentId ?? parentId);
+        result.results.forEach((node) => {
+          let parentId: string | null = null;
+          (node.ancestorIds ?? []).forEach((ancestorId) => {
+            parentById.current.set(ancestorId, parentId);
+            parentId = ancestorId;
           });
-          return next;
+          parentById.current.set(node.id, node.parentId ?? parentId);
         });
       }).catch((cause: unknown) => {
         if (searchRequestId.current === requestId && generation.current === catalogGeneration) {
@@ -94,11 +91,7 @@ export function useCatalogBrowser(setError: (message: string) => void) {
       const children = await recoveryService.getChildren(node.id);
       if (generation.current !== catalogGeneration) return;
       setChildrenById((current) => ({ ...current, [node.id]: children }));
-      setParentById((current) => {
-        const next = new Map(current);
-        children.forEach((child) => next.set(child.id, node.id));
-        return next;
-      });
+      children.forEach((child) => parentById.current.set(child.id, node.id));
       setExpandedFolderIds((current) => new Set(current).add(node.id));
     } catch (cause) {
       if (generation.current === catalogGeneration) setError(cause instanceof Error ? cause.message : String(cause));
@@ -131,7 +124,7 @@ export function useCatalogBrowser(setError: (message: string) => void) {
   const getGeneration = useCallback(() => generation.current, []);
   return {
     catalog, setCatalog, preview, previewLoading, searchQuery, setSearchQuery,
-    searchResult, searchingCatalog, childrenById, parentById, loadingFolderIds,
+    searchResult, searchingCatalog, childrenById, parentById: parentById.current, loadingFolderIds,
     expandedFolderIds, setRootParents, clear, getGeneration, toggleFolder, previewFile,
   };
 }

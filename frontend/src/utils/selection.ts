@@ -3,12 +3,16 @@ export interface TreeSelection {
   excludedIds: Set<string>;
 }
 
+type DescendantSource =
+  | ReadonlyMap<string, readonly string[]>
+  | Readonly<Record<string, readonly { id: string }[]>>;
+
 export function updateTreeSelection(
   nodeId: string,
   checked: boolean,
   current: TreeSelection,
   parentIds: ReadonlyMap<string, string | null>,
-  descendantsById: ReadonlyMap<string, readonly string[]>,
+  descendantsById: DescendantSource,
 ): TreeSelection {
   const selectedIds = new Set(current.selectedIds);
   const excludedIds = new Set(current.excludedIds);
@@ -33,14 +37,27 @@ export function updateTreeSelection(
 
   selectedIds.delete(nodeId);
   excludedIds.delete(nodeId);
-  const pending = [...(descendantsById.get(nodeId) ?? [])];
+  const pending: string[] = [];
+  appendDescendantIds(nodeId, descendantsById, pending);
   while (pending.length) {
     const descendantId = pending.pop()!;
     selectedIds.delete(descendantId);
     excludedIds.delete(descendantId);
-    pending.push(...(descendantsById.get(descendantId) ?? []));
+    appendDescendantIds(descendantId, descendantsById, pending);
   }
   return { selectedIds, excludedIds };
+}
+
+function appendDescendantIds(nodeId: string, source: DescendantSource, pending: string[]) {
+  if (isDescendantMap(source)) {
+    pending.push(...(source.get(nodeId) ?? []));
+    return;
+  }
+  (source[nodeId] ?? []).forEach((child) => pending.push(child.id));
+}
+
+function isDescendantMap(source: DescendantSource): source is ReadonlyMap<string, readonly string[]> {
+  return typeof (source as ReadonlyMap<string, readonly string[]>).get === "function";
 }
 
 export function isTreeNodeSelected(

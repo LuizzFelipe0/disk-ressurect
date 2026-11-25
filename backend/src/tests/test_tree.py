@@ -8,6 +8,24 @@ from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode, Tre
 
 
 class TreeBuilderTests(unittest.TestCase):
+    def test_release_source_tree_breaks_mft_references_after_catalog_adaptation(self):
+        root = FileNode(SimpleNamespace(index=5, name="root", is_allocated=True, is_dir=True))
+        child = FileNode(SimpleNamespace(index=42, name="photo.jpg", is_allocated=False, is_dir=False))
+        root.children.append(child)
+        child.parent = root
+        builder = TreeBuilder(disk=None, fragments=[], base_offset=0)
+        builder.nodes = {5: root, 42: child}
+        builder.mft_records = {42: child.record}
+        builder.root_nodes = [root]
+
+        builder.release_source_tree()
+
+        self.assertEqual({}, builder.nodes)
+        self.assertEqual({}, builder.mft_records)
+        self.assertEqual([], builder.root_nodes)
+        self.assertIsNone(child.parent)
+        self.assertEqual([], root.children)
+
     def test_parent_sequence_mismatch_keeps_a_stale_reference_unlinked(self):
         parent = FileNode(SimpleNamespace(
             index=5, sequence_number=8, name="root", is_allocated=True, is_dir=True,

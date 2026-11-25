@@ -59,6 +59,48 @@ describe("RecoveryTree", () => {
     expect(onToggleSelection).toHaveBeenCalledWith(file.id, true);
   });
 
+  it("renders only the viewport and reaches loaded children when scrolled", () => {
+    const loadedFiles = Array.from({ length: 100 }, (_, index) => ({
+      ...file,
+      id: `file-${index}`,
+      name: `file-${index}.jpg`,
+      path: `Photos/file-${index}.jpg`,
+    }));
+    render(<RecoveryTree {...makeProps({
+      childrenById: { [folder.id]: loadedFiles },
+      expandedFolderIds: new Set([folder.id]),
+    })} />);
+
+    const viewport = screen.getByRole("tree");
+    expect(screen.getByRole("checkbox", { name: "Select file-0.jpg" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "Select file-99.jpg" })).toBeNull();
+    expect(screen.getAllByRole("treeitem").length).toBeLessThan(50);
+
+    Object.defineProperty(viewport, "scrollTop", { configurable: true, value: 3_000, writable: true });
+    fireEvent.scroll(viewport);
+
+    expect(screen.getByRole("checkbox", { name: "Select file-99.jpg" })).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").length).toBeLessThan(50);
+  });
+
+  it("keeps a large catalog virtualized while scrolling deep into the list", () => {
+    const roots = Array.from({ length: 100_000 }, (_, index) => ({
+      ...file,
+      id: `large-file-${index}`,
+      name: `large-file-${index}.jpg`,
+      path: `large-file-${index}.jpg`,
+    }));
+    render(<RecoveryTree {...makeProps({ roots })} />);
+    const viewport = screen.getByRole("tree");
+
+    expect(screen.getAllByRole("treeitem").length).toBeLessThan(50);
+    Object.defineProperty(viewport, "scrollTop", { configurable: true, value: 1_800_000, writable: true });
+    fireEvent.scroll(viewport);
+
+    expect(screen.getByRole("checkbox", { name: "Select large-file-50000.jpg" })).toBeTruthy();
+    expect(screen.getAllByRole("treeitem").length).toBeLessThan(50);
+  });
+
   it("opens an image preview without changing the recovery checkbox", () => {
     const onPreview = vi.fn();
     render(<RecoveryTree {...makeProps({ roots: [file], onPreview })} />);

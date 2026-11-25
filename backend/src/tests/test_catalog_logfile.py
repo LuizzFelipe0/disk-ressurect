@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from modules.disk.entities import NTFSVolume
-from modules.catalog.dto import CatalogMapper
+from modules.catalog.mapper import CatalogMapper
 from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.discovery.tree_builder import FileNode
 from test_ntfs_logfile import _log_page

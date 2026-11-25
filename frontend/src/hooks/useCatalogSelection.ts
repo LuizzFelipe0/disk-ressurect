@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import type { CatalogInfo } from "../types/recovery";
 import { isTreeNodeSelected, updateTreeSelection } from "../utils/selection";
 
@@ -9,18 +9,12 @@ export function useCatalogSelection(
 ) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
-  const descendantsById = useMemo(() => {
-    const descendants = new Map<string, string[]>();
-    Object.entries(childrenById).forEach(([id, children]) => descendants.set(id, children.map((child) => child.id)));
-    return descendants;
-  }, [childrenById]);
-
   const toggleSelection = useCallback((nodeId: string, checked: boolean) => {
     const next = updateTreeSelection(nodeId, checked,
-      { selectedIds, excludedIds }, parentById, descendantsById);
+      { selectedIds, excludedIds }, parentById, childrenById);
     setSelectedIds(next.selectedIds);
     setExcludedIds(next.excludedIds);
-  }, [selectedIds, excludedIds, parentById, descendantsById]);
+  }, [selectedIds, excludedIds, parentById, childrenById]);
 
   const isSelected = useCallback((nodeId: string) =>
     isTreeNodeSelected(nodeId, { selectedIds, excludedIds }, parentById),

@@ -1,8 +1,8 @@
 from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
-from modules.catalog.dto import CatalogMapper
+from modules.catalog.mapper import CatalogMapper
 from application.session import RecoverySession
 from application.workflows.catalog_scan import CatalogScanWorkflow
-from modules.disk.dto import DiskDtoMapper
+from modules.disk.mapper import DiskDtoMapper
 from modules.deep_scan.dto import PartitionScanRequestDto
 from modules.deep_scan.service import DeepScanService
 from modules.disk.service import DiskService

@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Card, DropdownCheckbox, EmptyState, FormField, Input, Select } from "belagio-styles-lib";
+import { Button, Card, DropdownCheckbox, EmptyState, FormField, InfoButton, Input, Select } from "belagio-styles-lib";
 import { useSearchParams } from "react-router-dom";
 import filterIcon from "../../assets/filter.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
@@ -9,7 +9,7 @@ import { WorkflowSteps, type WorkflowStep } from "../../components/WorkflowSteps
 import { RecoveryTree } from "../../components/RecoveryTree";
 import { RecoveryStatusPanel } from "../../components/RecoveryStatusPanel";
 import { DiskAuditOverlay } from "../../components/DiskAuditOverlay";
-import type { CarvingOptions } from "../../types/recovery";
+import type { CarvingOptions, CatalogNode } from "../../types/recovery";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
 import { translate, translateError, translateStatus } from "../../i18n/translations";
 import {
@@ -41,6 +41,7 @@ import {
   FilterPanelHeading,
   FilterSection,
   OrphanScanControls,
+  ScanOption,
   PreviewBody,
   PreviewPane,
   ValidationNotice,
@@ -62,6 +63,7 @@ export const RecoveryPage: React.FC = () => {
   const rawPickerRequested = React.useRef(false);
   const { language, changeLanguage } = useLanguagePreference();
   const [activeStep, setActiveStep] = React.useState<WorkflowStep>(1);
+  const [catalogStepVisited, setCatalogStepVisited] = React.useState(false);
   const [includeOrphaned, setIncludeOrphaned] = React.useState(true);
   const [forceFreshValidation, setForceFreshValidation] = React.useState(true);
   const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(64);
@@ -79,10 +81,13 @@ export const RecoveryPage: React.FC = () => {
   const recoveryResultsTriggerRef = React.useRef<HTMLSpanElement>(null);
   const recoveryResultsWereOpen = React.useRef(false);
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
+  React.useEffect(() => {
+    if (activeStep === 3) setCatalogStepVisited(true);
+  }, [activeStep]);
   const searchActive = Boolean(recovery.searchQuery.trim());
   const allExtensionsSelected = areAllExtensionsSelected(recovery.availableExtensions, recovery.extensions);
-  const visibleRoots = searchActive
-    ? recovery.searchResult?.results
+  const visibleRoots = searchActive && !recovery.searchingCatalog && recovery.searchResult
+    ? recovery.searchResult.results
     : recovery.catalog?.roots;
   const selectedDiskHasCachedScan = recovery.disks.some((disk) =>
     String(disk.number) === recovery.selectedDiskNumber && Boolean(disk.cachedPartitions?.length));
@@ -104,6 +109,12 @@ export const RecoveryPage: React.FC = () => {
     { key: "possiblyReused" as const, summary: lowConfidenceCarving.possiblyReused },
   ] : [];
   const closeAudit = React.useCallback(() => setAuditOpen(false), []);
+  const toggleCatalogFolder = React.useCallback((node: CatalogNode) => {
+    void recovery.toggleFolder(node);
+  }, [recovery.toggleFolder]);
+  const previewCatalogFile = React.useCallback((node: CatalogNode) => {
+    void recovery.previewFile(node);
+  }, [recovery.previewFile]);
   React.useEffect(() => {
     if (searchParams.get("source") === "image" && !rawPickerRequested.current) {
       rawPickerRequested.current = true;
@@ -214,10 +225,11 @@ export const RecoveryPage: React.FC = () => {
       {activeStep === 1 && <>
       <PageIntro><Eyebrow>{t("storageStep")}</Eyebrow><h1>{t("selectSourceHeading")}</h1><p>{t("selectSourceDescription")}</p></PageIntro>
       <Card size="sm" variant="flat"><FormGrid>
-        <FormControl><FormControlCaption>{t("sourceDisk")}</FormControlCaption>
+        <FormControl><FormControlCaption>{t("sourceDisk")} {recovery.rawImage &&
+          <InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} />}</FormControlCaption>
           {recovery.rawImage ? <DeviceOption type="button" $selected disabled>
             <DeviceIcon aria-hidden="true">▤</DeviceIcon>
-            <DeviceDetails><strong>{sanitizeDisplayText(recovery.rawImage.displayName)}</strong><small>{t("imageSourceDescription")}</small></DeviceDetails>
+            <DeviceDetails><strong>{sanitizeDisplayText(recovery.rawImage.displayName)}</strong></DeviceDetails>
             <SourceSelectedTag>{t("selectedLabel")}</SourceSelectedTag>
           </DeviceOption> : recovery.disks.length ? <SourceList>
             {recovery.disks.map((disk) => {
@@ -264,13 +276,18 @@ export const RecoveryPage: React.FC = () => {
         {recovery.selectedVolumeId && <> · <span>{sanitizeDisplayText(recovery.volumes.find((volume) => volume.id === recovery.selectedVolumeId)?.name ?? "")}</span></>}
       </p>
       <OrphanScanControls>
-        <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
-          onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
-        <label><input type="checkbox" checked={forceFreshValidation}
-          disabled={recovery.busy || !includeOrphaned}
-          onChange={(event) => setForceFreshValidation(event.target.checked)} />
-          {t("forceFreshValidation")}</label>
-        <p>{t("orphanScanWarning")}</p>
+        <ScanOption>
+          <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
+            onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
+          <InfoButton description={t("orphanScanWarning")} label={t("moreInfo")} />
+        </ScanOption>
+        <ScanOption>
+          <label><input type="checkbox" checked={forceFreshValidation}
+            disabled={recovery.busy || !includeOrphaned}
+            onChange={(event) => setForceFreshValidation(event.target.checked)} />
+            {t("forceFreshValidation")}</label>
+          <InfoButton description={t("forceFreshValidationInfo")} label={t("moreInfo")} />
+        </ScanOption>
         <CarvingBudgetControls>
           <FormField label={t("carvingScanBudget")}>
             <Select aria-label={t("carvingScanBudget")} value={String(scanBudgetGiB)} disabled={recovery.busy || !includeOrphaned}
@@ -323,7 +340,7 @@ export const RecoveryPage: React.FC = () => {
       </StepActions>
       </>}
 
-      {activeStep === 3 && <>
+      {catalogStepVisited && <div hidden={activeStep !== 3}>
       <CatalogStats aria-label={t("foundFiles")}>
         <CatalogStat><span>{t("catalogItems")}</span><strong>{(recovery.catalog?.recordCount ?? 0).toLocaleString(language)}</strong></CatalogStat>
         <CatalogStat><span>{t("selectedItems")}</span><strong>{recovery.selectedIds.size.toLocaleString(language)}</strong></CatalogStat>
@@ -350,13 +367,16 @@ export const RecoveryPage: React.FC = () => {
           placeholder={t("searchFiles")} disabled={recovery.busy} value={recovery.searchQuery}
           onChange={recovery.setSearchQuery} /></SearchBox>}
         {!recovery.catalog ? <EmptyState title={t("emptyCatalog")} />
-          : searchActive && recovery.searchingCatalog ? <EmptyState title={t("searchingCatalog")} />
-            : visibleRoots?.length ? <RecoveryTree roots={visibleRoots}
+          : visibleRoots?.length ? <>
+            {searchActive && recovery.searchingCatalog && <p role="status">{t("searchingCatalog")}</p>}
+            <RecoveryTree roots={visibleRoots}
               childrenById={recovery.childrenById} expandedFolderIds={recovery.expandedFolderIds}
               loadingFolderIds={recovery.loadingFolderIds} isSelected={recovery.isSelected}
-              onToggleFolder={(node) => void recovery.toggleFolder(node)}
-              onToggleSelection={recovery.toggleSelection} onPreview={(node) => void recovery.previewFile(node)}
+              onToggleFolder={toggleCatalogFolder}
+              onToggleSelection={recovery.toggleSelection} onPreview={previewCatalogFile}
               language={language} />
+          </>
+            : searchActive && recovery.searchingCatalog ? <p role="status">{t("searchingCatalog")}</p>
               : <EmptyState title={searchActive ? t("noMatches") : t("noFiles")} />}
       </BrowserSection></Card>
       <PreviewPane>
@@ -385,7 +405,7 @@ export const RecoveryPage: React.FC = () => {
           disabled={recovery.busy || !recovery.catalog || !recovery.selectedIds.size}
           onClick={() => setActiveStep(4)}>{t("continue")} →</Button>
       </StepActions>
-      </>}
+      </div>}
 
       {activeStep === 4 && <>
       <PageIntro><Eyebrow>{t("recoveryStep")}</Eyebrow><h1>{t("recoverSelected")}</h1><p>{t("chooseDestinationDescription")}</p></PageIntro>
@@ -394,8 +414,8 @@ export const RecoveryPage: React.FC = () => {
           disabled={recovery.busy} placeholder={t("chooseFolderPlaceholder")}
           onChange={recovery.setOutputDirectory} /></FormField></DestinationInput>
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
+        <InfoButton description={t(recovery.rawImage ? "rawDestinationNotice" : "physicalDestinationNotice")} label={t("moreInfo")} />
       </DestinationRow></Card>
-      <p role="note">{recovery.rawImage ? t("rawDestinationNotice") : t("physicalDestinationNotice")}</p>
       <StepActions>
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
           onClick={() => setActiveStep(3)}>← {t("back")}</Button>
@@ -418,6 +438,7 @@ export const RecoveryPage: React.FC = () => {
           recovered: recovery.recoveryResult.recoveredCount,
           rejected: recovery.recoveryResult.rejectedCount ?? 0,
         })}</p>
+        {recovery.recoveryResult.candidateCount === 0 && <p role="status">{t("noRecoveryCandidates")}</p>}
         {recovery.recoveryResult.resultsTruncated && <p>{t("recoveryResultsTruncated")}</p>}
         <ul>{(recovery.recoveryResult.results ?? []).map((item, index) => <li key={`${item.path}:${index}`}>
           <strong>{sanitizeDisplayText(item.name || item.path)}</strong> · {sanitizeDisplayText(item.status)}

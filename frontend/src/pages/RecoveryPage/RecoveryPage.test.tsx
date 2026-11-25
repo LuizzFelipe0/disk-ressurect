@@ -6,7 +6,7 @@ import { HashRouter } from "react-router-dom";
 import type { RecoveryResult } from "../../types/recovery";
 import { RecoveryPage } from "./index";
 
-const { recovery } = vi.hoisted(() => ({
+const { recovery, treeRenderCount } = vi.hoisted(() => ({
   recovery: {
     backendStatus: "ready",
     isAdministrator: true,
@@ -148,11 +148,21 @@ const { recovery } = vi.hoisted(() => ({
     ensureAdministrator: vi.fn(),
     selectRawImage: vi.fn(),
   },
+  treeRenderCount: { value: 0 },
 }));
 
 vi.mock("../../hooks/useRecoveryController", () => ({
   useRecoveryController: () => recovery,
 }));
+
+vi.mock("../../components/RecoveryTree", async () => {
+  const React = await import("react");
+  const MockRecoveryTree = React.memo(() => {
+    treeRenderCount.value += 1;
+    return React.createElement("div", { "data-testid": "recovery-tree" });
+  });
+  return { RecoveryTree: MockRecoveryTree };
+});
 
 afterEach(() => {
   cleanup();
@@ -244,6 +254,91 @@ describe("RecoveryPage audit details", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
   });
 
+  it("keeps the catalog tree mounted once filters open or change", () => {
+    const originalRoots = recovery.catalog.roots;
+    const originalAvailableExtensions = recovery.availableExtensions;
+    const originalExtensions = recovery.extensions;
+    recovery.catalog.roots = [{
+      id: "root-folder", name: "Photos", path: "Photos", isDirectory: true,
+      sizeBytes: 0, hasChildren: true,
+    }] as never;
+    recovery.availableExtensions = [".jpg"] as never;
+    recovery.extensions = [] as never;
+    treeRenderCount.value = 0;
+
+    try {
+      const page = renderRecoveryPage();
+      goToCatalog();
+      expect(screen.getByTestId("recovery-tree")).toBeTruthy();
+      expect(treeRenderCount.value).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: "Filtros" }));
+      fireEvent.click(screen.getByRole("button", { name: /Tipos de arquivo/ }));
+      fireEvent.click(screen.getByRole("checkbox", { name: ".jpg" }));
+      expect(recovery.setExtensionSelected).toHaveBeenCalledWith(".jpg", true);
+
+      recovery.extensions = [".jpg"] as never;
+      page.rerender(<HashRouter><RecoveryPage /></HashRouter>);
+      expect(treeRenderCount.value).toBe(1);
+    } finally {
+      recovery.catalog.roots = originalRoots;
+      recovery.availableExtensions = originalAvailableExtensions;
+      recovery.extensions = originalExtensions;
+    }
+  });
+
+  it("keeps the existing catalog visible while a search is pending", () => {
+    const originalRoots = recovery.catalog.roots;
+    const originalSearchQuery = recovery.searchQuery;
+    const originalSearchingCatalog = recovery.searchingCatalog;
+    recovery.catalog.roots = [{
+      id: "root-folder", name: "Photos", path: "Photos", isDirectory: true,
+      sizeBytes: 0, hasChildren: true,
+    }] as never;
+    recovery.searchQuery = "photo";
+    recovery.searchingCatalog = true;
+
+    try {
+      renderRecoveryPage();
+      goToCatalog();
+
+      expect(screen.getByTestId("recovery-tree")).toBeTruthy();
+      expect(screen.getByText("Buscando no catálogo…")).toBeTruthy();
+    } finally {
+      recovery.catalog.roots = originalRoots;
+      recovery.searchQuery = originalSearchQuery;
+      recovery.searchingCatalog = originalSearchingCatalog;
+    }
+  });
+
+  it("keeps the catalog tree mounted when moving to recovery and back", () => {
+    const originalRoots = recovery.catalog.roots;
+    const originalSelectedIds = recovery.selectedIds;
+    recovery.catalog.roots = [{
+      id: "root-folder", name: "Photos", path: "Photos", isDirectory: true,
+      sizeBytes: 0, hasChildren: true,
+    }] as never;
+    recovery.selectedIds = new Set(["file-1"]) as never;
+    treeRenderCount.value = 0;
+
+    try {
+      renderRecoveryPage();
+      goToCatalog();
+      expect(treeRenderCount.value).toBe(1);
+
+      fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+      expect(screen.getByRole("heading", { name: "Recuperar selecionados" })).toBeTruthy();
+      expect(screen.getByTestId("recovery-tree").closest("[hidden]")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: /Voltar/ }));
+      expect(screen.getByTestId("recovery-tree").closest("[hidden]")).toBeNull();
+      expect(treeRenderCount.value).toBe(1);
+    } finally {
+      recovery.catalog.roots = originalRoots;
+      recovery.selectedIds = originalSelectedIds;
+    }
+  });
+
   it("defaults to the maximum recovery budgets and lets users adjust them", () => {
     renderRecoveryPage();
     goToScan();
@@ -253,9 +348,9 @@ describe("RecoveryPage audit details", () => {
     const candidateReadBudget = screen.getByRole("combobox", { name: "Leitura de candidatos por formato" });
     const retainedBudget = screen.getByRole("combobox", { name: "Memória máxima para candidatos" });
     const forceFresh = screen.getByRole("checkbox", {
-      name: "Forçar nova auditoria completa do disco (padrão; ignora cache; pode levar horas)",
+      name: "Forçar nova auditoria completa do disco",
     });
-    expect((screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista (ativado por padrão)") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista") as HTMLInputElement).checked).toBe(true);
     expect((forceFresh as HTMLInputElement).checked).toBe(true);
     expect((scanBudget as HTMLSelectElement).value).toBe("64");
     expect((maxFiles as HTMLSelectElement).value).toBe("16384");

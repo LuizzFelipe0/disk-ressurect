@@ -32,4 +32,17 @@ describe("hierarchical recovery selection", () => {
     expect(selection.excludedIds.has("photo")).toBe(false);
     expect(isTreeNodeSelected("photo", selection, parents)).toBe(true);
   });
+
+  it("walks the loaded child lookup when clearing a folder selection", () => {
+    const selected = { selectedIds: new Set(["folder", "photo", "document"]), excludedIds: new Set<string>() };
+    const loadedChildren = {
+      folder: [{ id: "photo" }, { id: "document" }],
+    };
+
+    const selection = updateTreeSelection("folder", false, selected, parents, loadedChildren);
+
+    expect(selection.selectedIds.has("folder")).toBe(false);
+    expect(selection.selectedIds.has("photo")).toBe(false);
+    expect(selection.selectedIds.has("document")).toBe(false);
+  });
 });

@@ -3,9 +3,11 @@ import { brandColors } from "../../brandColors";
 
 export const PageLayout = styled.main`
   width: 100%;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   background: ${brandColors.bone};
 `;
 
@@ -16,6 +18,8 @@ export const PageContent = styled.div`
   min-height: 0;
   flex: 1;
   gap: 14px;
+  overflow-y: auto;
+  overflow-x: hidden;
   margin: 0 auto;
   padding: 18px 24px 24px;
   box-sizing: border-box;
@@ -25,7 +29,7 @@ export const PageContent = styled.div`
 export const WorkflowPanel = styled.section`
   display: flex;
   width: 100%;
-  min-height: 450px;
+  min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 16px;
@@ -152,6 +156,12 @@ export const OrphanScanControls = styled.div`
   p { margin: 4px 0 0 24px; color: ${brandColors.textTertiary}; font-size: 11px; }
 `;
 
+export const ScanOption = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`;
+
 export const CarvingBudgetControls = styled.div`
   display: flex;
   flex-wrap: wrap;
@@ -187,6 +197,7 @@ export const SelectionActions = styled.div`
 
 export const BrowserSection = styled.div`
   display: flex;
+  min-width: 0;
   flex-direction: column;
   flex: 1;
   min-height: 0;
@@ -196,8 +207,10 @@ export const BrowserSection = styled.div`
 export const BrowserFrame = styled.div`
   display: grid;
   width: 100%;
+  min-width: 0;
   min-height: 390px;
   flex: 1;
+  overflow-x: hidden;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
   gap: 10px;
   > div { display: flex; min-height: 0; flex-direction: column; }
@@ -222,11 +235,12 @@ export const PreviewBody = styled.div`
   flex: 1;
   flex-direction: column;
   gap: 12px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 16px;
   h3 { overflow-wrap: anywhere; font-size: 13px; }
-  p { color: ${brandColors.textSecondary}; font-size: 12px; line-height: 1.5; }
-  img { max-height: 100%; margin: auto; object-fit: contain; }
+  p { overflow-wrap: anywhere; color: ${brandColors.textSecondary}; font-size: 12px; line-height: 1.5; }
+  img { max-width: 100%; max-height: 100%; margin: auto; object-fit: contain; }
   iframe { width: 100%; min-height: 0; flex: 1; border: 0; }
 `;
 

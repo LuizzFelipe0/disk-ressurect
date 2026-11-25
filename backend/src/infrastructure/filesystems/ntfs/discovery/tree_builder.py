@@ -104,6 +104,15 @@ class TreeBuilder:
         self._resolve_paths(phase_callback)
         return self.nodes
 
+    def release_source_tree(self):
+        """Drop the temporary MFT graph after adapting it to the recovery catalog."""
+        for node in self.nodes.values():
+            node.parent = None
+            node.children.clear()
+        self.root_nodes.clear()
+        self.nodes.clear()
+        self.mft_records.clear()
+
     def _resolve_fragmented_data_runs(self):
         if (self.cluster_size is None or self.cluster_size <= 0
                 or self.volume_size_bytes is None or self.volume_size_bytes <= 0):

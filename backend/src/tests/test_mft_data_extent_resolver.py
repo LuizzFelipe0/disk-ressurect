@@ -12,7 +12,7 @@ from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExte
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
 from infrastructure.filesystems.ntfs.catalog_builder import CatalogBuilder
 from infrastructure.filesystems.ntfs.readers.content_reference_reader import NTFSContentReferenceReader
-from modules.catalog.dto import CatalogMapper
+from modules.catalog.mapper import CatalogMapper
 from helpers import make_recovery_workflow
 
 
@@ -229,6 +229,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
         _source, _volume, legacy_node = builder.content_reference_store.resolve(
             node.candidate.content_reference.reference_id,
         )
+        self.assertFalse(hasattr(legacy_node.record, "raw_data"))
         self.assertEqual(((10, 1), (20, 1)), tuple(legacy_node.record.data_runs))
         self.assertTrue(legacy_node.record.data_is_complete)
         self.assertTrue(legacy_node.record.is_metadata_consistent)
@@ -275,6 +276,7 @@ class MFTDataExtentResolverTests(unittest.TestCase):
         _source, _volume, legacy_node = builder.content_reference_store.resolve(
             node.candidate.content_reference.reference_id,
         )
+        self.assertFalse(hasattr(legacy_node.record, "raw_data"))
         record = legacy_node.record
         self.assertFalse(record.data_is_complete)
         self.assertTrue(record.is_metadata_consistent)

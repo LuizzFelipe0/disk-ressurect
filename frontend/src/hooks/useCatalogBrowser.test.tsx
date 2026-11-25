@@ -19,6 +19,21 @@ function deferred<T>() {
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 
 describe("useCatalogBrowser session invalidation", () => {
+  it("adds loaded child links to the existing parent index", async () => {
+    const root = { id: "root", name: "Photos", path: "Photos", isDirectory: true, sizeBytes: 0, hasChildren: true };
+    const child = { id: "child", name: "summer.jpg", path: "Photos/summer.jpg", isDirectory: false, sizeBytes: 10, hasChildren: false };
+    const setError = vi.fn();
+    getChildren.mockResolvedValue([child]);
+    const { result } = renderHook(() => useCatalogBrowser(setError));
+
+    act(() => result.current.setRootParents([root]));
+    const parentIndex = result.current.parentById;
+    await act(async () => { await result.current.toggleFolder(root); });
+
+    expect(result.current.parentById).toBe(parentIndex);
+    expect(result.current.parentById.get(child.id)).toBe(root.id);
+  });
+
   it("discards folder results from the catalog that was cleared", async () => {
     const response = deferred<Array<{ id: string; name: string; path: string; isDirectory: boolean; sizeBytes: number; hasChildren: boolean }>>();
     getChildren.mockReturnValue(response.promise);

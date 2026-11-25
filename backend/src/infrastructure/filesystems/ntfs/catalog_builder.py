@@ -188,10 +188,11 @@ class CatalogBuilder:
                         )
                     )
                 nodes = builder.nodes
-            return RecoveryCatalogSnapshot(
-                catalog=self._to_recovery_catalog(
-                    nodes, builder.root_nodes, source, volume, volume_id,
-                ),
+            recovery_catalog = self._to_recovery_catalog(
+                nodes, builder.root_nodes, source, volume, volume_id,
+            )
+            snapshot = RecoveryCatalogSnapshot(
+                catalog=recovery_catalog,
                 source=source,
                 source_id=source_id,
                 volume_id=volume_id,
@@ -204,6 +205,8 @@ class CatalogBuilder:
                 usn_journal_summary=usn_journal_summary,
                 ntfs_log_file_summary=ntfs_log_file_summary,
             )
+            builder.release_source_tree()
+            return snapshot
         finally:
             disk.close()
 

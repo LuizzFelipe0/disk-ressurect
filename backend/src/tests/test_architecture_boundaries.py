@@ -6,7 +6,7 @@ import unittest
 SRC_ROOT = Path(__file__).resolve().parents[1]
 MODULES_ROOT = SRC_ROOT / "modules"
 ALLOWED_MODULE_FILES = {
-    "__init__.py", "entities.py", "dto.py", "service.py", "repository.py", "exceptions.py",
+    "__init__.py", "entities.py", "dto.py", "mapper.py", "service.py", "repository.py", "exceptions.py",
 }
 
 

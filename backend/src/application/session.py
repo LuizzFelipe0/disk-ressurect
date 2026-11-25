@@ -4,6 +4,7 @@ class RecoverySession:
         self.volume_source_ids = {}
         self.snapshot = None
         self.nodes = {}
+        self._node_ids_by_identity = {}
 
     def register_volume(self, volume, source_id=None):
         source_id = source_id or getattr(volume, "source_id", None)
@@ -25,14 +26,12 @@ class RecoverySession:
 
     def set_catalog(self, snapshot):
         self.snapshot = snapshot
-        self.nodes = {
-            getattr(node, "node_id", f"n{index}"): node
-            for index, node in enumerate(snapshot.catalog.nodes.values())
-        }
+        self.nodes = snapshot.catalog.nodes
+        self._node_ids_by_identity = {}
         return self.node_ids_by_identity()
 
     def node_ids_by_identity(self):
-        return {id(node): node_id for node_id, node in self.nodes.items()}
+        return self._node_ids_by_identity
 
     def get_node(self, node_id):
         try:
