@@ -52,6 +52,27 @@ class StorageFactoryTests(unittest.TestCase):
             self.assertIs(create_block_reader(source), reader)
         create.assert_called_once_with(2)
 
+    def test_factory_reports_both_capacities_and_closes_reader_on_size_mismatch(self):
+        source = PhysicalDisk(2, "Model A", 4096, "SERIAL").as_storage_source()
+
+        class Reader:
+            size_bytes = 8192
+
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        reader = Reader()
+        with patch("infrastructure.storage.factory.create_disk_reader", return_value=reader):
+            with self.assertRaisesRegex(
+                OSError,
+                r"selected: 4096 bytes, device reports: 8192 bytes",
+            ):
+                create_block_reader(source)
+        self.assertTrue(reader.closed)
+
     def test_factory_opens_a_raw_image_from_its_storage_source(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disk.img"

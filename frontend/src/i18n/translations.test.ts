@@ -59,5 +59,9 @@ describe("application translations", () => {
     expect(translateStatus("Catalog ready: 12 MFT records.", "pt-BR")).toBe("Catálogo pronto: 12 itens.");
     expect(translateError("Choose a destination folder to continue.", "fr-FR")).toBe("Choisissez un dossier de destination pour continuer.");
     expect(translateError("OSError: device is unavailable", "es-ES")).toBe("OSError: device is unavailable");
+    expect(translateError(
+      "Error invoking remote method 'recovery:scan-catalog': Error: Physical storage size changed since it was selected (selected: 4096 bytes, device reports: 8192 bytes)",
+      "pt-BR",
+    )).toContain("4096 bytes, mas o dispositivo informa 8192 bytes");
   });
 });

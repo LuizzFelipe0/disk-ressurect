@@ -21,7 +21,10 @@ def create_block_reader(source: StorageSource):
         actual_size = getattr(reader, "size_bytes", source.size_bytes)
         if actual_size != source.size_bytes:
             reader.close()
-            raise OSError("Physical storage size changed since it was selected")
+            raise OSError(
+                "Physical storage size changed since it was selected "
+                f"(selected: {source.size_bytes} bytes, device reports: {actual_size} bytes)"
+            )
         try:
             reader.source = source
         except (AttributeError, TypeError):

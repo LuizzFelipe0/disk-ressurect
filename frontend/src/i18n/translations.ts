@@ -58,7 +58,7 @@ const messages = {
     statusCatalogLinking: "Organizing file and folder records…", statusCatalogHierarchy: "Checking folder links…", statusCatalogPaths: "Building file paths…", statusCatalogOrphans: "Searching unused volume areas for deleted MFT records…", statusCatalogContentCarving: "Searching trusted free space for validated file candidates…", statusCatalogBitmapUnobserved: "Searching ranges with unobserved allocation bitmap for file candidates…", statusCatalogPossiblyReused: "Searching possibly reused data ranges for file candidates…",
     statusValidationOrphans: "Searching NTFS metadata for deleted MFT records: {completed}/{total} bytes", statusReadingDiskMft: "Reading the disk and checking orphan MFT records: {completed}/{total} bytes",
     statusRecovering: "Recovering the selected items…", statusRecoveryFailed: "Recovery failed.", statusRecoveryCompleted: "Recovery completed.",
-    destinationRequired: "Choose a destination folder to continue.", selectionRequired: "Select files and at least one file type.",
+    destinationRequired: "Choose a destination folder to continue.", selectionRequired: "Select files and at least one file type.", physicalStorageSizeMismatch: "The selected storage size is {selectedBytes} bytes, but the device currently reports {deviceBytes} bytes. Refresh disks and rescan partitions before retrying.",
   },
   "pt-BR": {
     sourceDisk: "Disco de origem", sourceDiskAria: "Disco de origem", backendUnavailable: "Serviço indisponível", selectDisk: "Selecione um disco", physicalDisk: "Disco físico", noDisksFound: "Nenhum disco físico encontrado.", selectedLabel: "Selecionado",
@@ -115,7 +115,7 @@ const messages = {
     statusCatalogLinking: "Organizando os registros de arquivos e pastas…", statusCatalogHierarchy: "Verificando os vínculos entre pastas…", statusCatalogPaths: "Montando os caminhos dos arquivos…", statusCatalogOrphans: "Procurando registros MFT excluídos nas áreas restantes do volume…", statusCatalogContentCarving: "Procurando candidatos validados no espaço livre confiável…", statusCatalogBitmapUnobserved: "Procurando candidatos em áreas sem observação do bitmap…", statusCatalogPossiblyReused: "Procurando candidatos em áreas de dados possivelmente reutilizados…",
     statusValidationOrphans: "Procurando registros MFT excluídos nos metadados NTFS: {completed}/{total} bytes", statusReadingDiskMft: "Lendo o disco e verificando registros MFT órfãos: {completed}/{total} bytes",
     statusRecovering: "Recuperando os itens selecionados…", statusRecoveryFailed: "Falha na recuperação.", statusRecoveryCompleted: "Recuperação concluída.",
-    destinationRequired: "Escolha uma pasta de destino para continuar.", selectionRequired: "Selecione arquivos e pelo menos um tipo de arquivo.",
+    destinationRequired: "Escolha uma pasta de destino para continuar.", selectionRequired: "Selecione arquivos e pelo menos um tipo de arquivo.", physicalStorageSizeMismatch: "O tamanho selecionado do armazenamento é {selectedBytes} bytes, mas o dispositivo informa {deviceBytes} bytes agora. Atualize os discos e refaça a busca de partições antes de tentar novamente.",
   },
   "es-ES": {
     sourceDisk: "Disco de origen", sourceDiskAria: "Disco de origen", backendUnavailable: "Servicio no disponible", selectDisk: "Selecciona un disco", physicalDisk: "Disco físico", noDisksFound: "No se encontraron discos físicos.", selectedLabel: "Seleccionado",
@@ -172,7 +172,7 @@ const messages = {
     statusCatalogLinking: "Organizando los registros de archivos y carpetas…", statusCatalogHierarchy: "Comprobando los vínculos entre carpetas…", statusCatalogPaths: "Creando las rutas de los archivos…", statusCatalogOrphans: "Buscando registros MFT eliminados en las áreas restantes del volumen…", statusCatalogContentCarving: "Buscando candidatos validados en espacio libre fiable…", statusCatalogBitmapUnobserved: "Buscando candidatos en zonas donde no se observó el bitmap…", statusCatalogPossiblyReused: "Buscando candidatos en zonas de datos posiblemente reutilizados…",
     statusValidationOrphans: "Buscando registros MFT eliminados en los metadatos NTFS: {completed}/{total} bytes", statusReadingDiskMft: "Leyendo el disco y comprobando registros MFT huérfanos: {completed}/{total} bytes",
     statusRecovering: "Recuperando los elementos seleccionados…", statusRecoveryFailed: "Falló la recuperación.", statusRecoveryCompleted: "Recuperación completada.",
-    destinationRequired: "Elige una carpeta de destino para continuar.", selectionRequired: "Selecciona archivos y al menos un tipo de archivo.",
+    destinationRequired: "Elige una carpeta de destino para continuar.", selectionRequired: "Selecciona archivos y al menos un tipo de archivo.", physicalStorageSizeMismatch: "El tamaño seleccionado del almacenamiento es {selectedBytes} bytes, pero el dispositivo informa ahora {deviceBytes} bytes. Actualiza los discos y vuelve a buscar particiones antes de intentarlo de nuevo.",
   },
   "fr-FR": {
     sourceDisk: "Disque source", sourceDiskAria: "Disque source", backendUnavailable: "Service indisponible", selectDisk: "Sélectionner un disque", physicalDisk: "Disque physique", noDisksFound: "Aucun disque physique trouvé.", selectedLabel: "Sélectionné",
@@ -229,7 +229,7 @@ const messages = {
     statusCatalogLinking: "Organisation des enregistrements de fichiers et dossiers…", statusCatalogHierarchy: "Vérification des liens entre dossiers…", statusCatalogPaths: "Création des chemins de fichiers…", statusCatalogOrphans: "Recherche des enregistrements MFT supprimés dans les zones restantes du volume…", statusCatalogContentCarving: "Recherche de candidats validés dans l’espace libre fiable…", statusCatalogBitmapUnobserved: "Recherche de candidats dans les zones où la bitmap n’a pas été observée…", statusCatalogPossiblyReused: "Recherche de candidats dans les zones de données possiblement réutilisées…",
     statusValidationOrphans: "Recherche d’enregistrements MFT supprimés dans les métadonnées NTFS : {completed}/{total} octets", statusReadingDiskMft: "Lecture du disque et recherche des enregistrements MFT orphelins : {completed}/{total} octets",
     statusRecovering: "Récupération des éléments sélectionnés…", statusRecoveryFailed: "Échec de la récupération.", statusRecoveryCompleted: "Récupération terminée.",
-    destinationRequired: "Choisissez un dossier de destination pour continuer.", selectionRequired: "Sélectionnez des fichiers et au moins un type de fichier.",
+    destinationRequired: "Choisissez un dossier de destination pour continuer.", selectionRequired: "Sélectionnez des fichiers et au moins un type de fichier.", physicalStorageSizeMismatch: "La taille sélectionnée est de {selectedBytes} octets, mais le périphérique indique maintenant {deviceBytes} octets. Actualisez les disques et recherchez à nouveau les partitions avant de réessayer.",
   },
   "zh-CN": {
     sourceDisk: "源磁盘", sourceDiskAria: "源磁盘", backendUnavailable: "后端不可用", selectDisk: "选择磁盘", physicalDisk: "物理磁盘", noDisksFound: "未找到物理磁盘。", selectedLabel: "已选择",
@@ -286,7 +286,7 @@ const messages = {
     statusCatalogLinking: "正在整理文件和文件夹记录…", statusCatalogHierarchy: "正在检查文件夹链接…", statusCatalogPaths: "正在构建文件路径…", statusCatalogOrphans: "正在卷的剩余区域中搜索已删除的 MFT 记录…", statusCatalogContentCarving: "正在可信空闲空间中搜索已验证的文件候选…", statusCatalogBitmapUnobserved: "正在位图未观测区域中搜索文件候选…", statusCatalogPossiblyReused: "正在可能已重用的数据区域中搜索文件候选…",
     statusValidationOrphans: "正在 NTFS 元数据中搜索已删除的 MFT 记录：{completed}/{total} 字节", statusReadingDiskMft: "正在读取磁盘并检查孤立 MFT 记录：{completed}/{total} 字节",
     statusRecovering: "正在恢复所选项目…", statusRecoveryFailed: "恢复失败。", statusRecoveryCompleted: "恢复完成。",
-    destinationRequired: "选择目标文件夹以继续。", selectionRequired: "请选择文件和至少一种文件类型。",
+    destinationRequired: "选择目标文件夹以继续。", selectionRequired: "请选择文件和至少一种文件类型。", physicalStorageSizeMismatch: "所选存储大小为 {selectedBytes} 字节，但设备当前报告为 {deviceBytes} 字节。请刷新磁盘并重新搜索分区后再试。",
   },
 } satisfies Record<SiteLanguage, Record<string, string>>;
 
@@ -354,6 +354,15 @@ export function translateStatus(status: string, language: SiteLanguage) {
 }
 
 export function translateError(error: string, language: SiteLanguage) {
+  const physicalSizeMismatch = error.match(
+    /Physical storage size changed since it was selected(?: \(selected: (\d+) bytes, device reports: (\d+) bytes\))?/,
+  );
+  if (physicalSizeMismatch) {
+    return translate(language, "physicalStorageSizeMismatch", {
+      selectedBytes: physicalSizeMismatch[1] ?? "?",
+      deviceBytes: physicalSizeMismatch[2] ?? "?",
+    });
+  }
   const lookup: Record<string, TranslationKey> = {
     "Authorize the system permission request to read physical disks.": "errorAuthorize",
     "Choose a destination folder to continue.": "destinationRequired",
