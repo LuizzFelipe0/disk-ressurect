@@ -3,7 +3,7 @@ import { Button } from "belagio-styles-lib";
 import type { CatalogNode } from "../../types/recovery";
 import type { SiteLanguage } from "belagio-styles-lib";
 import { translate } from "../../i18n/translations";
-import { EmptyState } from "../EmptyState";
+import { EmptyState } from "belagio-styles-lib";
 import {
   ExpandButton,
   TreeChildren,
@@ -33,7 +33,7 @@ export const RecoveryTree: React.FC<RecoveryTreeProps> = ({
   onToggleFolder, onToggleSelection, onPreview, language = "en-US",
 }) => {
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
-  if (!roots.length) return <EmptyState title={t("noFiles")} icon="▱" />;
+  if (!roots.length) return <EmptyState title={t("noFiles")} />;
 
   const renderNode = (node: CatalogNode): React.ReactNode => (
     <li key={node.id}>

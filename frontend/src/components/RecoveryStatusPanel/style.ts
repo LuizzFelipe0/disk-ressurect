@@ -1,3 +1,4 @@
+import type React from "react";
 import styled from "styled-components";
 import { spacing, typography } from "belagio-styles-lib";
 import { brandColors } from "../../brandColors";
@@ -26,15 +27,4 @@ export const ProgressDetails = styled.span`
   white-space: nowrap;
 `;
 
-export const ProgressTrack = styled.progress`
-  display: block;
-  width: 100%;
-  height: 4px;
-  appearance: none;
-  border: 0;
-  border-radius: ${spacing.radiusFull};
-  background: ${brandColors.border};
-  &::-webkit-progress-bar { border-radius: ${spacing.radiusFull}; background: ${brandColors.border}; }
-  &::-webkit-progress-value { border-radius: ${spacing.radiusFull}; background: ${brandColors.revive}; transition: width .2s ease; }
-  &::-moz-progress-bar { border-radius: ${spacing.radiusFull}; background: ${brandColors.revive}; }
-`;
+export const progressStyle: React.CSSProperties = { marginTop: spacing[1] };

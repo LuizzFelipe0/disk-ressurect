@@ -14,6 +14,7 @@ describe("DiskAuditOverlay", () => {
     </DiskAuditOverlay>);
 
     expect(screen.getByRole("dialog", { name: "Disk audit details" }).getAttribute("aria-modal")).toBe("true");
+    expect(screen.getByRole("dialog").id).toBe("audit-dialog");
     expect(screen.getByText("Audit results")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);

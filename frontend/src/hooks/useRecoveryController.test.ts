@@ -63,7 +63,9 @@ describe("useRecoveryController backend lifecycle", () => {
     const { result } = renderHook(() => useRecoveryController());
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
-    await act(async () => { await result.current.buildCatalog(); });
+    let built = false;
+    await act(async () => { built = await result.current.buildCatalog(); });
+    expect(built).toBe(true);
     expect(scanCatalog).toHaveBeenCalledWith("1:4096", false, undefined, false, expect.any(String));
 
     act(() => result.current.setSearchQuery("trip"));
@@ -113,7 +115,7 @@ describe("useRecoveryController backend lifecycle", () => {
     act(() => result.current.selectAll());
     expect(result.current.selectedIds).toEqual(new Set(["old-root"]));
 
-    let pendingBuild!: Promise<void>;
+    let pendingBuild!: Promise<boolean>;
     act(() => { pendingBuild = result.current.buildCatalog(); });
     await waitFor(() => expect(result.current.catalog).toBeNull());
     expect(result.current.selectedIds).toEqual(new Set());
@@ -132,7 +134,7 @@ describe("useRecoveryController backend lifecycle", () => {
     await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
     act(() => result.current.selectVolume("1:4096"));
 
-    let pendingBuild!: Promise<void>;
+    let pendingBuild!: Promise<boolean>;
     act(() => { pendingBuild = result.current.buildCatalog(); });
     await waitFor(() => expect(scanCatalog).toHaveBeenCalledTimes(1));
     act(() => result.current.selectVolume("2:8192"));

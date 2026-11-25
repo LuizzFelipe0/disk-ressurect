@@ -1,13 +1,12 @@
 import React from "react";
-import { Button, Card } from "belagio-styles-lib";
+import { Alert, Button, Card, Progress } from "belagio-styles-lib";
 import type { SiteLanguage } from "belagio-styles-lib";
 import { translate } from "../../i18n/translations";
 import type { BackendStatus, ProgressInfo } from "../../types/recovery";
-import { ErrorNotice } from "../ErrorNotice";
 import {
   PanelContent,
   ProgressDetails,
-  ProgressTrack,
+  progressStyle,
   StatusMessage,
 } from "./style";
 
@@ -44,6 +43,8 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
   language = "en-US",
 }) => {
   const t = (key: Parameters<typeof translate>[1], values?: Record<string, string | number>) => translate(language, key, values);
+  const [errorDismissed, setErrorDismissed] = React.useState(false);
+  React.useEffect(() => setErrorDismissed(false), [error]);
   const percent = getProgressPercent(progress);
   const hasProgress = Boolean(progress?.total);
 
@@ -59,11 +60,12 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
           )}
         </StatusMessage>
 
-        <ProgressTrack
-          aria-label={t("progress")}
-          aria-valuetext={hasProgress ? t("complete", { percent }) : t("noProgress")}
-          max={100}
+        <Progress
+          label={t("progress")}
           value={percent}
+          fillColor="#B6F23C"
+          formatValue={(value) => hasProgress ? `${value}%` : t("noProgress")}
+          style={progressStyle}
         />
 
         {partitionScanCanResume && selectedDiskNumber && (
@@ -72,12 +74,12 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
           </Button>
         )}
 
-        {error && <ErrorNotice spaced title={t("recoveryProblem")}>{error}</ErrorNotice>}
+        {error && !errorDismissed && <Alert tone="error" title={t("recoveryProblem")} closeLabel={t("closeDetails")} onClose={() => setErrorDismissed(true)} style={progressStyle}>{error}</Alert>}
 
         {Boolean(selectedDiskNumber) && !isAdministrator && (
-          <ErrorNotice tone="warning" spaced title={t("adminRequired")}>
+          <Alert tone="warning" style={progressStyle} title={t("adminRequired")}>
             {t("elevatedAccess")}
-          </ErrorNotice>
+          </Alert>
         )}
 
         {Boolean(selectedDiskNumber) && !isAdministrator && (
@@ -87,9 +89,9 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
         )}
 
         {backendStatus === "error" && (
-          <ErrorNotice tone="info" spaced>
+          <Alert tone="info" style={progressStyle}>
             {t("restartApp")}
-          </ErrorNotice>
+          </Alert>
         )}
       </PanelContent>
     </Card>

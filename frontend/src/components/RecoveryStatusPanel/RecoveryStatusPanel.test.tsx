@@ -33,9 +33,11 @@ describe("RecoveryStatusPanel", () => {
     render(<RecoveryStatusPanel {...defaults} partitionScanCanResume onRetryScan={onRetryScan} />);
 
     expect(screen.getByRole("status").textContent).toContain("Scanning disk…");
-    const progress = screen.getByRole("progressbar", { name: "Recovery progress" }) as HTMLProgressElement;
-    expect(progress.value).toBe(25);
-    expect(getComputedStyle(progress).height).toBe("4px");
+    const progress = screen.getByRole("progressbar", { name: "Recovery progress" });
+    expect(progress.getAttribute("aria-valuenow")).toBe("25");
+    expect(progress.getAttribute("aria-valuetext")).toBe("25%");
+    expect(progress.querySelector("span")?.textContent).toBe("25%");
+    expect((progress.firstElementChild as HTMLElement).style.height).toBe("1.875rem");
     fireEvent.click(screen.getByRole("button", { name: "Retry scan" }));
     expect(onRetryScan).toHaveBeenCalledTimes(1);
   });
@@ -51,9 +53,18 @@ describe("RecoveryStatusPanel", () => {
     />);
 
     expect(screen.getByRole("alert").textContent).toContain("Disk read failed");
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
     expect(screen.getByText("Administrator permission required")).toBeTruthy();
     expect(screen.getByText(/start another Python process/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Request disk access permission" }));
     expect(onRequestDiskAccess).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses an error notice without hiding the underlying recovery state", () => {
+    render(<RecoveryStatusPanel {...defaults} error="Disk read failed" />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("progressbar", { name: "Recovery progress" })).toBeTruthy();
   });
 });

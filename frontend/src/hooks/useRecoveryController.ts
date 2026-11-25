@@ -274,11 +274,11 @@ export function useRecoveryController() {
     includeOrphaned = false,
     carvingOptions?: CarvingOptions,
     forceFreshValidation = false,
-  ) => {
-    if (!selectedVolumeId) return;
+  ): Promise<boolean> => {
+    if (!selectedVolumeId) return false;
     const generation = getGeneration();
-    if (!rawImage && !await ensureAdministrator()) return;
-    if (generation !== getGeneration()) return;
+    if (!rawImage && !await ensureAdministrator()) return false;
+    if (generation !== getGeneration()) return false;
     clearCatalog();
     const catalogGeneration = getGeneration();
     const requestId = ++catalogBuildRequest.current;
@@ -293,15 +293,17 @@ export function useRecoveryController() {
           selectedVolumeId, true, carvingOptions, forceFreshValidation, operationId,
         )
         : await recoveryService.scanCatalog(selectedVolumeId, false, undefined, false, operationId);
-      if (catalogGeneration !== getGeneration() || requestId !== catalogBuildRequest.current) return;
+      if (catalogGeneration !== getGeneration() || requestId !== catalogBuildRequest.current) return false;
       setCatalog(result);
       setRootParents(result.roots);
       setStatus(`Catalog ready: ${result.recordCount.toLocaleString()} MFT records.`);
+      return true;
     } catch (cause) {
       if (catalogGeneration === getGeneration() && requestId === catalogBuildRequest.current) {
         setError(cause instanceof Error ? cause.message : String(cause));
         setStatus("Unable to build the catalog.");
       }
+      return false;
     } finally {
       if (requestId === catalogBuildRequest.current) setBusy(false);
       finishOperation(operationId);

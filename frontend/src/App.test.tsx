@@ -18,7 +18,7 @@ describe("application entry", () => {
   it("shows a homepage before opening the existing recovery workflow", async () => {
     render(<App />);
     expect(screen.getByRole("heading", { name: "Recupere arquivos com segurança" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Iniciar recuperação" }));
+    fireEvent.click(screen.getByRole("link", { name: "Dispositivo físico" }));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Recovery workflow" })).toBeTruthy());
   });
 

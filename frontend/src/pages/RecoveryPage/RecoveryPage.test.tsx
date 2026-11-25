@@ -157,9 +157,12 @@ vi.mock("../../hooks/useRecoveryController", () => ({
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.location.hash = "#/";
 });
 
 const renderRecoveryPage = () => render(<HashRouter><RecoveryPage /></HashRouter>);
+const goToCatalog = () => fireEvent.click(screen.getByRole("button", { name: "4 Catálogo" }));
+const goToScan = () => fireEvent.click(screen.getByRole("button", { name: "3 Varredura" }));
 
 describe("RecoveryPage audit details", () => {
   it("offers raw image selection through the Electron file picker", () => {
@@ -172,6 +175,30 @@ describe("RecoveryPage audit details", () => {
     window.location.hash = "#/recovery?source=image";
     renderRecoveryPage();
     await waitFor(() => expect(recovery.selectRawImage).toHaveBeenCalledOnce());
+  });
+
+  it("connects the visible scan, catalog and recovery steps to backend operations", async () => {
+    recovery.selectedIds.add("candidate-1" as never);
+    recovery.extensions.push(".jpg" as never);
+    recovery.buildCatalog = vi.fn().mockResolvedValue(true);
+    recovery.recover = vi.fn();
+    renderRecoveryPage();
+
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    expect(screen.getByRole("heading", { name: "Configure a varredura" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Iniciar varredura" }));
+    await screen.findByRole("heading", { name: "Arquivos encontrados" });
+    expect(recovery.buildCatalog).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    expect(screen.getByRole("heading", { name: "Recuperar selecionados" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Recuperar selecionados" }));
+    expect(recovery.recover).toHaveBeenCalledOnce();
+
+    recovery.selectedIds.clear();
+    recovery.extensions.length = 0;
+    recovery.buildCatalog = vi.fn();
+    recovery.recover = vi.fn();
   });
 
   it("shows bounded per-file recovery outcomes in a separate overlay", async () => {
@@ -191,21 +218,17 @@ describe("RecoveryPage audit details", () => {
     recovery.recoveryResult = null;
   });
 
-  it("keeps selection actions visible and disabled until a catalog is available", () => {
+  it("does not allow opening the catalog before it has been built", () => {
     const catalog = recovery.catalog;
     recovery.catalog = null as never;
     renderRecoveryPage();
     recovery.catalog = catalog;
-
-    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
-    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
-    for (const name of ["Selecionar tudo", "Limpar seleção", "Recuperar selecionados"]) {
-      expect((within(foundFilesHeader!).getByRole("button", { name }) as HTMLButtonElement).disabled).toBe(true);
-    }
+    expect((screen.getByRole("button", { name: "4 Catálogo" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("opens the filter drawer with file type, size and selection controls", async () => {
     renderRecoveryPage();
+    goToCatalog();
 
     const filterTrigger = screen.getByRole("button", { name: "Filtros" });
     expect(filterTrigger.closest("header")).not.toBeNull();
@@ -215,9 +238,7 @@ describe("RecoveryPage audit details", () => {
     expect(within(dialog).getAllByText("Tipos de arquivo")).toHaveLength(1);
     expect(within(dialog).getAllByText("Tamanho mínimo")).toHaveLength(1);
     expect(within(dialog).queryByRole("button", { name: "Recuperar selecionados" })).toBeNull();
-    const foundFilesHeading = screen.getByRole("heading", { name: "Arquivos encontrados" });
-    const foundFilesHeader = foundFilesHeading.parentElement?.parentElement;
-    expect(within(foundFilesHeader!).getByRole("button", { name: "Recuperar selecionados" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Varredura/ })).toBeTruthy();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Fechar" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
@@ -225,6 +246,7 @@ describe("RecoveryPage audit details", () => {
 
   it("defaults to the maximum recovery budgets and lets users adjust them", () => {
     renderRecoveryPage();
+    goToScan();
 
     const scanBudget = screen.getByRole("combobox", { name: "Orçamento de busca em espaço livre" });
     const maxFiles = screen.getByRole("combobox", { name: "Máximo de candidatos encontrados" });
@@ -239,7 +261,7 @@ describe("RecoveryPage audit details", () => {
     expect((maxFiles as HTMLSelectElement).value).toBe("16384");
     expect((candidateReadBudget as HTMLSelectElement).value).toBe("1024");
     expect((retainedBudget as HTMLSelectElement).value).toBe("512");
-    fireEvent.click(screen.getByRole("button", { name: "Montar catálogo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Iniciar varredura" }));
 
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
       scanBudgetGiB: 64, maxFiles: 16384, maxRetainedMiB: 512,
@@ -249,6 +271,7 @@ describe("RecoveryPage audit details", () => {
 
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
     renderRecoveryPage();
+    goToCatalog();
 
     const foundFiles = screen.getByRole("heading", { name: "Arquivos encontrados" }).parentElement;
     expect(foundFiles).toBeTruthy();
@@ -289,6 +312,7 @@ describe("RecoveryPage audit details", () => {
       evidenceScannedAt: "2026-11-23T12:00:00+00:00",
     });
     renderRecoveryPage();
+    goToCatalog();
 
     fireEvent.click(screen.getByRole("button", { name: "Detalhes da auditoria do disco" }));
     const dialog = await screen.findByRole("dialog", { name: "Detalhes da auditoria do disco" });

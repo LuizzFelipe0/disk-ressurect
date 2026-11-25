@@ -76,24 +76,24 @@ The physical-disk cache remains version 2 and its key is unchanged. Raw-image so
 
 ### Frontend navigation and session lifecycle
 
-The Electron renderer uses React Router's `HashRouter`. The landing page opens the original single-screen recovery workflow, which keeps source selection, scan controls, catalog, preview and extraction together:
+The Electron renderer uses React Router's `HashRouter`. The homepage offers physical storage and raw-image entry points. The recovery route keeps one in-memory controller for a horizontal, gated workflow: source and partitions, scan options, catalog and preview, then destination and extraction. Each stage uses the same backend operations as before; navigating between stages does not rebuild the catalog.
 
 ```text
 frontend/src/
 ├── pages/
-│   ├── HomePage/        # Landing page and locale selection
-│   └── RecoveryPage/    # Existing full recovery workspace and its styling
-├── components/          # Shared UI components
-├── hooks/               # Recovery controller and focused browser/operation hooks
+│   ├── HomePage/        # Source selection landing page
+│   └── RecoveryPage/    # Stateful four-stage recovery workflow
+├── components/          # Shared workflow header, footer, steps, and UI components
+├── hooks/               # Recovery controller, locale preference and focused hooks
 └── services/            # Typed Electron bridge adapter
 ```
 
 | Route | Page responsibility |
 | --- | --- |
-| `/` | Homepage, locale selection and entry points for physical disks or raw images |
-| `/recovery` | The existing recovery screen: source, partitions, scan budgets, catalog, preview, filters and extraction |
+| `/` | Homepage with entry points for physical disks or raw images |
+| `/recovery` | Source/partition selection, scan settings, catalog/preview and safe extraction as gated steps |
 
-There is no app-wide layout or session context. `RecoveryPage` owns the controller for the active recovery workflow; focused hooks keep catalog browsing, hierarchical selection, and backend operation/progress subscriptions out of the page's rendering logic. Electron IPC stays behind the typed `recoveryService` boundary.
+There is no `AppLayout` or app context. `RecoveryPage` owns the controller for the active recovery workflow; focused hooks keep catalog browsing, hierarchical selection, and backend operation/progress subscriptions out of the page's rendering logic. Shared header, footer and step navigation components keep the visual shell consistent without creating a separate application layer. Electron IPC stays behind the typed `recoveryService` boundary.
 
 Session identity changes when the source disk, raw image, selected volume or backend process changes. Rebuilding the catalog clears candidate selections and prior results. Search, folder, preview, catalog-build, partition-scan, disk-refresh and extraction responses check their request/session generation before updating state; progress events are matched by operation ID. Candidate IDs are kept in memory for the active catalog and are not persisted across catalog reconstruction.
 

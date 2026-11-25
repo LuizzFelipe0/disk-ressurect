@@ -1,53 +1,41 @@
-import styled from "styled-components";
+import type React from "react";
 import { brandColors } from "../../brandColors";
 
-export const AuditBackdrop = styled.div`
-  position: fixed;
-  z-index: 1000;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background: rgba(15, 23, 42, .58);
-  backdrop-filter: blur(3px);
-`;
-
-export const AuditDialog = styled.div`
-  display: flex;
-  width: min(760px, 100%);
-  max-height: min(82vh, 760px);
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid ${brandColors.border};
-  border-radius: 14px;
-  background: ${brandColors.surface};
-  box-shadow: 0 24px 80px rgba(15, 23, 42, .3);
-  outline: none;
-`;
-
-export const AuditDialogHeader = styled.header`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 20px;
-  border-bottom: 1px solid ${brandColors.border};
-`;
-
-export const AuditDialogTitle = styled.h2`
-  margin: 0;
-  color: ${brandColors.ink};
-  font-size: 18px;
-`;
-
-export const AuditDialogBody = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  overflow: auto;
-  padding: 18px 20px 22px;
-  color: ${brandColors.textSecondary};
-  font-size: 13px;
-  line-height: 1.55;
-  p { margin: 0; }
-`;
+export const auditDialogStyles: Partial<Record<
+  "backdrop" | "dialog" | "header" | "title" | "description" | "body" | "closeButton",
+  React.CSSProperties
+>> = {
+  backdrop: { backgroundColor: "rgba(15, 23, 42, .58)", backdropFilter: "blur(3px)" },
+  dialog: {
+    display: "flex",
+    width: "min(760px, 100%)",
+    maxHeight: "min(82vh, 760px)",
+    flexDirection: "column",
+    overflow: "hidden",
+    padding: 0,
+    borderRadius: "14px",
+    backgroundColor: brandColors.surface,
+    color: brandColors.ink,
+    boxShadow: "0 24px 80px rgba(15, 23, 42, .3)",
+  },
+  header: {
+    flex: "0 0 auto",
+    alignItems: "center",
+    padding: "16px 20px",
+    borderBottom: `1px solid ${brandColors.border}`,
+  },
+  title: { margin: 0, color: brandColors.ink, fontSize: "18px" },
+  body: {
+    display: "flex",
+    minHeight: 0,
+    flex: "1 1 auto",
+    flexDirection: "column",
+    gap: "12px",
+    overflow: "auto",
+    marginTop: 0,
+    padding: "18px 20px 22px",
+    color: brandColors.textSecondary,
+    fontSize: "13px",
+    lineHeight: 1.55,
+  },
+};

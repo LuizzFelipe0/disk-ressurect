@@ -14,10 +14,26 @@ export const GlobalStyle = createGlobalStyle`
     --disk-border: ${brandColors.border};
     --disk-text-secondary: ${brandColors.textSecondary};
     --disk-text-tertiary: ${brandColors.textTertiary};
+    --belagio-color-primary: ${brandColors.ink};
+    --belagio-color-success: ${brandColors.revive};
+    --belagio-color-error: ${brandColors.error};
+    --belagio-color-warning: #B7791F;
+    --belagio-color-surface: ${brandColors.surface};
+    --belagio-color-border: ${brandColors.border};
+    --belagio-color-text: ${brandColors.ink};
+    --belagio-color-info-surface: ${brandColors.infoSurface};
+    --belagio-color-success-surface: #EEF9D9;
+    --belagio-color-success-text: #486B13;
+    --belagio-color-warning-surface: ${brandColors.warningSurface};
+    --belagio-color-warning-text: ${brandColors.warning};
+    --belagio-color-error-surface: ${brandColors.errorSurface};
+    --belagio-color-error-text: ${brandColors.error};
+    --belagio-progress-track: ${brandColors.border};
+    --belagio-progress-fill: ${brandColors.revive};
   }
   * { box-sizing: border-box; }
   html, body, #root {
-    min-width: 800px;
+    min-width: 320px;
     min-height: 100%;
     margin: 0;
     color: ${brandColors.ink};
