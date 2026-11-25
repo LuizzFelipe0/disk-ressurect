@@ -6,7 +6,7 @@ import { useCatalogBrowser } from "./useCatalogBrowser";
 const { getChildren, previewFile, searchCatalog } = vi.hoisted(() => ({
   getChildren: vi.fn(), previewFile: vi.fn(), searchCatalog: vi.fn(),
 }));
-vi.mock("../../services/recoveryService", () => ({
+vi.mock("../services/recoveryService", () => ({
   recoveryService: { getChildren, previewFile, searchCatalog },
 }));
 

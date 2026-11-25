@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { recoveryService } from "../../services/recoveryService";
-import type { BackendStatus, ProgressInfo } from "../../types/recovery";
+import { recoveryService } from "../services/recoveryService";
+import type { BackendStatus, ProgressInfo } from "../types/recovery";
 
 export function useRecoveryOperationState() {
   const [backendStatus, setBackendStatus] = useState<BackendStatus>("starting");

@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
-import type { CatalogInfo } from "../../types/recovery";
-import { isTreeNodeSelected, updateTreeSelection } from "../../utils/selection";
+import type { CatalogInfo } from "../types/recovery";
+import { isTreeNodeSelected, updateTreeSelection } from "../utils/selection";
 
 export function useCatalogSelection(
   catalog: CatalogInfo | null,

@@ -7,9 +7,9 @@ import type {
   VolumeInfo,
   RawImageSource,
 } from "../types/recovery";
-import { useCatalogSelection } from "../pages/catalog/useCatalogSelection";
-import { useCatalogBrowser } from "../pages/catalog/useCatalogBrowser";
-import { useRecoveryOperationState } from "../pages/scan/useRecoveryOperationState";
+import { useCatalogSelection } from "./useCatalogSelection";
+import { useCatalogBrowser } from "./useCatalogBrowser";
+import { useRecoveryOperationState } from "./useRecoveryOperationState";
 
 const LAST_SELECTED_DISK_KEY = "disk-ressurect:last-selected-disk";
 
@@ -19,10 +19,6 @@ function diskCacheIdentity(disk: DiskInfo) {
   return serial
     ? `serial:${serial}|${model}|${disk.sizeBytes}`
     : `device:${model}|${disk.sizeBytes}|${disk.number}`;
-}
-
-function newSessionId() {
-  return window.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
 export function useRecoveryController() {
@@ -43,7 +39,6 @@ export function useRecoveryController() {
   const [minimumSizeKb, setMinimumSizeKb] = useState(0);
   const [outputDirectory, setOutputDirectory] = useState("");
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
-  const [sessionId, setSessionId] = useState(newSessionId);
   const browser = useCatalogBrowser(setError);
   const {
     catalog, setCatalog, preview, previewLoading, searchQuery, setSearchQuery,
@@ -67,7 +62,6 @@ export function useRecoveryController() {
   const refreshDisks = useCallback(async (preserveCurrentSource = true) => {
     if (!preserveCurrentSource) {
       sourceGeneration.current += 1;
-      setSessionId(newSessionId());
       setRawImage(null);
       setSelectedDiskNumber("");
       setSelectedVolumeId("");
@@ -141,7 +135,6 @@ export function useRecoveryController() {
     if (backendSessionGeneration === appliedBackendGeneration.current) return;
     appliedBackendGeneration.current = backendSessionGeneration;
     sourceGeneration.current += 1;
-    setSessionId(newSessionId());
     partitionRequestId.current += 1;
     setRawImage(null);
     setSelectedDiskNumber("");
@@ -162,7 +155,6 @@ export function useRecoveryController() {
     setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
     setRawImage(null);
     sourceGeneration.current += 1;
-    setSessionId(newSessionId());
     setSelectedDiskNumber(diskNumber);
     setVolumes(savedPartitions);
     setSelectedVolumeId("");
@@ -184,7 +176,6 @@ export function useRecoveryController() {
       const selected = await recoveryService.selectRawImage();
       if (!selected || requestGeneration !== sourceGeneration.current) return;
       sourceGeneration.current += 1;
-      setSessionId(newSessionId());
       setRawImage(selected);
       setSelectedDiskNumber("");
       setSelectedVolumeId("");
@@ -275,7 +266,7 @@ export function useRecoveryController() {
   }, [selectedDiskNumber, rawImage, disks, clearCatalog, ensureAdministrator, beginOperation, finishOperation]);
 
   const selectVolume = useCallback((volumeId: string) => {
-    setSelectedVolumeId(volumeId); setSessionId(newSessionId()); clearCatalog();
+    setSelectedVolumeId(volumeId); clearCatalog();
     setStatus(volumeId ? "Build the catalog to browse the discovered files." : "Select an NTFS partition.");
   }, [clearCatalog]);
 
@@ -366,7 +357,7 @@ export function useRecoveryController() {
   }, []);
 
   return {
-    backendStatus, isAdministrator, busy, error, status, progress, disks, rawImage, selectedDiskNumber, volumes, sessionId,
+    backendStatus, isAdministrator, busy, error, status, progress, disks, rawImage, selectedDiskNumber, volumes,
     partitionScanCanResume,
     selectedVolumeId, catalog, preview, previewLoading, searchQuery, setSearchQuery,
     searchResult, searchingCatalog, childrenById, parentById, loadingFolderIds,

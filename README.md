@@ -76,36 +76,30 @@ The physical-disk cache remains version 2 and its key is unchanged. Raw-image so
 
 ### Frontend navigation and session lifecycle
 
-The Electron renderer uses React Router's `HashRouter` and keeps the recovery controller above the route tree so navigating between workflow steps does not discard an active session:
+The Electron renderer uses React Router's `HashRouter`. The landing page opens the original single-screen recovery workflow, which keeps source selection, scan controls, catalog, preview and extraction together:
 
 ```text
 frontend/src/
-├── app/                 # AppLayout, language and shared recovery session
 ├── pages/
-│   ├── storage/         # Home and storage selection
-│   ├── scan/            # Scan controls and operation state
-│   ├── catalog/         # Catalog browser, selection and audit report
-│   └── recovery/        # Destination, filters and extraction results
+│   ├── HomePage/        # Landing page and locale selection
+│   └── RecoveryPage/    # Existing full recovery workspace and its styling
 ├── components/          # Shared UI components
-├── hooks/               # Recovery workflow orchestration
+├── hooks/               # Recovery controller and focused browser/operation hooks
 └── services/            # Typed Electron bridge adapter
 ```
 
 | Route | Page responsibility |
 | --- | --- |
-| `/` | Home and workflow entry points |
-| `/storage` | Select a physical disk or raw image, discover partitions and choose a volume |
-| `/scan` | Configure the bounded deleted-file search and build the catalog |
-| `/catalog` | Search and browse the catalog, preserve selection while navigating, preview files and open the audit overlay |
-| `/recovery` | Choose a destination and filters, run extraction and inspect per-file outcomes |
+| `/` | Homepage, locale selection and entry points for physical disks or raw images |
+| `/recovery` | The existing recovery screen: source, partitions, scan budgets, catalog, preview, filters and extraction |
 
-The shared `RecoverySessionProvider` exposes memoized storage, catalog, recovery and operation state slices. High-frequency progress updates are isolated in the activity context so they do not rerender the catalog tree. Catalog browsing, hierarchical selection, and backend operation/progress subscriptions live in focused hooks; the remaining controller coordinates the workflow and invokes the typed `recoveryService` boundary.
+There is no app-wide layout or session context. `RecoveryPage` owns the controller for the active recovery workflow; focused hooks keep catalog browsing, hierarchical selection, and backend operation/progress subscriptions out of the page's rendering logic. Electron IPC stays behind the typed `recoveryService` boundary.
 
 Session identity changes when the source disk, raw image, selected volume or backend process changes. Rebuilding the catalog clears candidate selections and prior results. Search, folder, preview, catalog-build, partition-scan, disk-refresh and extraction responses check their request/session generation before updating state; progress events are matched by operation ID. Candidate IDs are kept in memory for the active catalog and are not persisted across catalog reconstruction.
 
 Raw images are selected through an Electron file dialog. The main process registers the selected file with the Python backend and returns an opaque source ID; renderer code does not receive filesystem access. The regular partition-discovery, audit, scan, catalog, preview and recovery commands operate on the selected source. Raw-image scans do not create persistent deep-scan checkpoints. Recovery from an image must target a different filesystem; the frontend explains this requirement and the backend remains authoritative. Physical source disks and image files stay read-only.
 
-The UI keeps all user-visible text localized in the five supported locales. The catalog audit report is separate from the file tree, describes bounded/inconclusive findings, restores keyboard focus when closed and does not claim that a disk is clean. Per-file recovery results are capped at 500 displayed rows; the response indicates when more results were truncated.
+The UI keeps all user-visible text localized in the five supported locales. The audit report is separate from the file tree, describes bounded/inconclusive findings, restores keyboard focus when closed and does not claim that a disk is clean. Per-file recovery results are capped at 500 displayed rows and open in a separate overlay; the response indicates when more results were truncated.
 
 ## Recovery catalog and selection
 
@@ -181,7 +175,7 @@ The script builds the shared PyInstaller backend, runs backend and frontend test
 
 ## How to Use
 
-Users select a physical source disk, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. Enable **Search for deleted files missing from the list** before building the catalog to search areas outside the normal file list; this can take a long time. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks.
+Start on the homepage, then open the recovery workspace for a physical disk or raw image. In that screen, select a source, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. Enable **Search for deleted files missing from the list** before building the catalog to search areas outside the normal file list; this can take a long time. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks. The raw-image action on the homepage opens the Electron file picker and uses the same recovery workspace.
 
 Validated candidates found during deep scans are checkpointed to `deep_scan_cache.json` under Electron's per-user `userData` directory. Cache entries are keyed by disk model, capacity and serial number (or disk number when no serial is available), so candidates are restored only for the matching source disk. A scan interruption keeps already discovered candidates; completed scans replace the old candidate set. Selecting the same disk after reopening the app restores those candidates without rerunning the scan.
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { recoveryService } from "../../services/recoveryService";
-import type { CatalogInfo, CatalogNode, CatalogSearchResult, FilePreview } from "../../types/recovery";
+import { recoveryService } from "../services/recoveryService";
+import type { CatalogInfo, CatalogNode, CatalogSearchResult, FilePreview } from "../types/recovery";
 
 export function useCatalogBrowser(setError: (message: string) => void) {
   const [catalog, setCatalog] = useState<CatalogInfo | null>(null);

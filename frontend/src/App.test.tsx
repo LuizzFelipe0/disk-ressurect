@@ -4,23 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
-const { recovery } = vi.hoisted(() => ({
-  recovery: {
-    backendStatus: "ready", isAdministrator: false, busy: false, error: "", status: "Choose a source disk",
-    progress: null, partitionScanCanResume: false, disks: [], rawImage: null, selectedDiskNumber: "",
-    volumes: [], selectedVolumeId: "", catalog: null, preview: null, previewLoading: false,
-    searchQuery: "", searchResult: null, searchingCatalog: false, childrenById: {}, parentById: new Map(),
-    loadingFolderIds: new Set(), expandedFolderIds: new Set(), selectedIds: new Set(), excludedIds: new Set(),
-    availableExtensions: [], extensions: [], minimumSizeKb: 0, outputDirectory: "",
-    refreshDisks: vi.fn(), selectDisk: vi.fn(), selectRawImage: vi.fn(), findPartitions: vi.fn(), selectVolume: vi.fn(),
-    buildCatalog: vi.fn(), toggleFolder: vi.fn(), toggleSelection: vi.fn(), isSelected: vi.fn(() => false),
-    selectAll: vi.fn(), clearSelection: vi.fn(), previewFile: vi.fn(), chooseOutputDirectory: vi.fn(),
-    recover: vi.fn(), setExtensionSelected: vi.fn(), setMinimumSizeKb: vi.fn(), setOutputDirectory: vi.fn(),
-    setSearchQuery: vi.fn(), ensureAdministrator: vi.fn(),
-  },
+vi.mock("./pages/RecoveryPage", () => ({
+  RecoveryPage: () => <h1>Recovery workflow</h1>,
 }));
-
-vi.mock("./hooks/useRecoveryController", () => ({ useRecoveryController: () => recovery }));
 
 afterEach(() => {
   cleanup();
@@ -28,21 +14,17 @@ afterEach(() => {
   window.location.hash = "#/";
 });
 
-describe("application navigation", () => {
-  it("uses HashRouter routes and protects scan/catalog steps without an active volume", async () => {
-    window.location.hash = "#/catalog";
+describe("application entry", () => {
+  it("shows a homepage before opening the existing recovery workflow", async () => {
     render(<App />);
-
-    await waitFor(() => expect(screen.getByRole("heading", { name: "Armazenamento" })).toBeTruthy());
-    expect(screen.getByRole("navigation", { name: "Etapas da recuperação" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Armazenamento" }).getAttribute("aria-current")).toBe("page");
+    expect(screen.getByRole("heading", { name: "Recupere arquivos com segurança" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Iniciar recuperação" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Recovery workflow" })).toBeTruthy());
   });
 
-  it("keeps the shared operation status visible while changing routes", async () => {
-    recovery.status = "A imagem raw foi selecionada";
+  it("redirects unknown routes to the homepage", async () => {
+    window.location.hash = "#/unknown-route";
     render(<App />);
-    fireEvent.click(screen.getByRole("link", { name: "Armazenamento" }));
-    await screen.findByRole("heading", { name: "Armazenamento" });
-    expect(screen.getAllByRole("status")[0].textContent).toContain("imagem raw");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Recupere arquivos com segurança" })).toBeTruthy());
   });
 });
