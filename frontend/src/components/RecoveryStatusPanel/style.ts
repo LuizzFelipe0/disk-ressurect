@@ -9,6 +9,12 @@ export const PanelContent = styled.div`
   margin: -8px;
 `;
 
+export const PermissionActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: ${spacing[2]};
+`;
+
 export const StatusMessage = styled.div`
   display: flex;
   align-items: baseline;

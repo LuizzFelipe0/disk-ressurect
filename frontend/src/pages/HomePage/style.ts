@@ -52,13 +52,25 @@ export const SourceGrid = styled.div`
   @media (max-width: 680px) { grid-template-columns: 1fr; }
 `;
 
+export const SourceOption = styled.div`
+  position: relative;
+  min-width: 0;
+`;
+
+export const SourceInfo = styled.span`
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 1;
+`;
+
 export const SourceCard = styled(Link)`
   width: 100%;
   min-height: 210px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 22px;
+  padding: 22px 54px 22px 22px;
   border: 1px solid ${brandColors.border};
   border-radius: 7px;
   background: #fff;
@@ -86,13 +98,6 @@ export const SourceIcon = styled.span`
 export const SourceTitle = styled.strong`
   margin-bottom: 7px;
   font-size: 15px;
-`;
-
-export const SourceDescription = styled.span`
-  margin-bottom: 18px;
-  color: ${brandColors.textSecondary};
-  font-size: 12px;
-  line-height: 1.5;
 `;
 
 export const ReadOnlyNotice = styled.p`

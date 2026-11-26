@@ -1,5 +1,5 @@
 import React from "react";
-import { Alert, Button, Card, Progress } from "belagio-styles-lib";
+import { Alert, Button, Card, InfoButton, Progress } from "belagio-styles-lib";
 import type { SiteLanguage } from "belagio-styles-lib";
 import { translate } from "../../i18n/translations";
 import type { BackendStatus, ProgressInfo } from "../../types/recovery";
@@ -7,6 +7,7 @@ import {
   PanelContent,
   ProgressDetails,
   progressStyle,
+  PermissionActions,
   StatusMessage,
 } from "./style";
 
@@ -78,14 +79,13 @@ export const RecoveryStatusPanel: React.FC<RecoveryStatusPanelProps> = ({
 
         {Boolean(selectedDiskNumber) && !isAdministrator && (
           <Alert tone="warning" style={progressStyle} title={t("adminRequired")}>
-            {t("elevatedAccess")}
+            <PermissionActions>
+              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
+                {t("requestAccess")}
+              </Button>
+              <InfoButton description={t("elevatedAccess")} label={t("moreInfo")} />
+            </PermissionActions>
           </Alert>
-        )}
-
-        {Boolean(selectedDiskNumber) && !isAdministrator && (
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={busy} onClick={onRequestDiskAccess}>
-            {t("requestAccess")}
-          </Button>
         )}
 
         {backendStatus === "error" && (

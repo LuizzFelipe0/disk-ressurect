@@ -305,6 +305,12 @@ async function requestLinuxDiskAccess() {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === "win32" && !isWindowsAdministrator()) {
+    // Request elevation before starting the backend or showing the recovery UI.
+    // If the user cancels UAC, keep the app open with its current permissions.
+    if (relaunchAsAdministrator()) return;
+  }
+
   backend = new PythonBackend();
   ipcMain.handle("backend:get-status", () => backend.getStatus());
   ipcMain.handle("backend:get-privileges", () => ({

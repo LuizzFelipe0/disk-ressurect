@@ -1,12 +1,12 @@
 import React from "react";
-import { Card } from "belagio-styles-lib";
+import { Card, InfoButton } from "belagio-styles-lib";
 import { WorkflowFooter, WorkflowHeader } from "../../components/WorkflowChrome";
 import { WorkflowSteps } from "../../components/WorkflowSteps";
 import { useLanguagePreference } from "../../hooks/useLanguagePreference";
 import { translate } from "../../i18n/translations";
 import {
   HomeContent, HomeEyebrow, HomeLayout, SourceCard, SourceGrid, SourceIcon,
-  SourceDescription, SourceTitle, WelcomeBody, WelcomeTitle, ReadOnlyNotice,
+  SourceOption, SourceInfo, SourceTitle, WelcomeBody, WelcomeTitle, ReadOnlyNotice,
 } from "./style";
 
 export const HomePage: React.FC = () => {
@@ -24,18 +24,22 @@ export const HomePage: React.FC = () => {
         <WelcomeTitle>{t("welcomeTitle")}</WelcomeTitle>
         <WelcomeBody>{t("welcomeBody")}</WelcomeBody>
         <SourceGrid>
-          <SourceCard to="/recovery?source=physical" aria-label={t("startPhysical")}>
+          <SourceOption>
+            <SourceCard to="/recovery?source=physical" aria-label={t("startPhysical")}>
               <SourceIcon aria-hidden="true">▣</SourceIcon>
               <SourceTitle>{t("startPhysical")}</SourceTitle>
-              <SourceDescription>{t("physicalSourceDescription")}</SourceDescription>
               <span>{t("continue")} →</span>
-          </SourceCard>
-          <SourceCard to="/recovery?source=image" aria-label={t("startImage")}>
+            </SourceCard>
+            <SourceInfo><InfoButton description={t("physicalSourceDescription")} label={t("moreInfo")} /></SourceInfo>
+          </SourceOption>
+          <SourceOption>
+            <SourceCard to="/recovery?source=image" aria-label={t("startImage")}>
               <SourceIcon aria-hidden="true">▤</SourceIcon>
               <SourceTitle>{t("startImage")}</SourceTitle>
-              <SourceDescription>{t("imageSourceDescription")}</SourceDescription>
               <span>{t("continue")} →</span>
-          </SourceCard>
+            </SourceCard>
+            <SourceInfo><InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} /></SourceInfo>
+          </SourceOption>
         </SourceGrid>
         <ReadOnlyNotice role="note"><span aria-hidden="true">♧</span> {t("sourceReadOnlyNotice")}</ReadOnlyNotice>
       </Card>
