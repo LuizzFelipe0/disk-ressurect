@@ -1,18 +1,22 @@
 import React from "react";
-import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { createHashRouter, Navigate, RouterProvider } from "react-router-dom";
 import { GlobalStyle } from "./globalStyles";
 import { HomePage } from "./pages/HomePage";
-import { RecoveryPage } from "./pages/RecoveryPage";
 
-const App: React.FC = () => <>
-  <GlobalStyle />
-  <HashRouter>
-    <Routes>
-      <Route path="/" element={<HomePage />} />
-      <Route path="/recovery" element={<RecoveryPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  </HashRouter>
-</>;
+const App: React.FC = () => {
+  const router = React.useMemo(() => createHashRouter([
+    { path: "/", element: <HomePage /> },
+    { path: "/recovery", lazy: async () => {
+      const { RecoveryPage } = await import("./pages/RecoveryPage");
+      return { Component: RecoveryPage };
+    } },
+    { path: "*", element: <Navigate to="/" replace /> },
+  ]), []);
+
+  return <>
+    <GlobalStyle />
+    <RouterProvider router={router} />
+  </>;
+};
 
 export default App;

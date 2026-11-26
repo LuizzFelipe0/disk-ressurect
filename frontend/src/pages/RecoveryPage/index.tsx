@@ -1,13 +1,18 @@
 import React from "react";
-import { Button, Card, DropdownCheckbox, EmptyState, FormField, InfoButton, Input, Select } from "belagio-styles-lib";
+import { Button, DropdownCheckbox } from "belagio-styles-lib";
 import { useSearchParams } from "react-router-dom";
 import filterIcon from "../../assets/filter.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
+import { useRecoveryNavigationGuard } from "../../hooks/useRecoveryNavigationGuard";
 import { useLanguagePreference } from "../../hooks/useLanguagePreference";
 import { WorkflowFooter, WorkflowHeader } from "../../components/WorkflowChrome";
 import { WorkflowSteps, type WorkflowStep } from "../../components/WorkflowSteps";
 import { RecoveryTree } from "../../components/RecoveryTree";
 import { RecoveryStatusPanel } from "../../components/RecoveryStatusPanel";
+import { StorageStep } from "./steps/StorageStep";
+import { ScanStep } from "./steps/ScanStep";
+import { CatalogStep } from "./steps/CatalogStep";
+import { RecoveryStep } from "./steps/RecoveryStep";
 import { DiskAuditOverlay } from "../../components/DiskAuditOverlay";
 import type { CarvingOptions, CatalogNode } from "../../types/recovery";
 import { sanitizeDisplayText } from "../../utils/sanitizeDisplayText";
@@ -18,47 +23,21 @@ import {
   getMinimumSizeKb,
 } from "../../utils/filterSelection";
 import {
-  ActionRow,
-  AuditActions,
-  CarvingBudgetControls,
   BrowserFrame,
-  BrowserHeading,
-  BrowserSection,
-  DestinationRow,
-  Eyebrow,
-  FormGrid,
   PageContent,
   PageLayout,
-  SearchBox,
-  SelectionActions,
-  SelectionSummary,
-  DestinationInput,
-  FormControl,
-  FormControlCaption,
   FilterBackdrop,
   FilterPanel,
   FilterPanelContent,
   FilterPanelHeading,
   FilterSection,
-  OrphanScanControls,
-  ScanOption,
-  PreviewBody,
-  PreviewPane,
   ValidationNotice,
-  PageIntro,
-  StepActions,
   WorkflowPanel,
-  SourceList,
-  DeviceOption,
-  DeviceIcon,
-  DeviceDetails,
-  SourceSelectedTag,
-  CatalogStats,
-  CatalogStat,
 } from "./style";
 
 export const RecoveryPage: React.FC = () => {
   const recovery = useRecoveryController();
+  useRecoveryNavigationGuard(recovery.busy);
   const [searchParams] = useSearchParams();
   const rawPickerRequested = React.useRef(false);
   const { language, changeLanguage } = useLanguagePreference();
@@ -89,8 +68,6 @@ export const RecoveryPage: React.FC = () => {
   const visibleRoots = searchActive && !recovery.searchingCatalog && recovery.searchResult
     ? recovery.searchResult.results
     : recovery.catalog?.roots;
-  const selectedDiskHasCachedScan = recovery.disks.some((disk) =>
-    String(disk.number) === recovery.selectedDiskNumber && Boolean(disk.cachedPartitions?.length));
   const catalogSummary = !recovery.catalog
     ? t("catalogPrompt")
     : searchActive && recovery.searchResult
@@ -222,210 +199,31 @@ export const RecoveryPage: React.FC = () => {
         labels={workflowLabels} ariaLabel={t("stepsNavigation")} disabled={recovery.busy}
         onStepChange={setActiveStep} />
       <WorkflowPanel>
-      {activeStep === 1 && <>
-      <PageIntro><Eyebrow>{t("storageStep")}</Eyebrow><h1>{t("selectSourceHeading")}</h1><p>{t("selectSourceDescription")}</p></PageIntro>
-      <Card size="sm" variant="flat"><FormGrid>
-        <FormControl><FormControlCaption>{t("sourceDisk")} {recovery.rawImage &&
-          <InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} />}</FormControlCaption>
-          {recovery.rawImage ? <DeviceOption type="button" $selected disabled>
-            <DeviceIcon aria-hidden="true">▤</DeviceIcon>
-            <DeviceDetails><strong>{sanitizeDisplayText(recovery.rawImage.displayName)}</strong></DeviceDetails>
-            <SourceSelectedTag>{t("selectedLabel")}</SourceSelectedTag>
-          </DeviceOption> : recovery.disks.length ? <SourceList>
-            {recovery.disks.map((disk) => {
-              const selected = String(disk.number) === recovery.selectedDiskNumber;
-              return <DeviceOption key={`${disk.number}:${disk.displayName}`} type="button" $selected={selected}
-                disabled={recovery.busy} aria-pressed={selected} onClick={() => recovery.selectDisk(String(disk.number))}>
-                <DeviceIcon aria-hidden="true">▣</DeviceIcon>
-                <DeviceDetails><strong>{sanitizeDisplayText(disk.displayName)}</strong>
-                  <small>{disk.model ? sanitizeDisplayText(disk.model) : t("physicalDisk")} · {(disk.sizeBytes / (1024 ** 3)).toFixed(1)} GB</small></DeviceDetails>
-                {selected && <SourceSelectedTag>{t("selectedLabel")}</SourceSelectedTag>}
-              </DeviceOption>;
-            })}
-          </SourceList> : <EmptyState title={recovery.backendStatus === "error" ? t("backendUnavailable") : t("noDisksFound")} />}
-        </FormControl>
-        <ActionRow>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
-            onClick={() => void recovery.selectRawImage()}>{t("selectRawImage")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.refreshDisks()}>{t("refresh")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
-            onClick={() => void recovery.findPartitions(false)}>{t("findPartitions")}</Button>
-          <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
-            onClick={() => void recovery.findPartitions(true)}>{selectedDiskHasCachedScan && !recovery.rawImage ? t("deepScanAgain") : t("deepScan")}</Button>
-        </ActionRow>
-        {recovery.rawImage && <p role="status">{t("rawImageSelected", { name: sanitizeDisplayText(recovery.rawImage.displayName) })}</p>}
-        <FormField label={t("partitionLabel")}><Select aria-label={t("partitionLabel")} value={recovery.selectedVolumeId}
-          disabled={recovery.busy || !recovery.volumes.length} onChange={recovery.selectVolume} options={[
-            { value: "", label: recovery.volumes.length ? t("selectPartition") : t("searchPartitions") },
-            ...recovery.volumes.map((volume) => ({ value: volume.id, label: sanitizeDisplayText(volume.name) })),
-          ]} /></FormField>
-      </FormGrid>
-      </Card>
-      <StepActions>
-        <span />
-        <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.selectedVolumeId}
-          onClick={() => setActiveStep(2)}>{t("continue")} →</Button>
-      </StepActions>
-      </>}
+      {activeStep === 1 && <StorageStep recovery={recovery} language={language} t={t}
+        onContinue={() => setActiveStep(2)} />}
 
-      {activeStep === 2 && <>
-      <PageIntro><Eyebrow>{t("scanStep")}</Eyebrow><h1>{t("configureScanHeading")}</h1><p>{t("configureScanDescription")}</p></PageIntro>
-      <Card size="sm" variant="flat">
-      <p>{sanitizeDisplayText(recovery.rawImage?.displayName
-        ?? recovery.disks.find((disk) => String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "")}
-        {recovery.selectedVolumeId && <> · <span>{sanitizeDisplayText(recovery.volumes.find((volume) => volume.id === recovery.selectedVolumeId)?.name ?? "")}</span></>}
-      </p>
-      <OrphanScanControls>
-        <ScanOption>
-          <label><input type="checkbox" checked={includeOrphaned} disabled={recovery.busy}
-            onChange={(event) => setIncludeOrphaned(event.target.checked)} />{t("includeOrphaned")}</label>
-          <InfoButton description={t("orphanScanWarning")} label={t("moreInfo")} />
-        </ScanOption>
-        <ScanOption>
-          <label><input type="checkbox" checked={forceFreshValidation}
-            disabled={recovery.busy || !includeOrphaned}
-            onChange={(event) => setForceFreshValidation(event.target.checked)} />
-            {t("forceFreshValidation")}</label>
-          <InfoButton description={t("forceFreshValidationInfo")} label={t("moreInfo")} />
-        </ScanOption>
-        <CarvingBudgetControls>
-          <FormField label={t("carvingScanBudget")}>
-            <Select aria-label={t("carvingScanBudget")} value={String(scanBudgetGiB)} disabled={recovery.busy || !includeOrphaned}
-              onChange={(value) => setScanBudgetGiB(Number(value) as CarvingOptions["scanBudgetGiB"])} options={[
-                { value: "1", label: t("carvingBudget1") },
-                { value: "4", label: t("carvingBudget4") },
-                { value: "16", label: t("carvingBudget16") },
-                { value: "64", label: t("carvingBudget64") },
-              ]} />
-          </FormField>
-          <FormField label={t("carvingMaxFiles")}>
-            <Select aria-label={t("carvingMaxFiles")} value={String(maxCarvedFiles)} disabled={recovery.busy || !includeOrphaned}
-              onChange={(value) => setMaxCarvedFiles(Number(value) as CarvingOptions["maxFiles"])} options={[
-                { value: "256", label: t("carvingFiles256") },
-                { value: "512", label: t("carvingFiles512") },
-                { value: "1024", label: t("carvingFiles1024") },
-                { value: "2048", label: t("carvingFiles2048") },
-                { value: "4096", label: t("carvingFiles4096") },
-                { value: "8192", label: t("carvingFiles8192") },
-                { value: "16384", label: t("carvingFiles16384") },
-              ]} />
-          </FormField>
-          <FormField label={t("carvingCandidateReadBudget")}>
-            <Select aria-label={t("carvingCandidateReadBudget")}
-              value={String(maxCandidateReadMiBPerFormat)} disabled={recovery.busy || !includeOrphaned}
-              onChange={(value) => setMaxCandidateReadMiBPerFormat(
-                Number(value) as CarvingOptions["maxCandidateReadMiBPerFormat"],
-              )} options={[
-                { value: "256", label: t("carvingCandidateRead256") },
-                { value: "512", label: t("carvingCandidateRead512") },
-                { value: "1024", label: t("carvingCandidateRead1024") },
-              ]} />
-          </FormField>
-          <FormField label={t("carvingRetainedBudget")}>
-            <Select aria-label={t("carvingRetainedBudget")} value={String(maxCarvedRetainedMiB)} disabled={recovery.busy || !includeOrphaned}
-              onChange={(value) => setMaxCarvedRetainedMiB(Number(value) as CarvingOptions["maxRetainedMiB"])} options={[
-                { value: "128", label: t("carvingRetained128") },
-                { value: "256", label: t("carvingRetained256") },
-                { value: "512", label: t("carvingRetained512") },
-              ]} />
-          </FormField>
-        </CarvingBudgetControls>
-      </OrphanScanControls>
-      </Card>
-      <StepActions>
-        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
-          onClick={() => setActiveStep(1)}>← {t("back")}</Button>
-        <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy}
-          onClick={() => void runCatalogBuild()}>{recovery.busy ? t("scanInProgress") : t("startScan")}</Button>
-      </StepActions>
-      </>}
+      {activeStep === 2 && <ScanStep recovery={recovery} language={language} t={t}
+        includeOrphaned={includeOrphaned} setIncludeOrphaned={setIncludeOrphaned}
+        forceFreshValidation={forceFreshValidation} setForceFreshValidation={setForceFreshValidation}
+        scanBudgetGiB={scanBudgetGiB} setScanBudgetGiB={setScanBudgetGiB}
+        maxCarvedFiles={maxCarvedFiles} setMaxCarvedFiles={setMaxCarvedFiles}
+        maxCarvedRetainedMiB={maxCarvedRetainedMiB} setMaxCarvedRetainedMiB={setMaxCarvedRetainedMiB}
+        maxCandidateReadMiBPerFormat={maxCandidateReadMiBPerFormat}
+        setMaxCandidateReadMiBPerFormat={setMaxCandidateReadMiBPerFormat}
+        onBack={() => setActiveStep(1)} onStart={() => void runCatalogBuild()} />}
 
-      {catalogStepVisited && <div hidden={activeStep !== 3}>
-      <CatalogStats aria-label={t("foundFiles")}>
-        <CatalogStat><span>{t("catalogItems")}</span><strong>{(recovery.catalog?.recordCount ?? 0).toLocaleString(language)}</strong></CatalogStat>
-        <CatalogStat><span>{t("selectedItems")}</span><strong>{recovery.selectedIds.size.toLocaleString(language)}</strong></CatalogStat>
-        <CatalogStat><span>{t("fileTypesCount")}</span><strong>{(recovery.catalog?.availableExtensions.length ?? 0).toLocaleString(language)}</strong></CatalogStat>
-      </CatalogStats>
-      <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
-        <BrowserHeading>
-          <div><h2>{t("foundFiles")}</h2><p>{catalogSummary}</p></div>
-          <AuditActions>
-            {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
-            <SelectionActions>
-              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.selectAll}>{t("selectAll")}</Button>
-              <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog} onClick={recovery.clearSelection}>{t("clearSelection")}</Button>
-            </SelectionActions>
-            {(validation || contentCarving || lowConfidenceCarving
-              || recycleBinRecovery || usnJournalEvidence || ntfsLogFileEvidence) && <span ref={auditTriggerRef}>
-              <Button className="brand-button--ghost" variant="ghost" size="md"
-                aria-haspopup="dialog" aria-controls="disk-audit-overlay"
-                onClick={() => setAuditOpen(true)}>{t("diskAuditDetails")}</Button>
-            </span>}
-          </AuditActions>
-        </BrowserHeading>
-        {recovery.catalog && <SearchBox><Input type="search" aria-label={t("searchFilesAria")}
-          placeholder={t("searchFiles")} disabled={recovery.busy} value={recovery.searchQuery}
-          onChange={recovery.setSearchQuery} /></SearchBox>}
-        {!recovery.catalog ? <EmptyState title={t("emptyCatalog")} />
-          : visibleRoots?.length ? <>
-            {searchActive && recovery.searchingCatalog && <p role="status">{t("searchingCatalog")}</p>}
-            <RecoveryTree roots={visibleRoots}
-              childrenById={recovery.childrenById} expandedFolderIds={recovery.expandedFolderIds}
-              loadingFolderIds={recovery.loadingFolderIds} isSelected={recovery.isSelected}
-              onToggleFolder={toggleCatalogFolder}
-              onToggleSelection={recovery.toggleSelection} onPreview={previewCatalogFile}
-              language={language} />
-          </>
-            : searchActive && recovery.searchingCatalog ? <p role="status">{t("searchingCatalog")}</p>
-              : <EmptyState title={searchActive ? t("noMatches") : t("noFiles")} />}
-      </BrowserSection></Card>
-      <PreviewPane>
-        <Card size="sm" variant="flat" hasHeader title={t("preview")}>
-          <PreviewBody aria-live="polite">
-            {recovery.previewLoading ? <p>{t("previewLoading")}</p>
-              : recovery.preview?.available && recovery.preview.kind === "image" && recovery.preview.dataBase64 ? <>
-                <h3>{sanitizeDisplayText(recovery.preview.name ?? "")}</h3>
-                <img alt={sanitizeDisplayText(recovery.preview.name ?? t("preview"))}
-                  src={`data:${recovery.preview.mimeType};base64,${recovery.preview.dataBase64}`} />
-              </> : recovery.preview?.available && recovery.preview.kind === "pdf" && recovery.preview.dataBase64 ? <>
-                <h3>{sanitizeDisplayText(recovery.preview.name ?? "")}</h3>
-                <iframe title={sanitizeDisplayText(recovery.preview.name ?? t("preview"))}
-                  src={`data:${recovery.preview.mimeType};base64,${recovery.preview.dataBase64}`} />
-              </> : recovery.preview?.reason === "unsupported_format" ? <p>{t("previewUnsupported")}</p>
-                : recovery.preview?.reason === "too_large" ? <p>{t("previewTooLarge")}</p>
-                  : recovery.preview?.reason === "invalid_content" ? <p>{t("previewInvalid")}</p>
-                    : <p>{t("previewHint")}</p>}
-          </PreviewBody>
-        </Card>
-      </PreviewPane></BrowserFrame>
-      <StepActions>
-        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
-          onClick={() => setActiveStep(2)}>← {t("back")}</Button>
-        <Button className="brand-button--primary" variant="primary" size="md"
-          disabled={recovery.busy || !recovery.catalog || !recovery.selectedIds.size}
-          onClick={() => setActiveStep(4)}>{t("continue")} →</Button>
-      </StepActions>
-      </div>}
+      <CatalogStep recovery={recovery} language={language} t={t} visited={catalogStepVisited}
+        activeStep={activeStep} searchActive={searchActive} visibleRoots={visibleRoots}
+        catalogSummary={catalogSummary}
+        auditAvailable={Boolean(validation || contentCarving || lowConfidenceCarving
+          || recycleBinRecovery || usnJournalEvidence || ntfsLogFileEvidence)}
+        auditTriggerRef={auditTriggerRef}
+        onToggleFolder={toggleCatalogFolder} onPreviewFile={previewCatalogFile}
+        onOpenAudit={() => setAuditOpen(true)} onStepChange={setActiveStep} />
 
-      {activeStep === 4 && <>
-      <PageIntro><Eyebrow>{t("recoveryStep")}</Eyebrow><h1>{t("recoverSelected")}</h1><p>{t("chooseDestinationDescription")}</p></PageIntro>
-      <Card size="sm" variant="flat"><div><strong>{t("selectedItems")}: {recovery.selectedIds.size}</strong></div><DestinationRow>
-        <DestinationInput><FormField label={t("saveFiles")}><Input type="text" aria-label={t("saveFiles")} value={recovery.outputDirectory}
-          disabled={recovery.busy} placeholder={t("chooseFolderPlaceholder")}
-          onChange={recovery.setOutputDirectory} /></FormField></DestinationInput>
-        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy} onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
-        <InfoButton description={t(recovery.rawImage ? "rawDestinationNotice" : "physicalDestinationNotice")} label={t("moreInfo")} />
-      </DestinationRow></Card>
-      <StepActions>
-        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
-          onClick={() => setActiveStep(3)}>← {t("back")}</Button>
-        <Button className="brand-button--success" variant="success" size="md"
-          disabled={recovery.busy || !recovery.outputDirectory.trim() || !recovery.extensions.length}
-          onClick={() => void recovery.recover()}>{recovery.busy ? t("recovering") : t("recoverSelected")}</Button>
-      </StepActions>
-      </>}
+      {activeStep === 4 && <RecoveryStep recovery={recovery} language={language} t={t}
+        onBack={() => setActiveStep(3)} />}
       </WorkflowPanel>
-
       {recoveryResultsOpen && recovery.recoveryResult && <DiskAuditOverlay
         id="recovery-results-overlay"
         title={t("recoveryResults")}
