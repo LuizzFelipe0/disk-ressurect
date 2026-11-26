@@ -33,6 +33,7 @@ class PhysicalDisk:
     model: str
     size_bytes: int
     serial_number: str = ""
+    identity_size_bytes: int | None = None
 
     @property
     def display_name(self):
@@ -42,7 +43,10 @@ class PhysicalDisk:
 
     def as_storage_source(self, bytes_per_sector=512):
         serial = str(self.serial_number or "").strip().casefold()
-        identity = [str(self.model or "").strip().casefold(), int(self.size_bytes), serial]
+        identity_size = self.identity_size_bytes
+        if identity_size is None:
+            identity_size = self.size_bytes
+        identity = [str(self.model or "").strip().casefold(), int(identity_size), serial]
         if not serial:
             identity.append(int(self.number))
         digest = hashlib.sha256(

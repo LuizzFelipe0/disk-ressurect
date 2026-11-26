@@ -19,6 +19,7 @@ from infrastructure.filesystems.user_ownership import (
     open_pkexec_safe_directory,
     set_pkexec_user_ownership_fd,
 )
+from infrastructure.disk.output_safety import volume_disk_numbers
 
 
 class JsonDeepScanRepository:
@@ -27,8 +28,9 @@ class JsonDeepScanRepository:
     VERSION = 2
     MAX_VALIDATION_SNAPSHOT_BYTES = 32 * 1024 * 1024
 
-    def __init__(self, path=None):
+    def __init__(self, path=None, disk_mapper=volume_disk_numbers):
         self.path = Path(path) if path else None
+        self.disk_mapper = disk_mapper
         self._memory = {}
         self._carving_memory = {}
         self._validation_memory = {}
@@ -36,9 +38,12 @@ class JsonDeepScanRepository:
     @staticmethod
     def disk_key(disk):
         serial = str(getattr(disk, "serial_number", "") or "").strip().casefold()
+        identity_size = getattr(disk, "identity_size_bytes", None)
+        if identity_size is None:
+            identity_size = disk.size_bytes
         identity = [
             str(getattr(disk, "model", "") or "").strip().casefold(),
-            int(disk.size_bytes),
+            int(identity_size),
             serial,
         ]
         # Without a serial number, include the current device number to avoid
@@ -49,7 +54,8 @@ class JsonDeepScanRepository:
         return digest.hexdigest()
 
     def load(self, disk):
-        entry = self._entries().get(self.disk_key(disk))
+        key = self.disk_key(disk)
+        entry = self._memory.get(key) if key in self._memory else self._entries().get(key)
         if not isinstance(entry, dict):
             return None
         scanned_at = entry.get("scannedAt")
@@ -73,7 +79,7 @@ class JsonDeepScanRepository:
             "volumes": [self._serialize_volume(volume) for volume in volumes],
             "checkpoint": self._serialize_checkpoint(checkpoint),
         }
-        if self.path is None:
+        if not self._can_persist_for(disk):
             self._memory[key] = entry
             return CachedDeepScan(scanned_at=scanned_at, volumes=tuple(volumes), checkpoint=checkpoint)
 
@@ -87,7 +93,7 @@ class JsonDeepScanRepository:
         """Load the cursor only for the same disk and volume geometry."""
         disk_key = self.disk_key(disk)
         volume_key = self._carving_volume_key(volume)
-        if self.path is None:
+        if self.path is None or not self._can_persist_for(disk):
             data = self._carving_memory.get((disk_key, volume_key))
         else:
             data = self._read_document().get("carving", {}).get(disk_key, {}).get(volume_key)
@@ -105,7 +111,7 @@ class JsonDeepScanRepository:
             raise TypeError("checkpoint must be a CarvingCheckpoint or None")
         disk_key = self.disk_key(disk)
         volume_key = self._carving_volume_key(volume)
-        if self.path is None:
+        if self.path is None or not self._can_persist_for(disk):
             key = (disk_key, volume_key)
             if checkpoint is None:
                 self._carving_memory.pop(key, None)
@@ -129,7 +135,7 @@ class JsonDeepScanRepository:
     def load_validation_snapshot(self, disk):
         """Load the last bounded full-disk scan snapshot for this disk identity."""
         key = self.disk_key(disk)
-        if self.path is None:
+        if self.path is None or key in self._validation_memory:
             snapshot = self._validation_memory.get(key)
         else:
             snapshot = self._read_document().get("validation", {}).get(key)
@@ -170,7 +176,7 @@ class JsonDeepScanRepository:
         if encoded_size > self.MAX_VALIDATION_SNAPSHOT_BYTES:
             self.invalidate_validation_snapshot(disk)
             return None
-        if self.path is None:
+        if self.path is None or not self._can_persist_for(disk):
             self._validation_memory[key] = snapshot
             return snapshot
         document = self._read_document()
@@ -184,6 +190,11 @@ class JsonDeepScanRepository:
         key = self.disk_key(disk)
         if self.path is None:
             self._validation_memory.pop(key, None)
+            return
+        if not self._can_persist_for(disk):
+            # Keep a session-local tombstone so the unchanged on-disk cache is
+            # not reused after its evidence has been rejected.
+            self._validation_memory[key] = None
             return
         document = self._read_document()
         validation = document.setdefault("validation", {})
@@ -285,6 +296,15 @@ class JsonDeepScanRepository:
         if self.path is None:
             return self._memory
         return self._read_document()["disks"]
+
+    def _can_persist_for(self, disk):
+        """Never write scan state onto the physical source or an unknown device."""
+        if self.path is None or int(getattr(disk, "number", -1)) < 0:
+            return False
+        try:
+            return int(disk.number) not in self.disk_mapper(self.path.parent)
+        except (OSError, ValueError, TypeError):
+            return False
 
     def _read_document(self):
         if self.path is None:

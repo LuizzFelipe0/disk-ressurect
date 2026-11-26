@@ -131,11 +131,59 @@ class DiskInventoryTests(unittest.TestCase):
             stderr = ""
             stdout = '[{"number":2,"model":"Archive","size":2000},{"number":0,"model":"Boot","size":1000}]'
 
-        enumerator = WindowsDiskEnumerator(runner=lambda *args, **kwargs: Result())
+        enumerator = WindowsDiskEnumerator(
+            runner=lambda *args, **kwargs: Result(),
+            raw_disk_factory=lambda number: type(
+                "Reader", (), {"size_bytes": 1000 if number == 0 else 2000, "close": lambda self: None}
+            )(),
+        )
         with patch("infrastructure.disk.windows.enumeration.os.name", "nt"):
             disks = enumerator.list_disks()
         self.assertEqual([disk.number for disk in disks], [0, 2])
         self.assertEqual(disks[0].model, "Boot")
+        self.assertEqual(disks[0].size_bytes, 1000)
+        self.assertEqual(disks[0].identity_size_bytes, 1000)
+
+    def test_enumerator_uses_raw_capacity_but_keeps_inventory_capacity_for_identity(self):
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = '[{"number":0,"model":"Boot","size":1000,"serial":"S-1"}]'
+
+        class RawReader:
+            size_bytes = 1008
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        reader = RawReader()
+        enumerator = WindowsDiskEnumerator(
+            runner=lambda *args, **kwargs: Result(),
+            raw_disk_factory=lambda _number: reader,
+        )
+        with patch("infrastructure.disk.windows.enumeration.os.name", "nt"):
+            disk = enumerator.list_disks()[0]
+
+        self.assertEqual(disk.size_bytes, 1008)
+        self.assertEqual(disk.identity_size_bytes, 1000)
+        self.assertTrue(reader.closed)
+
+    def test_enumerator_falls_back_to_inventory_capacity_when_raw_reader_is_unavailable(self):
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = '[{"number":0,"model":"Boot","size":1000}]'
+
+        enumerator = WindowsDiskEnumerator(
+            runner=lambda *args, **kwargs: Result(),
+            raw_disk_factory=lambda _number: (_ for _ in ()).throw(PermissionError("elevation required")),
+        )
+        with patch("infrastructure.disk.windows.enumeration.os.name", "nt"):
+            disk = enumerator.list_disks()[0]
+
+        self.assertEqual(disk.size_bytes, 1000)
+        self.assertEqual(disk.identity_size_bytes, 1000)
 
     def test_reads_mbr_partition_and_discovers_ntfs_mft_extent(self):
         disk = ntfs_disk(4)

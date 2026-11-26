@@ -44,6 +44,22 @@ class StorageFactoryTests(unittest.TestCase):
         )
         self.assertEqual(source.locator, "2")
 
+    def test_raw_geometry_does_not_change_source_or_cache_identity(self):
+        inventory_disk = PhysicalDisk(2, "Model A", 4096, "SERIAL")
+        geometry_disk = PhysicalDisk(
+            2, "Model A", 8192, "SERIAL", identity_size_bytes=4096,
+        )
+
+        self.assertEqual(
+            inventory_disk.as_storage_source().source_id,
+            geometry_disk.as_storage_source().source_id,
+        )
+        self.assertEqual(
+            JsonDeepScanRepository.disk_key(inventory_disk),
+            JsonDeepScanRepository.disk_key(geometry_disk),
+        )
+        self.assertEqual(geometry_disk.as_storage_source().size_bytes, 8192)
+
     def test_factory_selects_the_physical_reader_by_source_type(self):
         disk = PhysicalDisk(2, "Model A", 4096, "SERIAL")
         source = disk.as_storage_source()

@@ -19,8 +19,9 @@ class WindowsDiskEnumerator:
         "ConvertTo-Json -Compress"
     )
 
-    def __init__(self, runner: Callable = subprocess.run):
+    def __init__(self, runner: Callable = subprocess.run, raw_disk_factory=None):
         self.runner = runner
+        self.raw_disk_factory = raw_disk_factory
 
     def list_disks(self):
         if os.name != "nt":
@@ -43,6 +44,30 @@ class WindowsDiskEnumerator:
                 continue
             if number < 0 or size <= 0:
                 continue
-            disks.append(PhysicalDisk(number, str(item.get("model") or "Unknown disk").strip(), size,
-                str(item.get("serial") or "").strip()))
+            accessible_size = self._read_accessible_size(number)
+            disks.append(PhysicalDisk(
+                number,
+                str(item.get("model") or "Unknown disk").strip(),
+                accessible_size if accessible_size is not None else size,
+                str(item.get("serial") or "").strip(),
+                identity_size_bytes=size,
+            ))
         return sorted(disks, key=lambda disk: disk.number)
+
+    def _read_accessible_size(self, number):
+        """Use the raw reader's geometry when available; retain WMI as identity metadata."""
+        reader_factory = self.raw_disk_factory
+        if reader_factory is None:
+            from infrastructure.disk.windows.reader import RawDisk
+            reader_factory = RawDisk
+        try:
+            reader = reader_factory(number)
+        except OSError:
+            # Disk inventory must remain available before elevation. Once the
+            # reader is accessible, its geometry becomes the canonical capacity.
+            return None
+        try:
+            size = int(getattr(reader, "size_bytes", getattr(reader, "size", 0)))
+            return size if size > 0 else None
+        finally:
+            reader.close()
