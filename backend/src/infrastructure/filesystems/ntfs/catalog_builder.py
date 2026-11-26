@@ -79,6 +79,15 @@ class CatalogBuilder:
             else NTFSContentReferenceStore()
         )
 
+    @staticmethod
+    def carving_checkpoint_profile():
+        """Expose the carver semantics used to invalidate session checkpoints."""
+        return {
+            "signatureProfile": RawContentCarver._scan_profile(),
+            "maxFileBytes": RawContentCarver.DEFAULT_MAX_FILE_BYTES,
+            "maxDecodedPngBytes": RawContentCarver.DEFAULT_MAX_DECODED_PNG_BYTES,
+        }
+
     def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
               precomputed_orphans=None, precomputed_carving_ranges=None,
               carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
@@ -429,6 +438,7 @@ class CatalogBuilder:
             "rangeCount": len(ranges),
             "rangeCollectionTruncated": bool(ranges_truncated),
             "confidence": "trusted_free_space",
+            "stopReason": self._carving_stop_reason(carving, ranges_truncated),
         }
         low_confidence_summary = None
         if uncertain_ranges is not None:
@@ -719,7 +729,25 @@ class CatalogBuilder:
             "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
             "rangeCount": len(ranges),
             "rangeCollectionTruncated": bool(range_collection_truncated),
+            "stopReason": CatalogBuilder._carving_stop_reason(
+                carving, range_collection_truncated,
+            ),
         }
+
+    @staticmethod
+    def _carving_stop_reason(carving, ranges_truncated):
+        """Separate exhausted budgets from complete or policy-truncated scopes."""
+        per_format_candidate_limit = any(
+            item.candidate_limit_reached for item in carving.format_stats
+        )
+        if (carving.candidate_limit_reached or carving.file_count_limit_reached
+                or carving.retained_bytes_limit_reached or per_format_candidate_limit):
+            return "resource_limit"
+        if carving.scan_limit_reached:
+            return "budget_exhausted"
+        if ranges_truncated:
+            return "range_collection_truncated"
+        return "scope_complete"
 
     @staticmethod
     def search(snapshot, query, limit=500):

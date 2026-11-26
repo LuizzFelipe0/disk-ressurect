@@ -40,6 +40,7 @@ class RecoveryCommandHandler:
             deep_scan_service,
             validation_service,
             catalog_builder,
+            session=self.session,
         )
 
     def handle(self, message, emit):
