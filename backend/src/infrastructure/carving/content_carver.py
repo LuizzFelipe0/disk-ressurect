@@ -168,6 +168,10 @@ class RawContentCarver:
         *,
         progress_callback: Callable[[int, int], None] | None = None,
         resume_checkpoint: CarvingCheckpoint | None = None,
+        retained_candidates: Iterable | None = None,
+        retained_candidate_data: dict | None = None,
+        candidate_restore_ranges: Iterable[tuple[int, int]] | None = None,
+        require_all_retained_candidates: bool = False,
         checkpoint_callback: Callable[[CarvingCheckpoint | None], None] | None = None,
         ranges_truncated: bool = False,
     ) -> ContentCarveResult:
@@ -209,10 +213,24 @@ class RawContentCarver:
         files: list[CarvedContent] = []
         seen_content: set[bytes] = set()
         seen_offsets: set[tuple[str, int]] = set()
-        if resume_checkpoint is not None:
+        if retained_candidates is not None:
+            candidate_references = tuple(retained_candidates)
+        elif resume_checkpoint is not None:
+            candidate_references = resume_checkpoint.candidates
+        else:
+            candidate_references = ()
+        if candidate_references:
             files, candidate_restore_bytes_read = self._restore_candidates(
-                resume_checkpoint.candidates, merged_ranges,
+                candidate_references,
+                self._merge_ranges(candidate_restore_ranges, disk_size)
+                if candidate_restore_ranges is not None else merged_ranges,
+                retained_candidate_data,
             )
+            if require_all_retained_candidates and len(files) != len(candidate_references):
+                raise OSError(
+                    "A committed raw candidate failed source revalidation; "
+                    "the previous catalog generation was preserved."
+                )
             retained_bytes = sum(len(item.data) for item in files)
             seen_content.update(hashlib.sha256(item.data).digest() for item in files)
             seen_offsets.update((item.extension, item.offset) for item in files)
@@ -447,7 +465,7 @@ class RawContentCarver:
             cumulative_bytes_scanned + completed,
         )
 
-    def _restore_candidates(self, references, ranges):
+    def _restore_candidates(self, references, ranges, retained_candidate_data=None):
         restored = []
         bytes_read_total = 0
         for reference in references:
@@ -469,6 +487,12 @@ class RawContentCarver:
             bytes_read_total += bytes_read
             if (candidate is not None and len(candidate) == reference.size_bytes
                     and hashlib.sha256(candidate).hexdigest() == reference.sha256):
+                retained_data = (retained_candidate_data or {}).get(
+                    (reference.offset, reference.sha256),
+                )
+                if (retained_data is not None and len(retained_data) == reference.size_bytes
+                        and hashlib.sha256(retained_data).hexdigest() == reference.sha256):
+                    candidate = retained_data
                 restored.append(CarvedContent(reference.offset, reference.extension, candidate))
         return restored, bytes_read_total
 

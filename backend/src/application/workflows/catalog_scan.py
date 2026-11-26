@@ -110,10 +110,13 @@ class CatalogScanWorkflow:
         checkpoint_scope = (
             self.session.raw_carving_operation() if raw_checkpointing else nullcontext()
         )
-        if self.session is not None and not raw_checkpointing:
-            self.session.clear_completed_raw_catalog()
-
         with checkpoint_scope:
+            raw_candidate_references = None
+            raw_candidate_data = None
+            raw_candidate_locations = None
+            raw_catalog_snapshot = None
+            raw_session_candidate_limit = None
+            raw_session_retained_byte_limit = None
             if raw_checkpointing:
                 carving_profile = self.catalog_builder.carving_checkpoint_profile()
                 checkpoint_owner = self._raw_checkpoint_owner(volume)
@@ -121,40 +124,42 @@ class CatalogScanWorkflow:
                     carving_source, volume, precomputed_carving_ranges,
                     carving_ranges_truncated, carving_options, carving_profile,
                 )
-                completed_snapshot = self.session.get_completed_raw_catalog(
-                    checkpoint_identity,
+                raw_catalog_snapshot = self.session.get_raw_catalog(
+                    checkpoint_owner, checkpoint_identity,
                 )
-                if completed_snapshot is not None:
-                    return CatalogScanOutcome(completed_snapshot, validation_summary)
+                if raw_catalog_snapshot is not None:
+                    stop_reason = (raw_catalog_snapshot.content_carving_summary or {}).get(
+                        "stopReason",
+                    )
+                    if stop_reason in {"scope_complete", "session_limit", "resource_limit"}:
+                        return CatalogScanOutcome(raw_catalog_snapshot, validation_summary)
+                    raw_candidate_references, raw_candidate_data, raw_candidate_locations = (
+                        self.catalog_builder.raw_candidate_state(raw_catalog_snapshot)
+                    )
 
                 carving_checkpoint = self.session.load_raw_carving_checkpoint(
                     checkpoint_owner, checkpoint_identity,
                 )
                 latest_carving_checkpoint = carving_checkpoint
-                last_persisted_bytes = (
-                    carving_checkpoint.bytes_scanned if carving_checkpoint is not None else 0
+                remaining_candidates, remaining_retained_bytes = (
+                    self.session.raw_catalog_capacity(checkpoint_owner)
+                )
+                configured_candidate_limit = int(getattr(carving_options, "max_files", 16384))
+                raw_session_candidate_limit = min(
+                    configured_candidate_limit,
+                    remaining_candidates,
+                )
+                configured_retained_bytes = int(getattr(
+                    carving_options, "max_retained_mib", 128,
+                )) * 1024**2
+                raw_session_retained_byte_limit = min(
+                    configured_retained_bytes,
+                    remaining_retained_bytes,
                 )
 
                 def persist_raw_checkpoint(checkpoint, force=False):
-                    nonlocal latest_carving_checkpoint, last_persisted_bytes
-                    if checkpoint is None:
-                        self.session.save_raw_carving_checkpoint(
-                            checkpoint_owner, checkpoint_identity, None,
-                        )
-                        latest_carving_checkpoint = None
-                        last_persisted_bytes = 0
-                        return
-
-                    self.session.validate_raw_carving_checkpoint_capacity(
-                        checkpoint_owner, checkpoint_identity, checkpoint,
-                    )
+                    nonlocal latest_carving_checkpoint
                     latest_carving_checkpoint = checkpoint
-                    if (force or checkpoint.bytes_scanned - last_persisted_bytes
-                            >= self.CHECKPOINT_INTERVAL_BYTES):
-                        self.session.save_raw_carving_checkpoint(
-                            checkpoint_owner, checkpoint_identity, checkpoint,
-                        )
-                        last_persisted_bytes = checkpoint.bytes_scanned
 
                 carving_checkpoint_callback = persist_raw_checkpoint
             elif (include_orphaned and precomputed_carving_ranges is not None
@@ -187,19 +192,37 @@ class CatalogScanWorkflow:
 
             try:
                 if include_orphaned:
+                    build_options = {
+                        "include_orphaned": True,
+                        "precomputed_orphans": precomputed_orphans,
+                        "precomputed_carving_ranges": precomputed_carving_ranges,
+                        "carving_ranges_truncated": carving_ranges_truncated,
+                        "precomputed_uncertain_carving_ranges": (
+                            precomputed_uncertain_carving_ranges
+                        ),
+                        "uncertain_carving_ranges_truncated": (
+                            uncertain_carving_ranges_truncated
+                        ),
+                        "carving_options": carving_options,
+                        "carving_checkpoint": carving_checkpoint,
+                        "carving_checkpoint_callback": carving_checkpoint_callback,
+                        "phase_callback": phase_callback,
+                    }
+                    if raw_checkpointing:
+                        build_options.update({
+                            "raw_candidate_references": raw_candidate_references,
+                            "raw_session_candidate_limit": raw_session_candidate_limit,
+                            "raw_session_retained_byte_limit": (
+                                raw_session_retained_byte_limit
+                            ),
+                            "raw_candidate_data": raw_candidate_data,
+                            "raw_candidate_locations": raw_candidate_locations,
+                            "defer_content_reference_commit": True,
+                        })
                     snapshot = self.catalog_builder.build(
                         volume,
                         progress_callback,
-                        include_orphaned=True,
-                        precomputed_orphans=precomputed_orphans,
-                        precomputed_carving_ranges=precomputed_carving_ranges,
-                        carving_ranges_truncated=carving_ranges_truncated,
-                        precomputed_uncertain_carving_ranges=precomputed_uncertain_carving_ranges,
-                        uncertain_carving_ranges_truncated=uncertain_carving_ranges_truncated,
-                        carving_options=carving_options,
-                        carving_checkpoint=carving_checkpoint,
-                        carving_checkpoint_callback=carving_checkpoint_callback,
-                        phase_callback=phase_callback,
+                        **build_options,
                     )
                 else:
                     snapshot = self.catalog_builder.build(
@@ -208,30 +231,41 @@ class CatalogScanWorkflow:
                         phase_callback=phase_callback,
                     )
             except Exception:
+                if raw_checkpointing:
+                    self.catalog_builder.content_reference_store.abort_catalog()
+                else:
+                    self._flush_latest_checkpoint(
+                        latest_carving_checkpoint,
+                        carving_checkpoint_callback,
+                    )
+                raise
+
+            if raw_checkpointing:
+                try:
+                    self.session.commit_raw_catalog_generation(
+                        checkpoint_owner,
+                        checkpoint_identity,
+                        snapshot,
+                        latest_carving_checkpoint,
+                        self.catalog_builder.content_reference_store,
+                    )
+                except Exception:
+                    self.catalog_builder.content_reference_store.abort_catalog()
+                    raise
+            else:
                 self._flush_latest_checkpoint(
                     latest_carving_checkpoint,
                     carving_checkpoint_callback,
                 )
-                raise
-
-            self._flush_latest_checkpoint(
-                latest_carving_checkpoint,
-                carving_checkpoint_callback,
-            )
-            if (raw_checkpointing
-                    and (snapshot.content_carving_summary or {}).get("stopReason")
-                    == "scope_complete"):
-                self.session.save_completed_raw_catalog(checkpoint_identity, snapshot)
             return CatalogScanOutcome(snapshot, validation_summary)
 
-    @classmethod
-    def _raw_checkpoint_identity(cls, source, volume, ranges, ranges_truncated,
+    def _raw_checkpoint_identity(self, source, volume, ranges, ranges_truncated,
                                  carving_options, carving_profile):
         candidate_read_mib = int(getattr(
             carving_options, "max_candidate_read_mib_per_format", 256,
         ))
         payload = {
-            "version": cls.RAW_CHECKPOINT_IDENTITY_VERSION,
+            "version": self.RAW_CHECKPOINT_IDENTITY_VERSION,
             "sourceId": source.source_id,
             "sourceSize": int(source.size_bytes),
             "sourceBytesPerSector": int(source.bytes_per_sector),
@@ -255,6 +289,12 @@ class CatalogScanWorkflow:
                 )) * 1024**2,
                 "maxCandidateReadBytesPerFormat": candidate_read_mib * 1024**2,
                 "maxCandidateReadBytes": candidate_read_mib * 3 * 1024**2,
+                "sessionMaxCandidates": int(getattr(
+                    self.session, "MAX_RAW_SESSION_CANDIDATES", 16384,
+                )),
+                "sessionMaxRetainedBytes": int(getattr(
+                    self.session, "MAX_RAW_SESSION_RETAINED_BYTES", 512 * 1024**2,
+                )),
             },
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")

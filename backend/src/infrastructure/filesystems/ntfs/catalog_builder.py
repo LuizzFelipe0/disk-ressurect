@@ -11,6 +11,7 @@ from modules.catalog.entities import RecoveryCatalogSnapshot
 from modules.disk.service import DiskReaderFactory
 from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
 from infrastructure.carving.content_carver import RawContentCarver
+from modules.deep_scan.entities import CarvedCandidateReference
 
 
 from infrastructure.filesystems.ntfs.allocation.cluster_allocation import ClusterAllocationEvidence
@@ -88,11 +89,63 @@ class CatalogBuilder:
             "maxDecodedPngBytes": RawContentCarver.DEFAULT_MAX_DECODED_PNG_BYTES,
         }
 
+    def raw_candidate_state(self, snapshot):
+        """Build a transient resume manifest from the committed catalog."""
+        references = []
+        retained_data = {}
+        locations = {}
+        for node in snapshot.catalog.nodes.values():
+            candidate = node.candidate
+            path = str(node.full_path).replace("\\", "/").casefold()
+            if (candidate is None or "content_carving" not in candidate.discovery_methods
+                    or not str(node.name).startswith("Carved_")
+                    or "lost_files_deepscan/" not in path):
+                continue
+            stem, extension = os.path.splitext(node.name)
+            encoded_offset = stem.removeprefix("Carved_")
+            if (not encoded_offset
+                    or any(character not in "0123456789abcdefABCDEF"
+                           for character in encoded_offset)):
+                raise ValueError("Committed carved candidate has an invalid offset identity")
+            content = candidate.content_reference
+            if content is None or content.sha256 is None:
+                raise ValueError("Committed carved candidate has no integrity reference")
+            offset = int(encoded_offset, 16)
+            _, _, retained_node = self.content_reference_store.resolve(content.reference_id)
+            record = getattr(retained_node, "record", None)
+            data = getattr(record, "resident_data", None)
+            if (data is None or len(data) != content.size_bytes
+                    or hashlib.sha256(data).hexdigest() != content.sha256):
+                raise ValueError("Committed carved candidate data is unavailable or changed")
+            key = (offset, content.sha256)
+            retained_data[key] = data
+            references.append(CarvedCandidateReference(
+                offset=offset,
+                extension=extension.casefold(),
+                size_bytes=int(content.size_bytes),
+                sha256=content.sha256,
+            ))
+            path_parts = tuple(
+                part for part in str(node.full_path).replace("\\", "/").split("/") if part
+            )
+            if path_parts and path_parts[-1].casefold() == node.name.casefold():
+                path_parts = path_parts[:-1]
+            locations[key] = (
+                path_parts,
+                node.properties.get("clusterAllocationStatus"),
+            )
+        return tuple(references), retained_data, locations
+
     def build(self, volume, progress_callback=None, include_orphaned=False, phase_callback=None,
               precomputed_orphans=None, precomputed_carving_ranges=None,
               carving_ranges_truncated=False, precomputed_uncertain_carving_ranges=None,
               uncertain_carving_ranges_truncated=None, carving_options=None,
-              carving_checkpoint=None, carving_checkpoint_callback=None):
+              carving_checkpoint=None, carving_checkpoint_callback=None,
+              raw_candidate_references=None, raw_session_candidate_limit=None,
+              raw_session_retained_byte_limit=None,
+              raw_candidate_data=None,
+              raw_candidate_locations=None,
+              defer_content_reference_commit=False):
         source = None
         if getattr(volume, "source_id", None) and self.source_factory is not None:
             source = self.source_factory(volume.source_id)
@@ -194,6 +247,11 @@ class CatalogBuilder:
                             precomputed_uncertain_carving_ranges,
                             uncertain_carving_ranges_truncated,
                             phase_callback,
+                            raw_candidate_references,
+                            raw_session_candidate_limit,
+                            raw_session_retained_byte_limit,
+                            raw_candidate_data,
+                            raw_candidate_locations,
                         )
                     )
                 nodes = builder.nodes
@@ -215,7 +273,12 @@ class CatalogBuilder:
                 ntfs_log_file_summary=ntfs_log_file_summary,
             )
             builder.release_source_tree()
+            if not defer_content_reference_commit:
+                self.content_reference_store.commit_catalog()
             return snapshot
+        except Exception:
+            self.content_reference_store.abort_catalog()
+            raise
         finally:
             disk.close()
 
@@ -381,7 +444,9 @@ class CatalogBuilder:
     def _scan_content_carving(
         self, disk, builder, ranges, ranges_truncated, options, checkpoint,
         checkpoint_callback, uncertain_ranges, uncertain_ranges_truncated,
-        phase_callback,
+        phase_callback, raw_candidate_references=None, raw_session_candidate_limit=None,
+        raw_session_retained_byte_limit=None, raw_candidate_data=None,
+        raw_candidate_locations=None,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -392,21 +457,45 @@ class CatalogBuilder:
             )
             carver_options = {
                 "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
-                "max_files": int(options.max_files),
+                "max_files": min(
+                    int(options.max_files), int(raw_session_candidate_limit),
+                ) if raw_session_candidate_limit is not None else int(options.max_files),
                 "max_total_file_bytes": int(
                     getattr(options, "max_retained_mib", 128)
                 ) * 1024**2,
                 "max_candidate_read_bytes_per_format": candidate_read_bytes_per_format,
                 "max_candidate_read_bytes": candidate_read_bytes_per_format * 3,
             }
+        if raw_session_retained_byte_limit is not None:
+            carver_options["max_total_file_bytes"] = min(
+                carver_options.get("max_total_file_bytes", 128 * 1024**2),
+                int(raw_session_retained_byte_limit),
+            )
         carving = RawContentCarver(disk, **carver_options).scan(
             ranges,
             progress_callback=self._phase_progress(phase_callback, "content_carving"),
             resume_checkpoint=checkpoint,
+            retained_candidates=raw_candidate_references,
+            retained_candidate_data=raw_candidate_data,
+            candidate_restore_ranges=(
+                tuple(ranges) + tuple(
+                    interval
+                    for intervals in (uncertain_ranges or {}).values()
+                    for interval in intervals
+                ) if raw_candidate_references is not None else None
+            ),
+            require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
             ranges_truncated=bool(ranges_truncated),
         )
-        candidate_catalog = CarvedCandidateCatalog(builder, disk.size)
+        candidate_catalog = CarvedCandidateCatalog(
+            builder,
+            disk.size,
+            max_files=raw_session_candidate_limit,
+            max_retained_bytes=raw_session_retained_byte_limit,
+            retained_candidate_data=raw_candidate_data,
+            retained_candidate_locations=raw_candidate_locations,
+        )
         candidate_catalog.add(carving.files, ("Lost_Files_DeepScan", "ContentCarving"))
         budget_gib = options.scan_budget_gib if options is not None else 1
         retained_budget_mib = (
@@ -438,7 +527,16 @@ class CatalogBuilder:
             "rangeCount": len(ranges),
             "rangeCollectionTruncated": bool(ranges_truncated),
             "confidence": "trusted_free_space",
-            "stopReason": self._carving_stop_reason(carving, ranges_truncated),
+            "stopReason": self._carving_stop_reason(
+                carving, ranges_truncated,
+                session_limit_reached=(candidate_catalog.session_limit_reached
+                    or (carving.file_count_limit_reached
+                        and raw_session_candidate_limit is not None
+                        and carving.max_files == int(raw_session_candidate_limit))
+                    or (carving.retained_bytes_limit_reached
+                        and raw_session_retained_byte_limit is not None
+                        and carving.max_total_file_bytes == int(raw_session_retained_byte_limit))),
+            ),
         }
         low_confidence_summary = None
         if uncertain_ranges is not None:
@@ -449,6 +547,9 @@ class CatalogBuilder:
                 uncertain_ranges_truncated or {},
                 phase_callback,
             )
+            if candidate_catalog.session_limit_reached:
+                trusted_summary["stopReason"] = "session_limit"
+                trusted_summary["sessionLimitReached"] = True
         return trusted_summary, low_confidence_summary
 
     def _scan_low_confidence_ranges(
@@ -497,6 +598,9 @@ class CatalogBuilder:
             summary[key]["rangeCollectionCapBytes"] = (
                 ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
             )
+            if candidate_catalog.session_limit_reached:
+                summary[key]["stopReason"] = "session_limit"
+                summary[key]["sessionLimitReached"] = True
         return summary
 
     @staticmethod
@@ -735,8 +839,10 @@ class CatalogBuilder:
         }
 
     @staticmethod
-    def _carving_stop_reason(carving, ranges_truncated):
-        """Separate exhausted budgets from complete or policy-truncated scopes."""
+    def _carving_stop_reason(carving, ranges_truncated, session_limit_reached=False):
+        """Separate session caps, resource caps, exhausted budgets and completion."""
+        if session_limit_reached:
+            return "session_limit"
         per_format_candidate_limit = any(
             item.candidate_limit_reached for item in carving.format_stats
         )
@@ -767,11 +873,21 @@ class CatalogBuilder:
 class CarvedCandidateCatalog:
     """Keep carving deduplication and synthetic-node construction in one place."""
 
-    def __init__(self, builder, disk_size):
+    def __init__(self, builder, disk_size, max_files=None, max_retained_bytes=None,
+                 retained_candidate_data=None, retained_candidate_locations=None):
         self.builder = builder
         self.disk_size = int(disk_size)
+        self.max_files = None if max_files is None else max(0, int(max_files))
+        self.max_retained_bytes = (
+            None if max_retained_bytes is None else max(0, int(max_retained_bytes))
+        )
+        self.retained_candidate_data = retained_candidate_data or {}
+        self.retained_candidate_locations = retained_candidate_locations or {}
         self.content_digests = set()
         self.physical_offsets = set()
+        self.added_count = 0
+        self.retained_bytes = 0
+        self.session_limit_reached = False
 
     def add(self, candidates, path_parts, allocation_status=None):
         added = 0
@@ -780,8 +896,22 @@ class CarvedCandidateCatalog:
             offset = int(candidate.offset)
             if digest in self.content_digests or offset in self.physical_offsets:
                 continue
+            content = self.retained_candidate_data.get((offset, digest.hex()), candidate.data)
+            if (self.max_files is not None and self.added_count >= self.max_files
+                    or self.max_retained_bytes is not None
+                    and self.retained_bytes + len(content) > self.max_retained_bytes):
+                self.session_limit_reached = True
+                continue
             self.content_digests.add(digest)
             self.physical_offsets.add(offset)
+
+            retained_location = self.retained_candidate_locations.get(
+                (offset, digest.hex()),
+            )
+            candidate_path_parts, candidate_allocation_status = (
+                retained_location if retained_location is not None
+                else (path_parts, allocation_status)
+            )
 
             synthetic_id = -(self.disk_size + offset + 1)
             while synthetic_id in self.builder.nodes:
@@ -790,8 +920,8 @@ class CarvedCandidateCatalog:
                 index=synthetic_id,
                 offset=offset,
                 name=f"Carved_{offset:016X}{candidate.extension}",
-                resident_data=candidate.data,
-                cluster_allocation_status=allocation_status or "free",
+                resident_data=content,
+                cluster_allocation_status=candidate_allocation_status or "free",
                 catalog_content_validation_reason=(
                     "Contiguous format structure passed validation; allocation "
                     "is unknown or may describe current/reused data"
@@ -800,10 +930,12 @@ class CarvedCandidateCatalog:
                 ),
             )
             node = FileNode(record, is_orphaned=True, is_content_carved=True)
-            node.full_path = os.path.join(*path_parts, record.name)
+            node.full_path = os.path.join(*candidate_path_parts, record.name)
             self.builder.nodes[synthetic_id] = node
             self.builder.root_nodes.append(node)
             added += 1
+            self.added_count += 1
+            self.retained_bytes += len(content)
         return added
 
 

@@ -107,10 +107,12 @@ class SyntheticRawSourceFactory:
 
 
 class SyntheticValidationService:
-    def __init__(self, source_factory, ranges=None, *, ranges_truncated=False):
+    def __init__(self, source_factory, ranges=None, *, ranges_truncated=False,
+                 uncertain_ranges=None):
         self.source_factory = source_factory
         self.ranges = tuple(ranges or ((0, len(source_factory.data)),))
         self.ranges_truncated = ranges_truncated
+        self.uncertain_ranges = uncertain_ranges
         self.validation_calls = 0
         self.validation_event = None
 
@@ -120,7 +122,7 @@ class SyntheticValidationService:
         self.validation_calls += 1
         if self.validation_event is not None:
             self.validation_event.set()
-        return {
+        report = {
             "orphan_records_by_partition": {retain_orphans_for_offset: {}},
             "content_carving_ranges_by_partition": {
                 retain_orphans_for_offset: self.ranges,
@@ -129,6 +131,11 @@ class SyntheticValidationService:
                 retain_orphans_for_offset: self.ranges_truncated,
             },
         }
+        if self.uncertain_ranges is not None:
+            report["uncertain_content_carving_ranges_by_partition"] = {
+                retain_orphans_for_offset: self.uncertain_ranges,
+            }
+        return report
 
     @staticmethod
     def summary(_report):
@@ -189,10 +196,11 @@ def make_volume(source_id, size=IMAGE_SIZE, *, partition_offset=0, partition_num
 
 class RawCatalogHarness:
     def __init__(self, image_data, *, source_id="raw-image:synthetic-v1", ranges=None,
-                 ranges_truncated=False, session=None):
+                 ranges_truncated=False, uncertain_ranges=None, session=None):
         self.source_factory = SyntheticRawSourceFactory(image_data, source_id)
         self.validation = SyntheticValidationService(
             self.source_factory, ranges, ranges_truncated=ranges_truncated,
+            uncertain_ranges=uncertain_ranges,
         )
         self.session = session or RecoverySession()
         self.builder = CatalogBuilder(source_factory=self.source_factory)
@@ -218,7 +226,7 @@ class RawCatalogHarness:
             return self.build_without_patches()
 
     def build_without_patches(self):
-        return self.workflow.run(
+        outcome = self.workflow.run(
             self.volume,
             include_orphaned=True,
             force_fresh_validation=True,
@@ -227,6 +235,8 @@ class RawCatalogHarness:
             validation_progress_callback=lambda *_args: None,
             phase_callback=lambda *_args: None,
         )
+        self.session.set_catalog(outcome.snapshot)
+        return outcome
 
     def carved_candidates(self, snapshot):
         result = {}
@@ -300,7 +310,8 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
         ])
         self.assertEqual(memories[:3], sorted(memories[:3]))
         self.assertEqual(memories[-1], 0)
-        self.assertEqual(len(set(memories[:-1])), 3)
+        self.assertEqual(len(set(memories[:-1])), 1)
+        self.assertEqual(harness.session.raw_catalog_candidate_count, 7)
         for offset, expected_hash in expected.items():
             for catalog in found:
                 if offset in catalog:
@@ -409,6 +420,46 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
             ((2048, 4096),),
         )
 
+    def test_low_confidence_candidates_survive_resume_with_path_and_allocation_evidence(self):
+        data, expected = make_image(((128, b"trusted"), (8192, b"low-confidence")), 12288)
+        harness = RawCatalogHarness(
+            data,
+            ranges=((0, 2048), (4096, 8192)),
+            uncertain_ranges={"bitmapUnobserved": ((8192, 10240),)},
+        )
+        first = harness.build().snapshot
+        first_low = next(
+            node for node in first.catalog.nodes.values()
+            if node.candidate is not None and "LowConfidence" in node.full_path
+        )
+        first_low_path = first_low.full_path
+        first_low_status = first_low.properties["clusterAllocationStatus"]
+
+        second = harness.build().snapshot
+        second_low = next(
+            node for node in second.catalog.nodes.values()
+            if node.candidate is not None and "LowConfidence" in node.full_path
+        )
+        self.assertEqual(second_low.node_id, first_low.node_id)
+        self.assertEqual(second_low.full_path, first_low_path)
+        self.assertEqual(
+            second_low.properties["clusterAllocationStatus"],
+            first_low_status,
+        )
+        self.assertEqual(
+            harness.builder.content_reference_store.resolve(
+                second_low.candidate.content_reference.reference_id,
+            )[2].record.resident_data,
+            harness.builder.content_reference_store.resolve(
+                first_low.candidate.content_reference.reference_id,
+            )[2].record.resident_data,
+        )
+        self.assertEqual(len(harness.carved_candidates(second)), 2)
+        self.assertEqual(
+            second_low.candidate.content_reference.sha256,
+            expected[8192],
+        )
+
     def test_source_volume_ranges_and_candidate_profile_changes_invalidate_checkpoint(self):
         data, _expected = make_image(((128, b"identity-bound-candidate"),))
         scenarios = ("source", "truncation", "content_change", "volume", "ranges", "profile", "options")
@@ -454,12 +505,13 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
                 self.assertTrue(discovery)
                 self.assertEqual(discovery[0][0], expected_start)
 
-    def test_read_error_preserves_confirmed_cursor_and_retry_resumes_there(self):
+    def test_read_error_preserves_previous_generation_then_retry_repeats_uncommitted_range(self):
         data, _expected = make_image((
             (128, b"before-error"), (2048, b"after-resume"), (3072, b"fault-frontier"),
         ))
         harness = RawCatalogHarness(data)
         harness.build()
+        first_snapshot = harness.session.require_snapshot()
         first_checkpoint = harness.checkpoint()
         self.assertEqual(first_checkpoint.next_offset, 2048)
 
@@ -467,49 +519,191 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "Synthetic image read failure"):
             harness.build()
         partial_checkpoint = harness.checkpoint()
-        self.assertEqual(partial_checkpoint.next_offset, 3072)
-        self.assertEqual(partial_checkpoint.bytes_scanned, 3072)
+        self.assertEqual(partial_checkpoint, first_checkpoint)
+        self.assertIs(harness.session.require_snapshot(), first_snapshot)
 
         harness.source_factory.fail_at = None
         harness.source_factory.read_events.clear()
         harness.build()
         self.assertEqual(
             harness.discovery_intervals(harness.source_factory.readers[-1]),
-            ((3072, 5120),),
+            ((2048, 4096),),
         )
 
-    def test_checkpoint_memory_is_bounded_fails_explicitly_and_can_be_released(self):
-        data, expected = make_image((
-            (128, b"first"), (2048, b"second"), (3072, b"third"),
+    def test_small_cursor_checkpoint_limit_allows_progress_without_candidate_manifest_growth(self):
+        data, _expected = make_image((
+            (128, b"first"), (2048, b"second"), (4096, b"third"),
         ))
         harness = RawCatalogHarness(data)
-        first_result = harness.build()
-        harness.session.set_catalog(first_result.snapshot)
-        prior_candidates = harness.carved_candidates(first_result.snapshot)
-        self.assertEqual(set(prior_candidates), {128})
-        self.assertEqual(prior_candidates[128][1], expected[128])
-        old_checkpoint = harness.checkpoint()
-        old_size = harness.session.raw_carving_checkpoint_memory_bytes
-        self.assertGreater(old_size, 0)
+        first = harness.build()
+        first_checkpoint = harness.checkpoint()
+        checkpoint_bytes = harness.session.raw_carving_checkpoint_memory_bytes
+        self.assertEqual(first_checkpoint.candidates, ())
+        harness.session.MAX_RAW_CARVING_CHECKPOINT_BYTES = checkpoint_bytes + 32
 
-        harness.session.MAX_RAW_CARVING_CHECKPOINT_BYTES = old_size + 100
-        for _ in range(2):
-            with self.assertRaisesRegex(RuntimeError, "memory limit reached"):
+        second = harness.build()
+        second_checkpoint = harness.checkpoint()
+        third = harness.build()
+        third_checkpoint = harness.checkpoint()
+
+        self.assertEqual(first_checkpoint.candidates, ())
+        self.assertEqual(second_checkpoint.candidates, ())
+        self.assertEqual(third_checkpoint.candidates, ())
+        self.assertEqual(second_checkpoint.next_offset, 4096)
+        self.assertEqual(third_checkpoint.next_offset, 6144)
+        self.assertEqual(
+            harness.session.raw_carving_checkpoint_memory_bytes,
+            checkpoint_bytes,
+        )
+        self.assertEqual(harness.session.raw_catalog_candidate_count, 3)
+        self.assertGreater(harness.session.raw_catalog_retained_bytes, 0)
+        self.assertEqual(
+            harness.discovery_intervals(harness.source_factory.readers[-1]),
+            ((4096, 6144),),
+        )
+
+    def test_session_candidate_limit_stops_with_usable_catalog_and_no_repeat_attempt(self):
+        data, _expected = make_image((
+            (128, b"first"), (2048, b"second"), (4096, b"third"),
+        ))
+        harness = RawCatalogHarness(data)
+        harness.session.MAX_RAW_SESSION_CANDIDATES = 1
+        first = harness.build()
+        self.assertEqual(first.snapshot.content_carving_summary["stopReason"], "session_limit")
+        self.assertEqual(harness.session.raw_catalog_candidate_count, 1)
+        self.assertEqual(len(harness.carved_candidates(first.snapshot)), 1)
+        confirmed_checkpoint = harness.checkpoint()
+        read_count = harness.source_factory.open_count
+
+        second = harness.build()
+        self.assertIs(second.snapshot, first.snapshot)
+        self.assertEqual(second.snapshot.content_carving_summary["stopReason"], "session_limit")
+        self.assertEqual(harness.source_factory.open_count, read_count)
+        self.assertEqual(harness.checkpoint(), confirmed_checkpoint)
+
+    def test_session_capacity_accounts_for_other_raw_catalogs(self):
+        data, _expected = make_image(((128, b"first"),))
+        harness = RawCatalogHarness(data)
+        harness.session.MAX_RAW_SESSION_CANDIDATES = 3
+        harness.session.MAX_RAW_SESSION_RETAINED_BYTES = 4096
+        result = harness.build()
+
+        capacity = harness.session.raw_catalog_capacity(("another-volume",))
+        self.assertEqual(capacity[0], 2)
+        self.assertEqual(
+            capacity[1],
+            4096 - harness.session.raw_catalog_retained_bytes,
+        )
+        self.assertEqual(
+            harness.session.raw_catalog_candidate_count,
+            RecoverySession.raw_catalog_candidate_metrics(result.snapshot)[0],
+        )
+
+    def test_session_retained_byte_limit_is_reported_and_does_not_repeat(self):
+        data, _expected = make_image(((128, b"first"), (2048, b"second")))
+        harness = RawCatalogHarness(data)
+        harness.session.MAX_RAW_SESSION_RETAINED_BYTES = len(jpeg(b"first"))
+        first = harness.build()
+        self.assertEqual(first.snapshot.content_carving_summary["stopReason"], "session_limit")
+        self.assertEqual(
+            harness.session.raw_catalog_retained_bytes,
+            len(jpeg(b"first")),
+        )
+        read_count = harness.source_factory.open_count
+
+        second = harness.build()
+        self.assertIs(second.snapshot, first.snapshot)
+        self.assertEqual(harness.source_factory.open_count, read_count)
+
+    def test_failure_after_candidate_incorporation_preserves_generation_and_retries_range(self):
+        data, _expected = make_image(((128, b"first"), (2048, b"second")))
+        harness = RawCatalogHarness(data)
+        first = harness.build()
+        checkpoint = harness.checkpoint()
+        generation = harness.session.raw_catalog_generation(
+            harness.workflow._raw_checkpoint_owner(harness.volume),
+            harness.workflow._raw_checkpoint_identity(
+                harness.source_factory.source, harness.volume, harness.validation.ranges,
+                False, harness.options, harness.builder.carving_checkpoint_profile(),
+            ),
+        )
+        original = harness.builder._to_recovery_catalog
+
+        def incorporate_then_fail(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("Injected failure after candidate incorporation")
+
+        with patch.object(harness.builder, "_to_recovery_catalog", side_effect=incorporate_then_fail):
+            with self.assertRaisesRegex(RuntimeError, "after candidate incorporation"):
                 harness.build()
-            self.assertIs(harness.session.require_snapshot(), first_result.snapshot)
-            self.assertEqual(
-                harness.carved_candidates(harness.session.require_snapshot()),
-                prior_candidates,
-            )
-            self.assertEqual(harness.checkpoint(), old_checkpoint)
-        preserved = harness.checkpoint()
-        self.assertEqual(preserved, old_checkpoint)
-        self.assertEqual(harness.session.raw_carving_checkpoint_memory_bytes, old_size)
 
-        harness.session.clear_raw_carving_checkpoints()
-        self.assertEqual(harness.session.raw_carving_checkpoint_memory_bytes, 0)
-        self.assertIsNone(harness.checkpoint())
-        self.assertEqual(RecoverySession().raw_carving_checkpoint_memory_bytes, 0)
+        self.assertIs(harness.session.require_snapshot(), first.snapshot)
+        self.assertEqual(harness.checkpoint(), checkpoint)
+        self.assertEqual(harness.session.raw_catalog_generation(
+            harness.workflow._raw_checkpoint_owner(harness.volume),
+            harness.workflow._raw_checkpoint_identity(
+                harness.source_factory.source, harness.volume, harness.validation.ranges,
+                False, harness.options, harness.builder.carving_checkpoint_profile(),
+            ),
+        ), generation)
+        old_candidate = next(
+            node.candidate for node in first.snapshot.catalog.nodes.values()
+            if node.candidate is not None
+            and "content_carving" in node.candidate.discovery_methods
+        )
+        _, _, retained_node = harness.builder.content_reference_store.resolve(
+            old_candidate.content_reference.reference_id,
+        )
+        self.assertEqual(
+            hashlib.sha256(retained_node.record.resident_data).hexdigest(),
+            old_candidate.content_reference.sha256,
+        )
+
+        harness.source_factory.read_events.clear()
+        retried = harness.build()
+        self.assertEqual(
+            harness.discovery_intervals(harness.source_factory.readers[-1]),
+            ((2048, 4096),),
+        )
+        self.assertEqual(len(harness.carved_candidates(retried.snapshot)), 2)
+
+    def test_cursor_confirmation_failure_keeps_prior_generation_and_retries(self):
+        data, _expected = make_image(((128, b"first"), (2048, b"second")))
+        harness = RawCatalogHarness(data)
+        first = harness.build()
+        checkpoint = harness.checkpoint()
+        with patch.object(
+            harness.session,
+            "commit_raw_catalog_generation",
+            side_effect=RuntimeError("Injected cursor confirmation failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cursor confirmation"):
+                harness.build()
+
+        self.assertIs(harness.session.require_snapshot(), first.snapshot)
+        self.assertEqual(harness.checkpoint(), checkpoint)
+        harness.source_factory.read_events.clear()
+        retried = harness.build()
+        self.assertEqual(
+            harness.discovery_intervals(harness.source_factory.readers[-1]),
+            ((2048, 4096),),
+        )
+        self.assertEqual(len(harness.carved_candidates(retried.snapshot)), 2)
+
+    def test_checkpoint_metadata_limit_failure_preserves_old_generation(self):
+        data, _expected = make_image(((128, b"first"), (2048, b"second")))
+        harness = RawCatalogHarness(data)
+        first = harness.build()
+        prior_checkpoint = harness.checkpoint()
+        accounted_bytes = harness.session.raw_carving_checkpoint_memory_bytes
+        harness.session.MAX_RAW_CARVING_CHECKPOINT_BYTES = accounted_bytes - 1
+
+        for _ in range(2):
+            with self.assertRaisesRegex(RuntimeError, "checkpoint limit reached"):
+                harness.build()
+            self.assertIs(harness.session.require_snapshot(), first.snapshot)
+            self.assertEqual(harness.checkpoint(), prior_checkpoint)
+        self.assertEqual(harness.session.raw_catalog_candidate_count, 1)
 
     def test_raw_flow_never_calls_physical_checkpoint_repository_and_scope_completion_releases_state(self):
         data, _expected = make_image(((128, b"complete-range"),))

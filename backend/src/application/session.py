@@ -1,12 +1,14 @@
 import sys
 import threading
 from contextlib import contextmanager
+from dataclasses import replace
 
 
 class RecoverySession:
     MAX_RAW_CARVING_CHECKPOINT_BYTES = 8 * 1024 * 1024
+    MAX_RAW_SESSION_CANDIDATES = 16_384
+    MAX_RAW_SESSION_RETAINED_BYTES = 512 * 1024 * 1024
     RAW_CHECKPOINT_BASE_BYTES = 1024
-    RAW_CANDIDATE_REFERENCE_BYTES = 384
 
     def __init__(self):
         self.volumes = {}
@@ -16,8 +18,8 @@ class RecoverySession:
         self._node_ids_by_identity = {}
         self._raw_carving_checkpoints = {}
         self._raw_carving_checkpoint_bytes = 0
-        self._completed_raw_catalog_identity = None
-        self._completed_raw_catalog = None
+        self._raw_catalogs = {}
+        self._raw_generation = 0
         self._raw_carving_lock = threading.RLock()
 
     @contextmanager
@@ -27,99 +29,149 @@ class RecoverySession:
             yield
 
     def load_raw_carving_checkpoint(self, owner_key, identity_key):
-        """Return an exact-identity checkpoint and release stale state for its volume."""
+        """Return a cursor only when it matches the committed catalog generation."""
         with self._raw_carving_lock:
-            entry = self._raw_carving_checkpoints.get(owner_key)
-            if entry is None:
+            checkpoint_entry = self._raw_carving_checkpoints.get(owner_key)
+            catalog_entry = self._raw_catalogs.get(owner_key)
+            if checkpoint_entry is None or catalog_entry is None:
                 return None
-            stored_identity, checkpoint, _size_bytes = entry
-            if stored_identity != identity_key:
-                self._remove_raw_carving_checkpoint(owner_key)
+            stored_identity, checkpoint, _size_bytes, generation = checkpoint_entry
+            catalog_identity, _snapshot, catalog_generation, _count, _retained = catalog_entry
+            if (stored_identity != identity_key or catalog_identity != identity_key
+                    or generation != catalog_generation):
                 return None
             return checkpoint
 
-    def validate_raw_carving_checkpoint_capacity(self, owner_key, identity_key, checkpoint):
-        """Fail before replacing a usable checkpoint when the session budget is full."""
-        if checkpoint is None:
-            return
-        required_bytes = self._estimate_raw_checkpoint_bytes(
-            owner_key, identity_key, checkpoint,
+    def get_raw_catalog(self, owner_key, identity_key):
+        """Return the last published raw catalog for a compatible scan identity."""
+        with self._raw_carving_lock:
+            entry = self._raw_catalogs.get(owner_key)
+            if entry is None or entry[0] != identity_key:
+                return None
+            return entry[1]
+
+    def raw_catalog_generation(self, owner_key, identity_key):
+        with self._raw_carving_lock:
+            entry = self._raw_catalogs.get(owner_key)
+            return entry[2] if entry is not None and entry[0] == identity_key else None
+
+    def raw_catalog_capacity(self, owner_key):
+        """Return candidate and payload capacity after accounting for other volumes."""
+        with self._raw_carving_lock:
+            other_entries = (
+                entry for key, entry in self._raw_catalogs.items() if key != owner_key
+            )
+            other_candidates = 0
+            other_retained_bytes = 0
+            for entry in other_entries:
+                other_candidates += entry[3]
+                other_retained_bytes += entry[4]
+            return (
+                max(0, self.MAX_RAW_SESSION_CANDIDATES - other_candidates),
+                max(0, self.MAX_RAW_SESSION_RETAINED_BYTES - other_retained_bytes),
+            )
+
+    def commit_raw_catalog_generation(
+        self, owner_key, identity_key, snapshot, checkpoint, content_reference_store,
+    ):
+        """Atomically publish the candidate catalog, cursor and content references."""
+        candidate_count, retained_bytes = self.raw_catalog_candidate_metrics(snapshot)
+        if (candidate_count > self.MAX_RAW_SESSION_CANDIDATES
+                or retained_bytes > self.MAX_RAW_SESSION_RETAINED_BYTES):
+            raise RuntimeError(
+                "Raw session candidate limit exceeded; the previous catalog generation was preserved."
+            )
+
+        # Raw checkpoints contain cursor state only. Candidate references are
+        # reconstructed transiently from the matching committed catalog.
+        cursor = None if checkpoint is None else replace(checkpoint, candidates=())
+        required_bytes = (
+            self._estimate_raw_checkpoint_bytes(owner_key, identity_key, cursor)
+            if cursor is not None else 0
         )
         with self._raw_carving_lock:
             old_entry = self._raw_carving_checkpoints.get(owner_key)
             old_bytes = old_entry[2] if old_entry is not None else 0
-            total_bytes = self._raw_carving_checkpoint_bytes - old_bytes + required_bytes
-            if total_bytes > self.MAX_RAW_CARVING_CHECKPOINT_BYTES:
+            total_checkpoint_bytes = (
+                self._raw_carving_checkpoint_bytes - old_bytes + required_bytes
+            )
+            if total_checkpoint_bytes > self.MAX_RAW_CARVING_CHECKPOINT_BYTES:
                 raise RuntimeError(
-                    "Raw carving session checkpoint memory limit reached "
-                    f"({total_bytes} of {self.MAX_RAW_CARVING_CHECKPOINT_BYTES} bytes). "
-                    "The last valid checkpoint was preserved; reduce the candidate "
-                    "limit or finish this session before retrying."
+                    "Raw carving session checkpoint limit reached; "
+                    "the previous catalog generation was preserved."
                 )
 
-    def save_raw_carving_checkpoint(self, owner_key, identity_key, checkpoint):
-        """Replace or release a raw checkpoint without writing it to disk."""
-        with self._raw_carving_lock:
-            if checkpoint is None:
-                self._remove_raw_carving_checkpoint(owner_key)
-                return
-
-            required_bytes = self._estimate_raw_checkpoint_bytes(
-                owner_key, identity_key, checkpoint,
+            remaining_candidates, remaining_retained_bytes = self.raw_catalog_capacity(
+                owner_key,
             )
-            old_entry = self._raw_carving_checkpoints.get(owner_key)
-            old_bytes = old_entry[2] if old_entry is not None else 0
-            total_bytes = self._raw_carving_checkpoint_bytes - old_bytes + required_bytes
-            if total_bytes > self.MAX_RAW_CARVING_CHECKPOINT_BYTES:
+            if (candidate_count > remaining_candidates
+                    or retained_bytes > remaining_retained_bytes):
                 raise RuntimeError(
-                    "Raw carving session checkpoint memory limit reached "
-                    f"({total_bytes} of {self.MAX_RAW_CARVING_CHECKPOINT_BYTES} bytes). "
-                    "The last valid checkpoint was preserved; reduce the candidate "
-                    "limit or finish this session before retrying."
+                    "Raw session candidate or retained-data limit reached; "
+                    "the previous catalog generation was preserved."
                 )
 
-            self._raw_carving_checkpoints[owner_key] = (
-                identity_key, checkpoint, required_bytes,
-            )
-            self._raw_carving_checkpoint_bytes = total_bytes
+            generation = self._raw_generation + 1
+            other_catalogs = {
+                key: entry for key, entry in self._raw_catalogs.items() if key != owner_key
+            }
+            checkpoints = {
+                key: entry for key, entry in self._raw_carving_checkpoints.items()
+                if key != owner_key
+            }
+            if cursor is not None:
+                checkpoints[owner_key] = (
+                    identity_key, cursor, required_bytes, generation,
+                )
+            catalogs = {
+                **other_catalogs,
+                owner_key: (
+                    identity_key, snapshot, generation, candidate_count, retained_bytes,
+                ),
+            }
+            checkpoint_bytes = sum(entry[2] for entry in checkpoints.values())
+            # Commit the staged resolver before publishing the matching session
+            # generation. All allocations and capacity checks have already passed.
+            content_reference_store.commit_catalog()
+            self._raw_carving_checkpoints = checkpoints
+            self._raw_carving_checkpoint_bytes = checkpoint_bytes
+            self._raw_catalogs = catalogs
+            self._raw_generation = generation
+
+    @staticmethod
+    def raw_catalog_candidate_metrics(snapshot):
+        candidate_count = 0
+        retained_bytes = 0
+        for node in snapshot.catalog.nodes.values():
+            candidate = node.candidate
+            if candidate is None or "content_carving" not in candidate.discovery_methods:
+                continue
+            candidate_count += 1
+            retained_bytes += int(candidate.size_bytes or 0)
+        return candidate_count, retained_bytes
 
     @property
     def raw_carving_checkpoint_memory_bytes(self):
-        """Return accounted bytes from a conservative checkpoint-size estimate."""
+        """Return accounted bytes from the cursor-only checkpoint estimate."""
         with self._raw_carving_lock:
             return self._raw_carving_checkpoint_bytes
 
-    def clear_raw_carving_checkpoints(self):
-        """Release all in-memory raw resume state for this backend session."""
+    @property
+    def raw_catalog_candidate_count(self):
+        with self._raw_carving_lock:
+            return sum(entry[3] for entry in self._raw_catalogs.values())
+
+    @property
+    def raw_catalog_retained_bytes(self):
+        with self._raw_carving_lock:
+            return sum(entry[4] for entry in self._raw_catalogs.values())
+
+    def clear_raw_carving_state(self):
+        """Release all raw cursors and candidate catalogs for this backend session."""
         with self._raw_carving_lock:
             self._raw_carving_checkpoints.clear()
             self._raw_carving_checkpoint_bytes = 0
-
-    def get_completed_raw_catalog(self, identity_key):
-        """Reuse a complete raw catalog only for the exact same scan identity."""
-        with self._raw_carving_lock:
-            if self._completed_raw_catalog_identity != identity_key:
-                self._completed_raw_catalog_identity = None
-                self._completed_raw_catalog = None
-                return None
-            return self._completed_raw_catalog
-
-    def save_completed_raw_catalog(self, identity_key, snapshot):
-        """Retain the completed catalog snapshot for repeated build requests."""
-        with self._raw_carving_lock:
-            self._completed_raw_catalog_identity = identity_key
-            self._completed_raw_catalog = snapshot
-
-    def clear_completed_raw_catalog(self):
-        """Release a completed raw catalog when a different scan is requested."""
-        with self._raw_carving_lock:
-            self._completed_raw_catalog_identity = None
-            self._completed_raw_catalog = None
-
-    def _remove_raw_carving_checkpoint(self, owner_key):
-        entry = self._raw_carving_checkpoints.pop(owner_key, None)
-        if entry is not None:
-            self._raw_carving_checkpoint_bytes -= entry[2]
+            self._raw_catalogs.clear()
 
     @classmethod
     def _estimate_raw_checkpoint_bytes(cls, owner_key, identity_key, checkpoint):
@@ -130,7 +182,6 @@ class RecoverySession:
             cls.RAW_CHECKPOINT_BASE_BYTES
             + owner_bytes
             + sys.getsizeof(identity_key)
-            + len(checkpoint.candidates) * cls.RAW_CANDIDATE_REFERENCE_BYTES
             + len(checkpoint.signature_carry)
         )
 
@@ -153,6 +204,11 @@ class RecoverySession:
         return self.volume_source_ids.get(volume_id)
 
     def set_catalog(self, snapshot):
+        with self._raw_carving_lock:
+            if not any(entry[1] is snapshot for entry in self._raw_catalogs.values()):
+                self._raw_carving_checkpoints.clear()
+                self._raw_carving_checkpoint_bytes = 0
+                self._raw_catalogs.clear()
         self.snapshot = snapshot
         self.nodes = snapshot.catalog.nodes
         self._node_ids_by_identity = {}

@@ -3,15 +3,30 @@ class NTFSContentReferenceStore:
 
     def __init__(self):
         self._references = {}
+        self._pending_references = None
 
     def begin_catalog(self):
-        self._references.clear()
+        if self._pending_references is not None:
+            raise RuntimeError("A catalog content-reference transaction is already active")
+        self._pending_references = {}
+
+    def commit_catalog(self):
+        if self._pending_references is None:
+            raise RuntimeError("No catalog content-reference transaction is active")
+        self._references = self._pending_references
+        self._pending_references = None
+
+    def abort_catalog(self):
+        self._pending_references = None
 
     def register(self, reference_id, source, volume, file_node):
         record = getattr(file_node, "record", None)
         if record is not None:
             file_node = _CompactContentNode(record)
-        self._references[str(reference_id)] = (source, volume, file_node)
+        target = self._pending_references
+        if target is None:
+            target = self._references
+        target[str(reference_id)] = (source, volume, file_node)
 
     def resolve(self, reference_id):
         try:
