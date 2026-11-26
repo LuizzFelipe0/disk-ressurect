@@ -110,6 +110,8 @@ class CatalogScanWorkflow:
         checkpoint_scope = (
             self.session.raw_carving_operation() if raw_checkpointing else nullcontext()
         )
+        if self.session is not None and not raw_checkpointing:
+            self.session.clear_completed_raw_catalog()
 
         with checkpoint_scope:
             if raw_checkpointing:
@@ -119,6 +121,12 @@ class CatalogScanWorkflow:
                     carving_source, volume, precomputed_carving_ranges,
                     carving_ranges_truncated, carving_options, carving_profile,
                 )
+                completed_snapshot = self.session.get_completed_raw_catalog(
+                    checkpoint_identity,
+                )
+                if completed_snapshot is not None:
+                    return CatalogScanOutcome(completed_snapshot, validation_summary)
+
                 carving_checkpoint = self.session.load_raw_carving_checkpoint(
                     checkpoint_owner, checkpoint_identity,
                 )
@@ -210,6 +218,10 @@ class CatalogScanWorkflow:
                 latest_carving_checkpoint,
                 carving_checkpoint_callback,
             )
+            if (raw_checkpointing
+                    and (snapshot.content_carving_summary or {}).get("stopReason")
+                    == "scope_complete"):
+                self.session.save_completed_raw_catalog(checkpoint_identity, snapshot)
             return CatalogScanOutcome(snapshot, validation_summary)
 
     @classmethod

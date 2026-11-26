@@ -16,6 +16,8 @@ class RecoverySession:
         self._node_ids_by_identity = {}
         self._raw_carving_checkpoints = {}
         self._raw_carving_checkpoint_bytes = 0
+        self._completed_raw_catalog_identity = None
+        self._completed_raw_catalog = None
         self._raw_carving_lock = threading.RLock()
 
     @contextmanager
@@ -92,6 +94,27 @@ class RecoverySession:
         with self._raw_carving_lock:
             self._raw_carving_checkpoints.clear()
             self._raw_carving_checkpoint_bytes = 0
+
+    def get_completed_raw_catalog(self, identity_key):
+        """Reuse a complete raw catalog only for the exact same scan identity."""
+        with self._raw_carving_lock:
+            if self._completed_raw_catalog_identity != identity_key:
+                self._completed_raw_catalog_identity = None
+                self._completed_raw_catalog = None
+                return None
+            return self._completed_raw_catalog
+
+    def save_completed_raw_catalog(self, identity_key, snapshot):
+        """Retain the completed catalog snapshot for repeated build requests."""
+        with self._raw_carving_lock:
+            self._completed_raw_catalog_identity = identity_key
+            self._completed_raw_catalog = snapshot
+
+    def clear_completed_raw_catalog(self):
+        """Release a completed raw catalog when a different scan is requested."""
+        with self._raw_carving_lock:
+            self._completed_raw_catalog_identity = None
+            self._completed_raw_catalog = None
 
     def _remove_raw_carving_checkpoint(self, owner_key):
         entry = self._raw_carving_checkpoints.pop(owner_key, None)
