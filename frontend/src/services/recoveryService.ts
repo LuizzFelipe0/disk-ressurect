@@ -9,7 +9,6 @@ import type {
   PrivilegeStatus,
   RecoveryOptions,
   RecoveryResult,
-  RawImageSource,
   VolumeInfo,
 } from "../types/recovery";
 
@@ -22,9 +21,6 @@ function getApi() {
 
 export const recoveryService = {
   listDisks: (): Promise<DiskInfo[]> => getApi().listDisks(),
-  selectRawImage: (): Promise<RawImageSource | null> => getApi().selectRawImage(),
-  listSourcePartitions: (sourceId: string, deepScan: boolean, operationId?: string): Promise<VolumeInfo[]> =>
-    getApi().listSourcePartitions(sourceId, deepScan, operationId),
   listPartitions: (diskNumber: number, deepScan = false, resume = false, operationId?: string): Promise<VolumeInfo[]> =>
     getApi().listPartitions(diskNumber, deepScan, resume, operationId),
   scanCatalog: (

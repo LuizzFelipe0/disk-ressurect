@@ -55,7 +55,7 @@ export function useRecoveryController() {
     recoveryCommandInFlight.current = true;
     setBusy(true);
     const generation = getCatalogGeneration();
-    if (!source.rawImage && !await ensureAdministrator()) {
+    if (!await ensureAdministrator()) {
       recoveryCommandInFlight.current = false;
       setBusy(false);
       return false;
@@ -96,7 +96,7 @@ export function useRecoveryController() {
       finishOperation(operationId);
       recoveryCommandInFlight.current = false;
     }
-  }, [source.selectedVolumeId, source.rawImage, ensureAdministrator, clearCatalog, beginOperation,
+  }, [source.selectedVolumeId, ensureAdministrator, clearCatalog, beginOperation,
     finishOperation, getCatalogGeneration, setCatalog, setRootParents, setBusy, setError, setProgress, setStatus]);
 
   const chooseOutputDirectory = useCallback(async () => {
@@ -118,7 +118,7 @@ export function useRecoveryController() {
     setBusy(true);
     const sourceGeneration = source.getGeneration();
     const catalogGeneration = getCatalogGeneration();
-    if (!source.rawImage && !await ensureAdministrator()) {
+    if (!await ensureAdministrator()) {
       recoveryCommandInFlight.current = false;
       setBusy(false);
       return;
@@ -153,7 +153,7 @@ export function useRecoveryController() {
       recoveryCommandInFlight.current = false;
     }
   }, [selection.selectedIds, selection.excludedIds, extensions, outputDirectory, minimumSizeKb,
-    source.getGeneration, source.rawImage, ensureAdministrator, setError, setBusy, setProgress, setStatus,
+    source.getGeneration, ensureAdministrator, setError, setBusy, setProgress, setStatus,
     beginOperation, finishOperation, getCatalogGeneration]);
 
   const setExtensionSelected = useCallback((extension: string, checked: boolean) => {
@@ -164,12 +164,12 @@ export function useRecoveryController() {
 
   return {
     backendStatus, isAdministrator, busy, error, status, progress,
-    disks: source.disks, rawImage: source.rawImage, selectedDiskNumber: source.selectedDiskNumber,
+    disks: source.disks, selectedDiskNumber: source.selectedDiskNumber,
     volumes: source.volumes, selectedVolumeId: source.selectedVolumeId, partitionScanCanResume,
     catalog, preview, previewLoading, searchQuery, setSearchQuery, searchResult, searchingCatalog,
     childrenById, parentById, loadingFolderIds, expandedFolderIds, toggleFolder, previewFile,
     ...selection, availableExtensions, extensions, minimumSizeKb, outputDirectory, recoveryResult,
-    refreshDisks: source.refreshDisks, selectDisk: source.selectDisk, selectRawImage: source.selectRawImage,
+    refreshDisks: source.refreshDisks, selectDisk: source.selectDisk,
     findPartitions: source.findPartitions, selectVolume: source.selectVolume, buildCatalog,
     chooseOutputDirectory, recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory,
     ensureAdministrator, backendSessionGeneration,

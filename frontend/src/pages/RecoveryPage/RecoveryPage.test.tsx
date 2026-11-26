@@ -16,7 +16,6 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     progress: null,
     partitionScanCanResume: false,
     disks: [],
-    rawImage: null,
     selectedDiskNumber: "1",
     volumes: [],
     selectedVolumeId: "1:4096",
@@ -146,7 +145,6 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     toggleSelection: vi.fn(),
     previewFile: vi.fn(),
     ensureAdministrator: vi.fn(),
-    selectRawImage: vi.fn(),
   },
   treeRenderCount: { value: 0 },
 }));
@@ -182,17 +180,6 @@ const goToCatalog = () => fireEvent.click(screen.getByRole("button", { name: "4 
 const goToScan = () => fireEvent.click(screen.getByRole("button", { name: "3 Varredura" }));
 
 describe("RecoveryPage audit details", () => {
-  it("offers raw image selection through the Electron file picker", () => {
-    renderRecoveryPage();
-    fireEvent.click(screen.getByRole("button", { name: "Abrir imagem raw…" }));
-    expect(recovery.selectRawImage).toHaveBeenCalledOnce();
-  });
-
-  it("opens the image picker when reached from the raw-image homepage action", async () => {
-    renderRecoveryPage("/recovery?source=image");
-    await waitFor(() => expect(recovery.selectRawImage).toHaveBeenCalledOnce());
-  });
-
   it("connects the visible scan, catalog and recovery steps to backend operations", async () => {
     recovery.selectedIds.add("candidate-1" as never);
     recovery.extensions.push(".jpg" as never);

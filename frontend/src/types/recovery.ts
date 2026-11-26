@@ -10,7 +10,6 @@ export type {
   ProgressInfo,
   PrivilegeStatus,
   RecoveryResult,
-  RawImageSource,
   VolumeInfo,
 } from "../../electron/contracts";
 

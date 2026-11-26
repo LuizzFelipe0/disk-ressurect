@@ -1,6 +1,5 @@
 import React from "react";
 import { Button, DropdownCheckbox } from "belagio-styles-lib";
-import { useSearchParams } from "react-router-dom";
 import filterIcon from "../../assets/filter.png";
 import { useRecoveryController } from "../../hooks/useRecoveryController";
 import { useRecoveryNavigationGuard } from "../../hooks/useRecoveryNavigationGuard";
@@ -38,8 +37,6 @@ import {
 export const RecoveryPage: React.FC = () => {
   const recovery = useRecoveryController();
   useRecoveryNavigationGuard(recovery.busy);
-  const [searchParams] = useSearchParams();
-  const rawPickerRequested = React.useRef(false);
   const { language, changeLanguage } = useLanguagePreference();
   const [activeStep, setActiveStep] = React.useState<WorkflowStep>(1);
   const [catalogStepVisited, setCatalogStepVisited] = React.useState(false);
@@ -92,12 +89,6 @@ export const RecoveryPage: React.FC = () => {
   const previewCatalogFile = React.useCallback((node: CatalogNode) => {
     void recovery.previewFile(node);
   }, [recovery.previewFile]);
-  React.useEffect(() => {
-    if (searchParams.get("source") === "image" && !rawPickerRequested.current) {
-      rawPickerRequested.current = true;
-      void recovery.selectRawImage();
-    }
-  }, [searchParams, recovery.selectRawImage]);
   React.useEffect(() => {
     if (auditWasOpen.current && !auditOpen) {
       auditTriggerRef.current?.querySelector<HTMLButtonElement>("button")?.focus();

@@ -3,8 +3,6 @@ import type { DesktopApi } from "./contracts";
 
 const api: DesktopApi = {
   listDisks: () => ipcRenderer.invoke("recovery:list-disks"),
-  selectRawImage: () => ipcRenderer.invoke("recovery:select-raw-image"),
-  listSourcePartitions: (sourceId, deepScan, operationId) => ipcRenderer.invoke("recovery:list-source-partitions", { sourceId, deepScan, operationId }),
   listPartitions: (diskNumber, deepScan, resume = false, operationId) =>
     ipcRenderer.invoke("recovery:list-partitions", { diskNumber, deepScan, resume, operationId }),
   scanCatalog: (volumeId, includeOrphaned = false, carvingOptions, forceFreshValidation = false, operationId) => ipcRenderer.invoke(

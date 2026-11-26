@@ -47,9 +47,8 @@ export const WelcomeBody = styled.p`
 
 export const SourceGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-  @media (max-width: 680px) { grid-template-columns: 1fr; }
 `;
 
 export const SourceOption = styled.div`

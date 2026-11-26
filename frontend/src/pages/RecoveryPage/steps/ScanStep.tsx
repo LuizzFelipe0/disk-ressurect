@@ -30,8 +30,8 @@ export const ScanStep: React.FC<ScanStepProps> = ({
   maxCarvedRetainedMiB, setMaxCarvedRetainedMiB,
   maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat, onBack, onStart,
 }) => {
-  const sourceName = recovery.rawImage?.displayName
-    ?? recovery.disks.find((disk) => String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "";
+  const sourceName = recovery.disks.find((disk) =>
+    String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "";
   const volumeName = recovery.volumes.find((volume) => volume.id === recovery.selectedVolumeId)?.name;
 
   return <>

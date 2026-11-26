@@ -25,20 +25,12 @@ export const HomePage: React.FC = () => {
         <WelcomeBody>{t("welcomeBody")}</WelcomeBody>
         <SourceGrid>
           <SourceOption>
-            <SourceCard to="/recovery?source=physical" aria-label={t("startPhysical")}>
+            <SourceCard to="/recovery" aria-label={t("startPhysical")}>
               <SourceIcon aria-hidden="true">▣</SourceIcon>
               <SourceTitle>{t("startPhysical")}</SourceTitle>
               <span>{t("continue")} →</span>
             </SourceCard>
             <SourceInfo><InfoButton description={t("physicalSourceDescription")} label={t("moreInfo")} /></SourceInfo>
-          </SourceOption>
-          <SourceOption>
-            <SourceCard to="/recovery?source=image" aria-label={t("startImage")}>
-              <SourceIcon aria-hidden="true">▤</SourceIcon>
-              <SourceTitle>{t("startImage")}</SourceTitle>
-              <span>{t("continue")} →</span>
-            </SourceCard>
-            <SourceInfo><InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} /></SourceInfo>
           </SourceOption>
         </SourceGrid>
         <ReadOnlyNotice role="note"><span aria-hidden="true">♧</span> {t("sourceReadOnlyNotice")}</ReadOnlyNotice>
