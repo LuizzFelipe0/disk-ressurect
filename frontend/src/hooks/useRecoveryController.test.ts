@@ -3,13 +3,14 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useRecoveryController } from "./useRecoveryController";
 
-const { listDisks, listPartitions, scanCatalog, searchCatalog, listSupportedFileTypes, previewFile, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
+const { listDisks, listPartitions, scanCatalog, searchCatalog, listSupportedFileTypes, previewFile, recover, onProgress, getBackendStatus, onBackendStatus, getPrivilegeStatus, requestAdministrator } = vi.hoisted(() => ({
   listDisks: vi.fn(),
   listPartitions: vi.fn(),
   scanCatalog: vi.fn(),
   searchCatalog: vi.fn(),
   listSupportedFileTypes: vi.fn(),
   previewFile: vi.fn(),
+  recover: vi.fn(),
   onProgress: vi.fn(() => vi.fn()),
   getBackendStatus: vi.fn(),
   onBackendStatus: vi.fn(() => vi.fn()),
@@ -25,6 +26,7 @@ vi.mock("../services/recoveryService", () => ({
     searchCatalog,
     listSupportedFileTypes,
     previewFile,
+    recover,
     onProgress,
     getBackendStatus,
     onBackendStatus,
@@ -125,6 +127,58 @@ describe("useRecoveryController backend lifecycle", () => {
       await pendingBuild;
     });
     expect(result.current.catalog?.roots[0].id).toBe("new-root");
+  });
+
+  it("does not send duplicate catalog commands while one build is in flight", async () => {
+    let finishBuild!: (value: { recordCount: number; availableExtensions: string[]; roots: never[] }) => void;
+    scanCatalog.mockReturnValueOnce(new Promise((resolve) => { finishBuild = resolve; }));
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectVolume("1:4096"));
+
+    let first!: Promise<boolean>;
+    let duplicate!: Promise<boolean>;
+    act(() => {
+      first = result.current.buildCatalog();
+      duplicate = result.current.buildCatalog();
+    });
+    await waitFor(() => expect(scanCatalog).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      finishBuild({ recordCount: 0, availableExtensions: [], roots: [] });
+      expect(await duplicate).toBe(false);
+      expect(await first).toBe(true);
+    });
+    expect(scanCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send duplicate recovery commands while extraction is in flight", async () => {
+    scanCatalog.mockResolvedValue({
+      recordCount: 1, availableExtensions: [".jpg"],
+      roots: [{ id: "photo", name: "photo.jpg", path: "photo.jpg", isDirectory: false, sizeBytes: 8, hasChildren: false }],
+    });
+    let finishRecovery!: (value: { candidateCount: number; recoveredCount: number }) => void;
+    recover.mockReturnValueOnce(new Promise((resolve) => { finishRecovery = resolve; }));
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.extensions).toEqual([".jpg", ".pdf"]));
+    act(() => result.current.selectVolume("1:4096"));
+    await act(async () => { await result.current.buildCatalog(); });
+    act(() => {
+      result.current.selectAll();
+      result.current.setOutputDirectory("D:\\Recovered");
+    });
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.recover();
+      duplicate = result.current.recover();
+    });
+    await waitFor(() => expect(recover).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      finishRecovery({ candidateCount: 1, recoveredCount: 1 });
+      await Promise.all([first, duplicate]);
+    });
+    expect(recover).toHaveBeenCalledTimes(1);
   });
 
   it("ignores a catalog response after its source volume changes", async () => {
@@ -268,6 +322,27 @@ describe("useRecoveryController backend lifecycle", () => {
     expect(requestAdministrator).toHaveBeenCalledTimes(1);
     expect(listPartitions).not.toHaveBeenCalled();
     expect(result.current.status).toContain("canceled");
+  });
+
+  it("does not issue a duplicate partition scan while one request is pending", async () => {
+    let finishScan!: (value: never[]) => void;
+    listPartitions.mockReturnValueOnce(new Promise((resolve) => { finishScan = resolve; }));
+    const { result } = renderHook(() => useRecoveryController());
+    await waitFor(() => expect(result.current.backendStatus).toBe("ready"));
+    act(() => result.current.selectDisk("1"));
+
+    let first!: Promise<void>;
+    let duplicate!: Promise<void>;
+    act(() => {
+      first = result.current.findPartitions(false);
+      duplicate = result.current.findPartitions(false);
+    });
+    await waitFor(() => expect(listPartitions).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      finishScan([]);
+      await Promise.all([first, duplicate]);
+    });
+    expect(listPartitions).toHaveBeenCalledTimes(1);
   });
 
   it("retries a failed deep scan by resuming its saved position", async () => {

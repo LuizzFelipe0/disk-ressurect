@@ -2,7 +2,7 @@
 import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HashRouter } from "react-router-dom";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import type { RecoveryResult } from "../../types/recovery";
 import { RecoveryPage } from "./index";
 
@@ -170,7 +170,14 @@ afterEach(() => {
   window.location.hash = "#/";
 });
 
-const renderRecoveryPage = () => render(<HashRouter><RecoveryPage /></HashRouter>);
+const renderRecoveryPage = (initialEntry = "/recovery") => {
+  const router = createMemoryRouter([
+    { path: "/", element: <h1>Home</h1> },
+    { path: "/recovery", element: <RecoveryPage /> },
+    { path: "*", element: <h1>Unknown route</h1> },
+  ], { initialEntries: [initialEntry] });
+  return { ...render(<RouterProvider router={router} />), router };
+};
 const goToCatalog = () => fireEvent.click(screen.getByRole("button", { name: "4 Catálogo" }));
 const goToScan = () => fireEvent.click(screen.getByRole("button", { name: "3 Varredura" }));
 
@@ -182,8 +189,7 @@ describe("RecoveryPage audit details", () => {
   });
 
   it("opens the image picker when reached from the raw-image homepage action", async () => {
-    window.location.hash = "#/recovery?source=image";
-    renderRecoveryPage();
+    renderRecoveryPage("/recovery?source=image");
     await waitFor(() => expect(recovery.selectRawImage).toHaveBeenCalledOnce());
   });
 
@@ -254,7 +260,7 @@ describe("RecoveryPage audit details", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Filtros" })).toBeNull());
   });
 
-  it("keeps the catalog tree mounted once filters open or change", () => {
+  it("keeps the catalog tree mounted once filters open or change", async () => {
     const originalRoots = recovery.catalog.roots;
     const originalAvailableExtensions = recovery.availableExtensions;
     const originalExtensions = recovery.extensions;
@@ -267,7 +273,7 @@ describe("RecoveryPage audit details", () => {
     treeRenderCount.value = 0;
 
     try {
-      const page = renderRecoveryPage();
+      const { router } = renderRecoveryPage();
       goToCatalog();
       expect(screen.getByTestId("recovery-tree")).toBeTruthy();
       expect(treeRenderCount.value).toBe(1);
@@ -278,8 +284,55 @@ describe("RecoveryPage audit details", () => {
       expect(recovery.setExtensionSelected).toHaveBeenCalledWith(".jpg", true);
 
       recovery.extensions = [".jpg"] as never;
-      page.rerender(<HashRouter><RecoveryPage /></HashRouter>);
+      await router.navigate("/recovery?filter=changed");
       expect(treeRenderCount.value).toBe(1);
+    } finally {
+      recovery.catalog.roots = originalRoots;
+      recovery.availableExtensions = originalAvailableExtensions;
+      recovery.extensions = originalExtensions;
+    }
+  });
+
+  it("measures filter interactions with a reproducible 100k-item catalog", () => {
+    const originalRoots = recovery.catalog.roots;
+    const originalAvailableExtensions = recovery.availableExtensions;
+    const originalExtensions = recovery.extensions;
+    const itemCount = 100_000;
+    recovery.catalog.roots = Array.from({ length: itemCount }, (_, index) => ({
+      id: `perf-${index}`,
+      name: `file-${String(index).padStart(6, "0")}.jpg`,
+      path: `fixture/${String(index).padStart(6, "0")}.jpg`,
+      isDirectory: false,
+      sizeBytes: 1024 + index,
+      hasChildren: false,
+    })) as never;
+    recovery.availableExtensions = [".jpg", ".png", ".pdf"] as never;
+    recovery.extensions = [] as never;
+    treeRenderCount.value = 0;
+
+    try {
+      renderRecoveryPage();
+      goToCatalog();
+      const openFiltersStarted = performance.now();
+      fireEvent.click(screen.getByRole("button", { name: "Filtros" }));
+      const filterOpenMs = performance.now() - openFiltersStarted;
+
+      const openTypesStarted = performance.now();
+      fireEvent.click(screen.getByRole("button", { name: /Tipos de arquivo/ }));
+      const typeMenuOpenMs = performance.now() - openTypesStarted;
+
+      const selectTypeStarted = performance.now();
+      fireEvent.click(screen.getByRole("checkbox", { name: ".jpg" }));
+      const typeSelectionMs = performance.now() - selectTypeStarted;
+      expect(treeRenderCount.value).toBe(1);
+      console.info("[catalog-perf]", JSON.stringify({
+        fixtureItems: itemCount,
+        filterOpenMs: Number(filterOpenMs.toFixed(2)),
+        typeMenuOpenMs: Number(typeMenuOpenMs.toFixed(2)),
+        typeSelectionMs: Number(typeSelectionMs.toFixed(2)),
+        treeRenders: treeRenderCount.value,
+        virtualizedRowsLimit: 50,
+      }));
     } finally {
       recovery.catalog.roots = originalRoots;
       recovery.availableExtensions = originalAvailableExtensions;
@@ -336,6 +389,37 @@ describe("RecoveryPage audit details", () => {
     } finally {
       recovery.catalog.roots = originalRoots;
       recovery.selectedIds = originalSelectedIds;
+    }
+  });
+
+  it("blocks route changes while an operation is active", async () => {
+    const wasBusy = recovery.busy;
+    recovery.busy = true;
+    try {
+      const { router } = renderRecoveryPage();
+      await router.navigate("/");
+      await waitFor(() => expect(router.state.location.pathname).toBe("/recovery"));
+      expect(screen.getByRole("heading", { name: "Selecione uma origem" })).toBeTruthy();
+    } finally {
+      recovery.busy = wasBusy;
+    }
+  });
+
+  it("warns before closing during an operation and removes the listener on unmount", () => {
+    const wasBusy = recovery.busy;
+    recovery.busy = true;
+    try {
+      const page = renderRecoveryPage();
+      const closeAttempt = new Event("beforeunload", { cancelable: true });
+      expect(window.dispatchEvent(closeAttempt)).toBe(false);
+      expect(closeAttempt.defaultPrevented).toBe(true);
+
+      page.unmount();
+      const laterCloseAttempt = new Event("beforeunload", { cancelable: true });
+      expect(window.dispatchEvent(laterCloseAttempt)).toBe(true);
+      expect(laterCloseAttempt.defaultPrevented).toBe(false);
+    } finally {
+      recovery.busy = wasBusy;
     }
   });
 
