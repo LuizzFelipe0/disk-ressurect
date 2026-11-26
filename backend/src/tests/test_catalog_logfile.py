@@ -31,17 +31,23 @@ class FakeDisk:
 class FakeTreeBuilder:
     nodes = {}
     root_nodes = []
+    last_instance = None
 
     def __init__(self, *_args, **_kwargs):
         self.nodes = type(self).nodes
         self.root_nodes = type(self).root_nodes
         self.parent_reference_issue_count = 0
+        self.released = False
+        type(self).last_instance = self
 
     def build(self, **_kwargs):
         return self.nodes
 
     def inject_ghosts(self, _ghosts):
         return None
+
+    def release_source_tree(self):
+        self.released = True
 
 
 class CatalogLogFileEvidenceTests(unittest.TestCase):
@@ -76,6 +82,7 @@ class CatalogLogFileEvidenceTests(unittest.TestCase):
                     precomputed_orphans={},
                 )
 
+        self.assertTrue(FakeTreeBuilder.last_instance.released)
         summary = snapshot.ntfs_log_file_summary
         self.assertEqual(1, len(snapshot.catalog.nodes))
         self.assertEqual(2, summary["pagesExamined"])

@@ -231,6 +231,10 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
     def test_deep_scan_candidates_survive_an_interrupted_scan_and_backend_restart(self):
         class InterruptedInventory(FakeInventory):
+            def list_disks(self):
+                return [SimpleNamespace(number=0, model="Recovery disk", size_bytes=16 * 1024 * 1024,
+                    serial_number="test", display_name="Disk 0 · Recovery disk")]
+
             def deep_scan_ntfs_volumes(self, disk_number, progress_callback=None, candidate_callback=None,
                 resume_checkpoint=None, checkpoint_callback=None):
                 candidate_callback(tuple(self.volumes))
@@ -238,7 +242,7 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
 
         volume = make_volume()
         volume = NTFSVolume(
-            volume.disk_number, 0, volume.partition_offset, volume.partition_size,
+            0, 0, volume.partition_offset, volume.partition_size,
             volume.bytes_per_sector, volume.cluster_size, volume.record_size,
             volume.mft_offset, volume.mft_size, volume.mft_fragments,
             "Lost NTFS", True,
@@ -246,17 +250,21 @@ class RecoveryCommandHandlerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as data_directory:
             inventory = InterruptedInventory([volume])
             repository_path = os.path.join(data_directory, "deep_scan_cache.json")
-            session = make_handler(inventory, repository=JsonDeepScanRepository(repository_path))
+            session = make_handler(inventory, repository=JsonDeepScanRepository(
+                repository_path, disk_mapper=lambda _path: {1},
+            ))
             with self.assertRaisesRegex(OSError, "Simulated interruption"):
-                session.dispatch("list_partitions", {"diskNumber": 1, "deepScan": True}, lambda _event: None)
+                session.dispatch("list_partitions", {"diskNumber": 0, "deepScan": True}, lambda _event: None)
 
-            restarted = make_handler(inventory, repository=JsonDeepScanRepository(repository_path))
+            restarted = make_handler(inventory, repository=JsonDeepScanRepository(
+                repository_path, disk_mapper=lambda _path: {1},
+            ))
             disks = restarted.dispatch("list_disks", {}, lambda _event: None)
 
         self.assertEqual(len(disks[0]["cachedPartitions"]), 1)
-        self.assertEqual(disks[0]["cachedPartitions"][0]["id"], "1:4096")
+        self.assertEqual(disks[0]["cachedPartitions"][0]["id"], "0:4096")
         self.assertTrue(disks[0]["cachedPartitions"][0]["scanSavedAt"])
-        self.assertEqual(restarted.session.volumes["1:4096"].mft_fragments, ((8192, 2, 0),))
+        self.assertEqual(restarted.session.volumes["0:4096"].mft_fragments, ((8192, 2, 0),))
 
     def test_catalog_response_contains_roots_and_lazy_children(self):
         image = make_node(2, "photo.jpg", False, "Photos/photo.jpg", size=2048)

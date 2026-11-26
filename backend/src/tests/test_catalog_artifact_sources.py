@@ -50,16 +50,22 @@ class FakeTreeBuilder:
     nodes = {}
     root_nodes = []
     parent_reference_issue_count = 0
+    last_instance = None
 
     def __init__(self, *_args, **_kwargs):
         self.nodes = type(self).nodes
         self.root_nodes = type(self).root_nodes
+        self.released = False
+        type(self).last_instance = self
 
     def build(self, **_kwargs):
         return self.nodes
 
     def inject_ghosts(self, _ghosts):
         return None
+
+    def release_source_tree(self):
+        self.released = True
 
 
 def _record(name, size, *, is_dir=False, content=None, index=1, streams=None):
@@ -146,6 +152,7 @@ class CatalogArtifactSourceIntegrationTests(unittest.TestCase):
             include_orphaned=True,
             precomputed_orphans={},
         )
+        self.assertTrue(FakeTreeBuilder.last_instance.released)
         return snapshot, disk
 
     def test_adds_safe_recycle_bin_alias_with_metadata_only(self):
