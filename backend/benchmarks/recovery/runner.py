@@ -123,10 +123,11 @@ def _signature_coverage_case(count, *, seed):
 
 def _range_and_resume_experiments(seed):
     jpeg, _pixels, _geometry = _media(seed)
-    cluster_count = 4
-    bitmap = bytes([(1 << 1) | (1 << 3)])
+    cluster_count = 16
+    bitmap = bytes([1 << 1, 0])
     collector = FreeClusterRangeCollector(
-        0, CLUSTER_SIZE, cluster_count, max_bytes=CLUSTER_SIZE * 4, max_ranges=1,
+        0, CLUSTER_SIZE, cluster_count, max_bytes=CLUSTER_SIZE * cluster_count,
+        max_ranges=1,
     )
     collector.consume(bitmap, 0)
     retained = collector.finish()
@@ -138,6 +139,19 @@ def _range_and_resume_experiments(seed):
         max_total_file_bytes=128 * 1024, max_candidate_read_bytes=128 * 1024,
         max_candidate_read_bytes_per_format=128 * 1024, max_files=8,
     ).scan(retained["ranges"])
+    continued_ranges = FreeClusterRangeCollector(
+        0, CLUSTER_SIZE, cluster_count, max_bytes=CLUSTER_SIZE * cluster_count,
+        max_ranges=1, start_range_index=retained["nextRangeIndex"],
+    )
+    continued_ranges.consume(bitmap, 0)
+    continued_page = continued_ranges.finish()
+    continued_source = InstrumentedReader(MemoryReader(small_data), size=len(small_data))
+    with continued_source.stage("content_carving"):
+        continued = RawContentCarver(
+            continued_source, max_scan_bytes=len(small_data), max_file_bytes=64 * 1024,
+            max_total_file_bytes=128 * 1024, max_candidate_read_bytes=128 * 1024,
+            max_candidate_read_bytes_per_format=128 * 1024, max_files=8,
+        ).scan(continued_page["ranges"])
 
     resumed_data = bytearray(128 * 1024)
     first_jpeg, *_ = _media(seed + 1)
@@ -169,12 +183,23 @@ def _range_and_resume_experiments(seed):
             "allBitmapFreeRanges": [[0, CLUSTER_SIZE], [2 * CLUSTER_SIZE, 3 * CLUSTER_SIZE]],
             "retainedRanges": [list(item) for item in retained["ranges"]],
             "rangeCollectionTruncated": retained["truncated"],
+            "nextRangeIndex": retained["nextRangeIndex"],
+            "continuedRanges": [list(item) for item in continued_page["ranges"]],
+            "continuedRangePendingCount": continued_page["pendingRangeCount"],
             "carverCandidatesFromRetainedRange": len(limited.files),
             "candidateInOmittedFreeRangeRecovered": False,
+            "candidateRecoveredAfterBoundedContinuation": bool(continued.files),
+            "continuedCandidateOffsets": [item.offset for item in continued.files],
             "readCoverage": source.report(),
+            "continuedReadCoverage": continued_source.report(),
         },
         "boundedCheckpointResume": {
             "passes": passes,
+            "candidateRestoreBytesReadTotal": sum(
+                item["candidateRestoreBytesRead"] for item in passes
+            ),
+            "candidateRestorationReadsAreRequiredForSourceFreshness": True,
+            "timingScope": "one sequential checkpoint-resume session",
             "stopReason": "scope_complete" if passes and not passes[-1]["scanLimitReached"] else "budget_exhausted",
             "candidateAfterFirstWindowEventuallySeen": bool(passes and passes[-1]["filesFound"] >= 2),
             "readCoverage": resumed_source.report(),

@@ -57,10 +57,40 @@ def evaluate_carving(files, manifest):
 
     expected_ids = sorted(entry.file_id for entry in eligible_entries)
     recovered_ids = sorted(recovered_ids)
+    unique_expected_hashes = {entry.sha256 for entry in eligible_entries}
+    recovered_content_hashes = unique_expected_hashes.intersection(found_hashes)
+    duplicate_content_groups = {}
+    for entry in eligible_entries:
+        duplicate_content_groups.setdefault(entry.sha256, []).append(entry)
+    duplicate_content_groups = {
+        digest: entries for digest, entries in duplicate_content_groups.items()
+        if len(entries) > 1
+    }
+    physical_occurrences_discovered = sum(
+        any(item["offset"] == start for item in found_hashes.get(entry.sha256, ()))
+        for entry in eligible_entries
+        for start, _end in entry.physical_ranges
+    )
+    duplicate_physical_occurrence_misses = sum(
+        1 for entries in duplicate_content_groups.values()
+        for entry in entries
+        if entry.file_id not in recovered_ids
+    )
     return {
         "originalFilesInContiguousRecoveryDenominator": len(expected_ids),
         "completeOriginalFilesRecoveredByteForByte": len(recovered_ids),
         "originalFileIdentitiesWithDuplicateContentAreEvaluatedByKnownPhysicalOffset": True,
+        "uniqueOriginalContentsExpected": len(unique_expected_hashes),
+        "uniqueOriginalContentsRecovered": len(recovered_content_hashes),
+        "physicalOccurrencesExpected": len(eligible_entries),
+        "physicalOccurrencesDiscovered": physical_occurrences_discovered,
+        "physicalOccurrencesRecovered": len(recovered_ids),
+        "physicalOccurrenceMisses": len(eligible_entries) - len(recovered_ids),
+        "sameContentDifferentOffsetsExpected": len(duplicate_content_groups),
+        "duplicatePhysicalOccurrenceMisses": duplicate_physical_occurrence_misses,
+        "currentDigestDeduplicationMaySuppressPhysicalOccurrences": bool(
+            duplicate_content_groups
+        ),
         "recoveredOriginalIds": recovered_ids,
         "missedOriginalIds": sorted(set(expected_ids) - set(recovered_ids)),
         "falseAcceptedCandidateCount": sum(len(found_hashes[digest]) for digest in false_candidates),

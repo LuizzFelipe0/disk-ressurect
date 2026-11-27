@@ -14,6 +14,7 @@ from recovery.evaluation import evaluate_carving
 from recovery.ground_truth import GroundTruthEntry, GroundTruthManifest
 from recovery.read_coverage import InstrumentedReader
 from recovery.readers import MemoryReader
+from recovery.runner import run_tier1
 from recovery.session_continuation import run_session_continuation_benchmark
 
 
@@ -99,6 +100,13 @@ class BenchmarkInfrastructureTests(unittest.TestCase):
 
         self.assertEqual(result["recoveredOriginalIds"], ["first-copy"])
         self.assertEqual(result["missedOriginalIds"], ["second-copy"])
+        self.assertEqual(result["uniqueOriginalContentsExpected"], 1)
+        self.assertEqual(result["uniqueOriginalContentsRecovered"], 1)
+        self.assertEqual(result["physicalOccurrencesExpected"], 2)
+        self.assertEqual(result["physicalOccurrencesDiscovered"], 1)
+        self.assertEqual(result["physicalOccurrenceMisses"], 1)
+        self.assertEqual(result["duplicatePhysicalOccurrenceMisses"], 1)
+        self.assertTrue(result["currentDigestDeduplicationMaySuppressPhysicalOccurrences"])
         self.assertEqual(result["falseAcceptedCandidateCount"], 1)
         self.assertEqual(result["falseAcceptedCandidates"][0]["groundTruthNegativeId"], "overwritten")
 
@@ -120,6 +128,22 @@ class BenchmarkInfrastructureTests(unittest.TestCase):
                          result["limits"]["retainedBytesEstimateMaximum"])
         self.assertFalse(continued["oraclePassedIntoSearch"])
         self.assertFalse(continued["oraclePositionsPassedIntoSearch"])
+
+    def test_resume_benchmark_separates_required_candidate_restoration_reads(self):
+        suite = run_tier1(seed=72531)["rangeAndResume"]
+        range_page = suite["rangeCollection"]
+        self.assertFalse(range_page["candidateInOmittedFreeRangeRecovered"])
+        self.assertTrue(range_page["candidateRecoveredAfterBoundedContinuation"])
+        self.assertEqual(range_page["continuedCandidateOffsets"], [2 * 4096])
+
+        result = suite["boundedCheckpointResume"]
+
+        self.assertEqual(
+            result["candidateRestoreBytesReadTotal"],
+            sum(item["candidateRestoreBytesRead"] for item in result["passes"]),
+        )
+        self.assertTrue(result["candidateRestorationReadsAreRequiredForSourceFreshness"])
+        self.assertEqual(result["timingScope"], "one sequential checkpoint-resume session")
 
 
 if __name__ == "__main__":
