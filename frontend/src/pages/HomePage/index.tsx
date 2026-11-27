@@ -5,7 +5,7 @@ import { WorkflowSteps } from "../../components/WorkflowSteps";
 import { useLanguagePreference } from "../../hooks/useLanguagePreference";
 import { translate } from "../../i18n/translations";
 import {
-  HomeContent, HomeEyebrow, HomeLayout, SourceCard, SourceGrid, SourceIcon,
+  HomeContent, HomeLayout, SourceCard, SourceGrid, SourceIcon,
   SourceOption, SourceInfo, SourceTitle, WelcomeBody, WelcomeTitle, ReadOnlyNotice,
 } from "./style";
 
@@ -20,7 +20,6 @@ export const HomePage: React.FC = () => {
         labels={[t("home"), t("storageStep"), t("scanStep"), t("catalogStep"), t("recoveryStep")]}
         ariaLabel={t("stepsNavigation")} onStepChange={() => undefined} />
       <Card size="sm" variant="flat">
-        <HomeEyebrow>DISK-RESSURECT</HomeEyebrow>
         <WelcomeTitle>{t("welcomeTitle")}</WelcomeTitle>
         <WelcomeBody>{t("welcomeBody")}</WelcomeBody>
         <SourceGrid>
