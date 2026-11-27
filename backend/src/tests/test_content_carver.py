@@ -64,6 +64,14 @@ def mp4():
             + box(b"mdat", b"media") + box(b"moov", b"metadata"))
 
 
+def mov():
+    def box(kind, payload):
+        return (len(payload) + 8).to_bytes(4, "big") + kind + payload
+
+    return (box(b"ftyp", b"qt  \x00\x00\x00\x00qt  ")
+            + box(b"mdat", b"media") + box(b"moov", b"metadata"))
+
+
 def compound_office(kind="word"):
     free, eoc, fat_sector = 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
     data = bytearray(512 * 19)
@@ -234,6 +242,7 @@ class RawContentCarverTests(unittest.TestCase):
             (office_zip("xl/workbook.xml"), ".xlsx"),
             (office_zip("xl/workbook.xml", ("xl/vbaProject.bin",)), ".xlsm"),
             (mp4(), ".mp4"),
+            (mov(), ".mov"),
         )
         for candidate, extension in candidates:
             with self.subTest(extension=extension), tempfile.TemporaryDirectory() as directory:
@@ -259,6 +268,21 @@ class RawContentCarverTests(unittest.TestCase):
         stats = {item.extension: item for item in result.format_stats}
         self.assertEqual(stats[".mp4"].candidates_examined, 1)
         self.assertEqual(stats[".mp4"].files_found, 1)
+        self.assertEqual(stats[".mp4"].candidate_bytes_read, len(candidate))
+
+    def test_carves_quicktime_mov_with_the_shared_bounded_iso_bmff_reader(self):
+        disk = FakeDisk(size=4096)
+        candidate = mov()
+        disk.data[509:509 + len(candidate)] = candidate
+
+        result = RawContentCarver(disk, chunk_size=512).scan([(0, disk.size)])
+
+        self.assertEqual([(item.offset, item.extension, item.data) for item in result.files],
+                         [(509, ".mov", candidate)])
+        stats = {item.extension: item for item in result.format_stats}
+        self.assertEqual(stats[".mp4"].candidates_examined, 1)
+        self.assertEqual(stats[".mp4"].files_found, 1)
+        self.assertEqual(stats[".mp4"].candidate_bytes_read, len(candidate))
 
     def test_finds_rtf_across_scan_boundary_and_cfb_office_candidate(self):
         fixtures = (

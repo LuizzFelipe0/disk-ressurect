@@ -2,7 +2,7 @@
 
 This module is deliberately independent from the range scanner so it can be
 used by the carver without coupling format parsing to disk I/O. It recognizes
-OOXML Office ZIP containers and ISO-BMFF/MP4 files. It does not decompress ZIP
+OOXML Office ZIP containers and bounded ISO-BMFF containers. It does not decompress ZIP
 members or decode media payloads; a positive result is structural evidence,
 not proof that an application can open the recovered file.
 """
@@ -545,6 +545,7 @@ def _validate_iso_bmff(data: bytes) -> AdditionalFormatCandidate | None:
     cursor = 0
     box_count = 0
     saw_ftyp = saw_mdat = saw_movie_metadata = False
+    movie_extension = ".mp4"
     while cursor < len(data):
         if cursor + 8 > len(data):
             return None
@@ -563,8 +564,15 @@ def _validate_iso_bmff(data: bytes) -> AdditionalFormatCandidate | None:
         if box_size < header_size or cursor + box_size > len(data):
             return None
         if cursor == 0 and box_type == ISO_BMFF_FILE_TYPE:
-            if box_size < 16 or (box_size - 16) % 4 != 0:
+            ftyp_payload = data[cursor + header_size:cursor + box_size]
+            if len(ftyp_payload) < 8 or (len(ftyp_payload) - 8) % 4 != 0:
                 return None
+            brands = (ftyp_payload[:4],) + tuple(
+                ftyp_payload[position:position + 4]
+                for position in range(8, len(ftyp_payload), 4)
+            )
+            if b"qt  " in brands:
+                movie_extension = ".mov"
             saw_ftyp = True
         elif box_type == b"mdat":
             saw_mdat = True
@@ -578,6 +586,8 @@ def _validate_iso_bmff(data: bytes) -> AdditionalFormatCandidate | None:
             break
     if cursor == len(data) and saw_ftyp and saw_mdat and saw_movie_metadata:
         return AdditionalFormatCandidate(
-            ".mp4", len(data), "ISO-BMFF top-level box bounds and ftyp/mdat/movie metadata",
+            movie_extension, len(data),
+            "ISO-BMFF top-level box bounds and ftyp/mdat/movie metadata; "
+            "QuickTime brand required for MOV classification",
         )
     return None

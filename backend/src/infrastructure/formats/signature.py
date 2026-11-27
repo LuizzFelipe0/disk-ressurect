@@ -17,6 +17,7 @@ class FileSignatureValidator:
     SIGNATURES = {
         ".jpg": ((0, b"\xFF\xD8\xFF"),),
         ".jpeg": ((0, b"\xFF\xD8\xFF"),),
+        ".mov": ((4, b"ftyp"),),
         ".png": ((0, b"\x89PNG\r\n\x1a\n"),),
         ".pdf": ((0, b"%PDF-"),),
         ".doc": ((0, OLE_SIGNATURE),),

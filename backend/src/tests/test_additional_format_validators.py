@@ -33,6 +33,11 @@ def mp4():
     return ftyp + box(b"mdat", b"media") + box(b"moov", b"metadata")
 
 
+def mov():
+    ftyp = box(b"ftyp", b"isom\x00\x00\x00\x00qt  ")
+    return ftyp + box(b"mdat", b"media") + box(b"moov", b"metadata")
+
+
 def compound_office(kind="word"):
     free = 0xFFFFFFFF
     eoc = 0xFFFFFFFE
@@ -196,6 +201,19 @@ class AdditionalFormatValidatorTests(unittest.TestCase):
         self.assertEqual(result.extension, ".mp4")
         self.assertEqual(result.size_bytes, len(candidate))
         self.assertIn("top-level box bounds", result.validation_scope)
+
+    def test_classifies_quicktime_brand_as_mov(self):
+        result = validate_additional_candidate(mov())
+
+        self.assertIsNotNone(result)
+        self.assertEqual(".mov", result.extension)
+        self.assertIn("QuickTime brand", result.validation_scope)
+
+        primary_brand = box(b"ftyp", b"qt  \x00\x00\x00\x00isom")
+        primary_brand += box(b"mdat", b"media") + box(b"moov", b"metadata")
+        result = validate_additional_candidate(primary_brand)
+        self.assertIsNotNone(result)
+        self.assertEqual(".mov", result.extension)
 
     def test_rejects_truncated_or_incomplete_iso_bmff(self):
         candidate = mp4()

@@ -5,7 +5,7 @@ from modules.storage.entities import StorageSource
 
 
 SUPPORTED_CATALOG_EXTENSIONS = (
-    ".doc", ".docm", ".docx", ".jpeg", ".jpg", ".mp4",
+    ".doc", ".docm", ".docx", ".jpeg", ".jpg", ".mov", ".mp4",
     ".pdf", ".png", ".rtf", ".xls", ".xlsm", ".xlsx",
 )
 
