@@ -55,6 +55,7 @@ class CarvedContentRecord:
     catalog_content_validation_reason: str = (
         "Contiguous file structure and format markers passed validation"
     )
+    fragment_reconstruction_evidence: dict | None = None
 
     def __post_init__(self):
         content = bytes(self.resident_data)
@@ -252,6 +253,9 @@ class CatalogBuilder:
                             raw_session_retained_byte_limit,
                             raw_candidate_data,
                             raw_candidate_locations,
+                            volume.partition_offset,
+                            volume.partition_offset + volume.partition_size,
+                            volume.cluster_size,
                         )
                     )
                 nodes = builder.nodes
@@ -323,6 +327,9 @@ class CatalogBuilder:
                     candidate_id = uuid.uuid4().hex
                 used_node_ids.add(candidate_id)
                 allocation = self._allocation_state(record)
+                fragment_reconstruction = bool(
+                    getattr(source_node, "is_fragment_reconstructed", False)
+                )
                 complete = bool(getattr(record, "data_is_complete", False))
                 valid = bool(getattr(record, "is_valid", True))
                 consistent = getattr(record, "is_metadata_consistent", True)
@@ -335,6 +342,29 @@ class CatalogBuilder:
                 self.content_reference_store.register(
                     candidate_id, source, volume, source_node,
                 )
+                provenance = getattr(record, "fragment_reconstruction_evidence", None)
+                if fragment_reconstruction and isinstance(provenance, dict):
+                    evidence = RecoveryEvidence(
+                        "fragment_reconstruction",
+                        str(provenance.get("strategy", "png_idat")),
+                        tuple(sorted((
+                            ("signatureOffset", provenance.get("signatureOffset")),
+                            ("sourceOffsets", ",".join(map(
+                                str, provenance.get("sourceRanges", ()),
+                            ))),
+                            ("validation", provenance.get("validation")),
+                        ))),
+                    )
+                else:
+                    evidence = RecoveryEvidence(
+                        "filesystem_metadata",
+                        str(getattr(record, "recovery_source", None) or "ntfs"),
+                        tuple(sorted((
+                            ("recordNumber", getattr(record, "index", None)),
+                            ("sequenceNumber", getattr(record, "sequence_number", None)),
+                            ("physicalOffset", getattr(record, "mft_offset", None)),
+                        ))),
+                    )
                 candidate = RecoveryCandidate(
                     candidate_id=candidate_id,
                     source_id=source_id,
@@ -344,18 +374,16 @@ class CatalogBuilder:
                     size_bytes=int(record.file_size),
                     filesystem_id="ntfs",
                     discovery_methods=(self._discovery_method(source_node),),
-                    evidence=(RecoveryEvidence(
-                        "filesystem_metadata",
-                        str(getattr(record, "recovery_source", None) or "ntfs"),
-                        tuple(sorted((
-                            ("recordNumber", getattr(record, "index", None)),
-                            ("sequenceNumber", getattr(record, "sequence_number", None)),
-                            ("physicalOffset", getattr(record, "mft_offset", None)),
-                        ))),
-                    ),),
-                    deletion_state="deleted" if not getattr(record, "is_allocated", True) else "not_deleted",
+                    evidence=(evidence,),
+                    deletion_state=(
+                        "unknown" if fragment_reconstruction else
+                        "deleted" if not getattr(record, "is_allocated", True) else "not_deleted"
+                    ),
                     allocation_state=allocation,
-                    integrity_state=("validated" if valid and consistent is not False else "partial"),
+                    integrity_state=(
+                        "unknown" if fragment_reconstruction else
+                        "validated" if valid and consistent is not False else "partial"
+                    ),
                     recoverability=("recoverable" if complete else "partial"),
                     content_reference=reference,
                 )
@@ -401,6 +429,8 @@ class CatalogBuilder:
 
     @staticmethod
     def _discovery_method(node):
+        if getattr(node, "is_fragment_reconstructed", False):
+            return "fragment_reconstruction"
         if getattr(node, "is_content_carved", False):
             return "content_carving"
         if getattr(node, "is_orphaned", False):
@@ -439,6 +469,7 @@ class CatalogBuilder:
             "dataExtentResolution": extent_resolution,
             "dataExtentResolutionReason": getattr(record, "data_extent_resolution_reason", None),
             "dataExtentCount": getattr(record, "data_extent_count", None),
+            "fragmentReconstruction": getattr(record, "fragment_reconstruction_evidence", None),
         }
 
     def _scan_content_carving(
@@ -446,7 +477,7 @@ class CatalogBuilder:
         checkpoint_callback, uncertain_ranges, uncertain_ranges_truncated,
         phase_callback, raw_candidate_references=None, raw_session_candidate_limit=None,
         raw_session_retained_byte_limit=None, raw_candidate_data=None,
-        raw_candidate_locations=None,
+        raw_candidate_locations=None, volume_start=0, volume_end=None, cluster_size=4096,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -471,6 +502,14 @@ class CatalogBuilder:
                 carver_options.get("max_total_file_bytes", 128 * 1024**2),
                 int(raw_session_retained_byte_limit),
             )
+        reconstruction_enabled = bool(getattr(
+            options, "enable_png_fragment_reconstruction", False,
+        ))
+        if reconstruction_enabled:
+            from infrastructure.carving.png_idat_fragment_reconstructor import (
+                PNGIDATFragmentReconstructor,
+            )
+
         carving = RawContentCarver(disk, **carver_options).scan(
             ranges,
             progress_callback=self._phase_progress(phase_callback, "content_carving"),
@@ -487,6 +526,7 @@ class CatalogBuilder:
             require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
             ranges_truncated=bool(ranges_truncated),
+            collect_png_signatures=reconstruction_enabled,
         )
         candidate_catalog = CarvedCandidateCatalog(
             builder,
@@ -497,6 +537,76 @@ class CatalogBuilder:
             retained_candidate_locations=raw_candidate_locations,
         )
         candidate_catalog.add(carving.files, ("Lost_Files_DeepScan", "ContentCarving"))
+        reconstruction_summary = None
+        if reconstruction_enabled:
+            signature_offsets = carving.png_signature_offsets
+            signatures = tuple(
+                offset for offset in signature_offsets
+                if not any(item.offset == offset and item.extension == ".png" for item in carving.files)
+            )
+            reconstruction = PNGIDATFragmentReconstructor(
+                disk,
+                volume_start=volume_start,
+                volume_end=volume_end,
+                cluster_size=cluster_size,
+            ).reconstruct(signatures, ranges)
+            candidate_catalog.add(
+                reconstruction.candidates,
+                ("Lost_Files_DeepScan", "PNGFragmentHypotheses"),
+                allocation_status="free",
+            )
+            reconstruction_summary = {
+                "enabled": True,
+                "strategy": "aligned_complete_idat_chunks",
+                "signaturesSeen": len(signature_offsets),
+                "signaturesExamined": reconstruction.signatures_examined,
+                "signatureDiscoveryComplete": (
+                    carving.checkpoint is None and not carving.scan_limit_reached
+                    and not carving.png_signature_set_truncated
+                    and not ranges_truncated
+                ),
+                "candidatesFound": len(reconstruction.candidates),
+                "structuralHypotheses": len(reconstruction.candidates),
+                "signaturesRejected": (
+                    max(0, reconstruction.signatures_examined - len({
+                        item.evidence.get("signatureOffset")
+                        for item in reconstruction.candidates if item.evidence
+                    })) if reconstruction.stop_reason == "search_exhausted" else None
+                ),
+                "combinationsEvaluated": reconstruction.combinations,
+                "bytesRead": reconstruction.bytes_read,
+                "elapsedSeconds": reconstruction.elapsed_seconds,
+                "retainedBytesEstimate": reconstruction.retained_bytes_estimate,
+                "retainedMemoryDefinition": (
+                    "Estimated search frontier, compressed payloads, hypotheses and "
+                    "metadata plus an 8 MiB transient validation buffer allowance; not RSS"
+                ),
+                "stopReason": reconstruction.stop_reason,
+                "searchScope": (
+                    "Up to four observed PNG signatures; complete IDAT chunks at cluster-aligned "
+                    "starts within the trusted free ranges; up to four IDAT chunks plus IEND"
+                ),
+                "integrity": "unknown_without_independent_original_hash",
+                "limits": {
+                    "combinationsPerPass": PNGIDATFragmentReconstructor.PAIRS_PER_PASS,
+                    "passes": PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "combinations": PNGIDATFragmentReconstructor.PAIRS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "bytesReadPerPass": PNGIDATFragmentReconstructor.READS_PER_PASS,
+                    "bytesRead": PNGIDATFragmentReconstructor.READS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "candidateBytes": PNGIDATFragmentReconstructor.MAX_CANDIDATE_BYTES,
+                    "secondsPerPass": PNGIDATFragmentReconstructor.SECONDS_PER_PASS,
+                    "seconds": PNGIDATFragmentReconstructor.SECONDS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "retainedBytes": PNGIDATFragmentReconstructor.RETAINED_BYTES,
+                },
+            }
+            status_counts = {}
+            for candidate in reconstruction.candidates:
+                status = (candidate.evidence or {}).get("hypothesisStatus", "unknown")
+                status_counts[status] = status_counts.get(status, 0) + 1
+            reconstruction_summary["hypothesesByStatus"] = status_counts
         budget_gib = options.scan_budget_gib if options is not None else 1
         retained_budget_mib = (
             getattr(options, "max_retained_mib", 128) if options is not None else 128
@@ -538,6 +648,13 @@ class CatalogBuilder:
                         and carving.max_total_file_bytes == int(raw_session_retained_byte_limit))),
             ),
         }
+        if reconstruction_summary is not None:
+            trusted_summary["pngFragmentReconstruction"] = reconstruction_summary
+            if (carving.png_signature_set_truncated
+                    or len(signature_offsets) > PNGIDATFragmentReconstructor.MAX_SIGNATURES):
+                trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = True
+                if trusted_summary["pngFragmentReconstruction"]["stopReason"] == "search_exhausted":
+                    trusted_summary["pngFragmentReconstruction"]["stopReason"] = "signature_limit"
         low_confidence_summary = None
         if uncertain_ranges is not None:
             low_confidence_summary = self._scan_low_confidence_ranges(
@@ -888,13 +1005,17 @@ class CarvedCandidateCatalog:
         self.added_count = 0
         self.retained_bytes = 0
         self.session_limit_reached = False
+        self.reconstruction_offsets = {}
 
     def add(self, candidates, path_parts, allocation_status=None):
         added = 0
         for candidate in candidates:
             digest = hashlib.sha256(candidate.data).digest()
             offset = int(candidate.offset)
-            if digest in self.content_digests or offset in self.physical_offsets:
+            is_reconstructed = candidate.strategy == "png_fragment_reconstruction"
+            if digest in self.content_digests or (
+                not is_reconstructed and offset in self.physical_offsets
+            ):
                 continue
             content = self.retained_candidate_data.get((offset, digest.hex()), candidate.data)
             if (self.max_files is not None and self.added_count >= self.max_files
@@ -916,20 +1037,37 @@ class CarvedCandidateCatalog:
             synthetic_id = -(self.disk_size + offset + 1)
             while synthetic_id in self.builder.nodes:
                 synthetic_id -= 1
+            if is_reconstructed:
+                alternative = self.reconstruction_offsets.get(offset, 0) + 1
+                self.reconstruction_offsets[offset] = alternative
+                name = f"Carved_{offset:016X}_Hypothesis_{alternative}{candidate.extension}"
+            else:
+                name = f"Carved_{offset:016X}{candidate.extension}"
             record = CarvedContentRecord(
                 index=synthetic_id,
                 offset=offset,
-                name=f"Carved_{offset:016X}{candidate.extension}",
+                name=name,
                 resident_data=content,
                 cluster_allocation_status=candidate_allocation_status or "free",
+                catalog_content_validation=(
+                    "fragment_structure_hypothesis" if is_reconstructed
+                    else "format_structure_match"
+                ),
                 catalog_content_validation_reason=(
+                    "PNG structure checks passed for a fragment reconstruction hypothesis; "
+                    "the original file integrity is unknown"
+                    if is_reconstructed else
                     "Contiguous format structure passed validation; allocation "
                     "is unknown or may describe current/reused data"
                     if allocation_status is not None else
                     "Contiguous file structure and format markers passed validation"
                 ),
+                fragment_reconstruction_evidence=(
+                    dict(candidate.evidence or {}) if is_reconstructed else None
+                ),
             )
             node = FileNode(record, is_orphaned=True, is_content_carved=True)
+            node.is_fragment_reconstructed = is_reconstructed
             node.full_path = os.path.join(*candidate_path_parts, record.name)
             self.builder.nodes[synthetic_id] = node
             self.builder.root_nodes.append(node)

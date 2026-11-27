@@ -41,6 +41,8 @@ class CarvingCheckpoint:
     bytes_scanned: int = 0
     signature_carry: bytes = b""
     processed_range_fingerprint: str = ""
+    png_signature_offsets: tuple[int, ...] = ()
+    png_signature_set_truncated: bool = False
 
     def __post_init__(self):
         if len(self.range_fingerprint) != 64 or any(
@@ -62,6 +64,13 @@ class CarvingCheckpoint:
             raise ValueError("Carving checkpoint scan profile is required")
         object.__setattr__(self, "candidates", tuple(self.candidates))
         object.__setattr__(self, "signature_carry", bytes(self.signature_carry))
+        offsets = tuple(int(item) for item in self.png_signature_offsets)
+        if (len(offsets) > 256 or any(item < 0 for item in offsets)
+                or tuple(sorted(set(offsets))) != offsets):
+            raise ValueError("PNG signature checkpoint is invalid or exceeds its limit")
+        object.__setattr__(self, "png_signature_offsets", offsets)
+        if not isinstance(self.png_signature_set_truncated, bool):
+            raise ValueError("PNG signature truncation marker must be a boolean")
         if len(self.signature_carry) > 32:
             raise ValueError("Signature carry exceeds the supported signature overlap")
         if any(not isinstance(item, CarvedCandidateReference) for item in self.candidates):

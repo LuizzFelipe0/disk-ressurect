@@ -24,6 +24,55 @@ export interface CarvingOptions {
   maxFiles: 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384;
   maxRetainedMiB: 128 | 256 | 512;
   maxCandidateReadMiBPerFormat: 256 | 512 | 1024;
+  enablePngFragmentReconstruction?: boolean;
+}
+
+export interface FragmentReconstructionEvidence {
+  strategy: "aligned_complete_idat_chunks";
+  signatureOffset: number;
+  sourceRanges: number[];
+  orderedFragments: [number, number, number][];
+  validation: "png_structure_hypothesis";
+  searchComplete: boolean;
+  searchStopReason: string;
+  hypothesisStatus:
+    | "unique_hypothesis_in_scope"
+    | "multiple_competing_hypotheses"
+    | "resource_limited_search"
+    | "inconclusive_search"
+    | "rejected";
+}
+
+export interface PNGFragmentReconstructionSummary {
+  enabled: boolean;
+  strategy: "aligned_complete_idat_chunks";
+  signaturesSeen: number;
+  signaturesExamined: number;
+  signatureDiscoveryComplete: boolean;
+  candidatesFound: number;
+  structuralHypotheses: number;
+  signaturesRejected: number | null;
+  combinationsEvaluated: number;
+  bytesRead: number;
+  elapsedSeconds: number;
+  retainedBytesEstimate: number;
+  retainedMemoryDefinition: string;
+  stopReason: string;
+  searchScope: string;
+  integrity: "unknown_without_independent_original_hash";
+  hypothesesByStatus: Record<string, number>;
+  signatureSetTruncated?: boolean;
+  limits: {
+    combinationsPerPass: number;
+    passes: number;
+    combinations: number;
+    bytesReadPerPass: number;
+    bytesRead: number;
+    candidateBytes: number;
+    secondsPerPass: number;
+    seconds: number;
+    retainedBytes: number;
+  };
 }
 
 export interface CatalogNode {
@@ -38,7 +87,7 @@ export interface CatalogNode {
   isDeleted?: boolean;
   isOrphaned?: boolean;
   isContentCarved?: boolean;
-  contentValidation?: "signature_match" | "signature_mismatch" | "format_structure_match" | "unavailable" | "incomplete_metadata" | "invalid_size" | "unsupported";
+  contentValidation?: "signature_match" | "signature_mismatch" | "format_structure_match" | "fragment_structure_hypothesis" | "unavailable" | "incomplete_metadata" | "invalid_size" | "unsupported";
   clusterAllocationStatus?: "free" | "allocated" | "mixed" | "partially_observed" | "unavailable" | "no_non_sparse_runs" | "bitmap_unobserved" | "possibly_reused";
   metadataConsistent?: boolean;
   recoverySource?: "recycle_bin" | string;
@@ -48,6 +97,7 @@ export interface CatalogNode {
   dataExtentResolution?: "resolved" | "inconclusive";
   dataExtentResolutionReason?: string;
   dataExtentCount?: number;
+  fragmentReconstruction?: FragmentReconstructionEvidence;
 }
 
 export interface ContentCarvingSummary {
@@ -77,6 +127,7 @@ export interface ContentCarvingSummary {
   rangeCollectionCapBytes?: number;
   formatsAttempted?: string[];
   validationScope?: string;
+  pngFragmentReconstruction?: PNGFragmentReconstructionSummary;
 }
 
 export interface LowConfidenceCarvingTier extends ContentCarvingSummary {

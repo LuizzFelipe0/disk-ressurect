@@ -33,6 +33,8 @@ class CarvedContent:
     offset: int
     extension: str
     data: bytes
+    strategy: str = "contiguous_carving"
+    evidence: dict | None = None
 
     @property
     def size_bytes(self):
@@ -59,6 +61,8 @@ class ContentCarveResult:
     checkpoint: CarvingCheckpoint | None = None
     candidate_restore_bytes_read: int = 0
     cumulative_bytes_scanned: int = 0
+    png_signature_offsets: tuple[int, ...] = ()
+    png_signature_set_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -136,6 +140,7 @@ class RawContentCarver:
     DEFAULT_MAX_CANDIDATE_READ_BYTES_PER_FORMAT = 256 * 1024 * 1024
     DEFAULT_MAX_FILES = 256
     DEFAULT_MAX_DECODED_PNG_BYTES = 64 * 1024 * 1024
+    MAX_PNG_SIGNATURE_OFFSETS = 256
 
     def __init__(
         self,
@@ -174,6 +179,7 @@ class RawContentCarver:
         require_all_retained_candidates: bool = False,
         checkpoint_callback: Callable[[CarvingCheckpoint | None], None] | None = None,
         ranges_truncated: bool = False,
+        collect_png_signatures: bool = False,
     ) -> ContentCarveResult:
         """Scan half-open physical disk intervals and return validated files.
 
@@ -185,12 +191,30 @@ class RawContentCarver:
         disk_size = int(self.disk.size)
         bytes_per_sector = int(getattr(self.disk, "bytes_per_sector", 512) or 512)
         range_fingerprint = self._range_fingerprint(merged_ranges, disk_size)
-        scan_profile = self._scan_profile()
+        collect_png_signatures = bool(collect_png_signatures)
+        scan_profile = self._scan_profile(collect_png_signatures)
         if not self._checkpoint_matches(
             resume_checkpoint, merged_ranges, disk_size, bytes_per_sector,
             range_fingerprint, scan_profile,
         ):
             resume_checkpoint = None
+
+        png_signature_offsets = list(
+            resume_checkpoint.png_signature_offsets
+            if collect_png_signatures and resume_checkpoint is not None else ()
+        )
+        png_signature_offsets_seen = set(png_signature_offsets)
+        png_signature_set_truncated = bool(
+            collect_png_signatures and resume_checkpoint is not None
+            and resume_checkpoint.png_signature_set_truncated
+        )
+
+        def make_checkpoint(*args):
+            return self._make_checkpoint(
+                *args,
+                png_signature_offsets=tuple(sorted(png_signature_offsets)),
+                png_signature_set_truncated=png_signature_set_truncated,
+            )
 
         if resume_checkpoint is not None:
             range_index, next_offset = self._resume_position(
@@ -288,6 +312,13 @@ class RawContentCarver:
                     family, pos = found
                     candidate_offset = buffer_start + pos
                     pos += 1
+                    if family == ".png" and collect_png_signatures:
+                        if candidate_offset not in png_signature_offsets_seen:
+                            if len(png_signature_offsets) < self.MAX_PNG_SIGNATURE_OFFSETS:
+                                png_signature_offsets_seen.add(candidate_offset)
+                                png_signature_offsets.append(candidate_offset)
+                            else:
+                                png_signature_set_truncated = True
                     candidate_key = (family, candidate_offset)
                     if candidate_key in seen_offsets:
                         continue
@@ -364,14 +395,14 @@ class RawContentCarver:
                     progress_callback(completed, scan_target)
                 if stop_offset is not None:
                     resume_offset = max(range_start, stop_offset)
-                    cursor_checkpoint = self._make_checkpoint(
+                    cursor_checkpoint = make_checkpoint(
                         merged_ranges, index, resume_offset, b"", range_fingerprint, scan_profile,
                         disk_size, bytes_per_sector, cumulative_bytes_scanned + completed, files,
                     )
                     stop_scan = True
                     break
                 if cursor < range_end and completed < self.max_scan_bytes:
-                    cursor_checkpoint = self._make_checkpoint(
+                    cursor_checkpoint = make_checkpoint(
                         merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
                         disk_size, bytes_per_sector, cumulative_bytes_scanned + completed, files,
                     )
@@ -380,13 +411,13 @@ class RawContentCarver:
                 if candidate_limit_reached or retained_bytes_limit_reached:
                     if cursor_checkpoint is None:
                         if cursor < range_end:
-                            cursor_checkpoint = self._make_checkpoint(
+                            cursor_checkpoint = make_checkpoint(
                                 merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
                                 disk_size, bytes_per_sector,
                                 cumulative_bytes_scanned + completed, files,
                             )
                         elif index + 1 < len(merged_ranges):
-                            cursor_checkpoint = self._make_checkpoint(
+                            cursor_checkpoint = make_checkpoint(
                                 merged_ranges, index + 1, merged_ranges[index + 1][0], b"",
                                 range_fingerprint, scan_profile, disk_size, bytes_per_sector,
                                 cumulative_bytes_scanned + completed, files,
@@ -399,7 +430,7 @@ class RawContentCarver:
             if cursor >= range_end:
                 next_range_index = index + 1
                 if next_range_index < len(merged_ranges):
-                    cursor_checkpoint = self._make_checkpoint(
+                    cursor_checkpoint = make_checkpoint(
                         merged_ranges, next_range_index, merged_ranges[next_range_index][0], b"",
                         range_fingerprint, scan_profile, disk_size, bytes_per_sector,
                         cumulative_bytes_scanned + completed, files,
@@ -408,13 +439,13 @@ class RawContentCarver:
                     cursor_checkpoint = None
             if completed >= self.max_scan_bytes:
                 if cursor < range_end:
-                    cursor_checkpoint = self._make_checkpoint(
+                    cursor_checkpoint = make_checkpoint(
                         merged_ranges, index, cursor, carry, range_fingerprint, scan_profile,
                         disk_size, bytes_per_sector,
                         cumulative_bytes_scanned + completed, files,
                     )
                 elif index + 1 < len(merged_ranges):
-                    cursor_checkpoint = self._make_checkpoint(
+                    cursor_checkpoint = make_checkpoint(
                         merged_ranges, index + 1, merged_ranges[index + 1][0], b"",
                         range_fingerprint, scan_profile, disk_size, bytes_per_sector,
                         cumulative_bytes_scanned + completed, files,
@@ -425,14 +456,14 @@ class RawContentCarver:
                 and completed == 0 and not stop_scan):
             final_index = min(range_index, len(merged_ranges) - 1)
             final_offset = max(merged_ranges[final_index][0], next_offset)
-            cursor_checkpoint = self._make_checkpoint(
+            cursor_checkpoint = make_checkpoint(
                 merged_ranges, final_index, final_offset, initial_carry,
                 range_fingerprint, scan_profile, disk_size, bytes_per_sector,
                 cumulative_bytes_scanned, files,
             )
 
         if cursor_checkpoint is None and ranges_truncated and merged_ranges:
-            cursor_checkpoint = self._make_checkpoint(
+            cursor_checkpoint = make_checkpoint(
                 merged_ranges, len(merged_ranges), merged_ranges[-1][1], b"",
                 range_fingerprint, scan_profile, disk_size, bytes_per_sector,
                 cumulative_bytes_scanned + completed, files,
@@ -463,6 +494,8 @@ class RawContentCarver:
             cursor_checkpoint,
             candidate_restore_bytes_read,
             cumulative_bytes_scanned + completed,
+            tuple(sorted(png_signature_offsets)),
+            png_signature_set_truncated,
         )
 
     def _restore_candidates(self, references, ranges, retained_candidate_data=None):
@@ -539,13 +572,16 @@ class RawContentCarver:
         return len(ranges), 0
 
     @classmethod
-    def _scan_profile(cls):
+    def _scan_profile(cls, collect_png_signatures=False):
         payload = json.dumps(
             [(family, signature.hex(), cls.SIGNATURE_OFFSETS.get(family, 0))
              for family, signature in cls.FORMAT_SIGNATURES],
             separators=(",", ":"),
         ).encode("ascii")
-        return hashlib.sha256(b"raw-carver-structure-v1:" + payload).hexdigest()
+        profile = b"raw-carver-structure-v1:" + payload
+        if collect_png_signatures:
+            profile += b":png-signatures-v1"
+        return hashlib.sha256(profile).hexdigest()
 
     @staticmethod
     def _remaining_bytes(ranges, range_index, next_offset):
@@ -586,11 +622,15 @@ class RawContentCarver:
             and item.size_bytes <= cls.DEFAULT_MAX_FILE_BYTES
             and any(start <= item.offset < end for start, end in ranges)
             for item in checkpoint.candidates
+        ) and len(checkpoint.png_signature_offsets) <= cls.MAX_PNG_SIGNATURE_OFFSETS and all(
+            any(start <= offset < end for start, end in ranges)
+            for offset in checkpoint.png_signature_offsets
         )
 
     @classmethod
     def _make_checkpoint(cls, ranges, range_index, next_offset, carry, range_fingerprint,
-                         scan_profile, disk_size, bytes_per_sector, bytes_scanned, files):
+                         scan_profile, disk_size, bytes_per_sector, bytes_scanned, files,
+                         *, png_signature_offsets=(), png_signature_set_truncated=False):
         references = tuple(CarvedCandidateReference(
             offset=item.offset,
             extension=item.extension,
@@ -610,6 +650,8 @@ class RawContentCarver:
             processed_range_fingerprint=cls._range_fingerprint(
                 cls._processed_ranges(ranges, range_index, next_offset), disk_size,
             ),
+            png_signature_offsets=tuple(png_signature_offsets),
+            png_signature_set_truncated=bool(png_signature_set_truncated),
         )
 
     @classmethod

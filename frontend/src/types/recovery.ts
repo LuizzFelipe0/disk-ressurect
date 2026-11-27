@@ -1,6 +1,8 @@
 export type {
   CarvingOptions,
   ContentCarvingSummary,
+  FragmentReconstructionEvidence,
+  PNGFragmentReconstructionSummary,
   BackendRuntimeStatus,
   CatalogInfo,
   CatalogNode,

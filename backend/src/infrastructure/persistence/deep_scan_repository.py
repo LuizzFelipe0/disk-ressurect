@@ -222,6 +222,8 @@ class JsonDeepScanRepository:
             "scanProfile": checkpoint.scan_profile,
             "bytesScanned": checkpoint.bytes_scanned,
             "signatureCarryHex": checkpoint.signature_carry.hex(),
+            "pngSignatureOffsets": list(checkpoint.png_signature_offsets),
+            "pngSignatureSetTruncated": checkpoint.png_signature_set_truncated,
             "candidates": [
                 {
                     "offset": item.offset,
@@ -236,6 +238,9 @@ class JsonDeepScanRepository:
     @staticmethod
     def _deserialize_carving_checkpoint(data):
         if not isinstance(data, dict):
+            return None
+        png_signature_set_truncated = data.get("pngSignatureSetTruncated", False)
+        if not isinstance(png_signature_set_truncated, bool):
             return None
         raw_candidates = data.get("candidates", [])
         if not isinstance(raw_candidates, list) or len(raw_candidates) > 10000:
@@ -260,6 +265,10 @@ class JsonDeepScanRepository:
                 candidates=candidates,
                 bytes_scanned=int(data.get("bytesScanned", 0)),
                 signature_carry=bytes.fromhex(str(data.get("signatureCarryHex", ""))),
+                png_signature_offsets=tuple(int(item) for item in data.get(
+                    "pngSignatureOffsets", (),
+                )),
+                png_signature_set_truncated=png_signature_set_truncated,
             )
         except (KeyError, TypeError, ValueError):
             return None

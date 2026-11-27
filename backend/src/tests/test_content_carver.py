@@ -548,6 +548,31 @@ class RawContentCarverTests(unittest.TestCase):
         self.assertNotIn(0, [offset for offset, _ in disk.reads])
         self.assertGreater(resumed.candidate_restore_bytes_read, 0)
 
+    def test_png_signature_offsets_survive_checkpoint_resume_only_when_enabled(self):
+        disk = FakeDisk(size=2048)
+        signature = b"\x89PNG\r\n\x1a\n"
+        disk.data[:len(signature)] = signature
+        disk.data[600:600 + len(signature)] = signature
+
+        first = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)], collect_png_signatures=True,
+        )
+        self.assertEqual((0,), first.png_signature_offsets)
+        self.assertEqual((0,), first.checkpoint.png_signature_offsets)
+
+        resumed = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)], resume_checkpoint=first.checkpoint,
+            collect_png_signatures=True,
+        )
+        self.assertEqual((0, 600), resumed.png_signature_offsets)
+        self.assertEqual((0, 600), resumed.checkpoint.png_signature_offsets)
+
+        default = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)],
+        )
+        self.assertEqual((), default.png_signature_offsets)
+        self.assertNotEqual(first.checkpoint.scan_profile, default.checkpoint.scan_profile)
+
     def test_raising_candidate_limit_resumes_after_saved_candidates_without_duplicates(self):
         disk = FakeDisk(size=8192)
         images = [jpeg(b"first"), jpeg(b"second"), jpeg(b"third")]

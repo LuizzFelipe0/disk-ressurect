@@ -183,6 +183,9 @@ class RecoverySession:
             + owner_bytes
             + sys.getsizeof(identity_key)
             + len(checkpoint.signature_carry)
+            + sys.getsizeof(checkpoint.png_signature_offsets)
+            + sum(sys.getsizeof(value) for value in checkpoint.png_signature_offsets)
+            + sys.getsizeof(checkpoint.png_signature_set_truncated)
         )
 
     def register_volume(self, volume, source_id=None):

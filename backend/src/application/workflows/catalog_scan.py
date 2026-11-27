@@ -289,6 +289,9 @@ class CatalogScanWorkflow:
                 )) * 1024**2,
                 "maxCandidateReadBytesPerFormat": candidate_read_mib * 1024**2,
                 "maxCandidateReadBytes": candidate_read_mib * 3 * 1024**2,
+                "enablePngFragmentReconstruction": bool(getattr(
+                    carving_options, "enable_png_fragment_reconstruction", False,
+                )),
                 "sessionMaxCandidates": int(getattr(
                     self.session, "MAX_RAW_SESSION_CANDIDATES", 16384,
                 )),

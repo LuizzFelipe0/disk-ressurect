@@ -86,6 +86,8 @@ class DeepScanRepositoryTests(unittest.TestCase):
             bytes_scanned=1024**3,
             signature_carry=b"\xff\xd8\xff",
             processed_range_fingerprint="c" * 64,
+            png_signature_offsets=(4096, 8192),
+            png_signature_set_truncated=True,
         )
 
         with tempfile.TemporaryDirectory(dir=os.path.dirname(__file__)) as directory:
