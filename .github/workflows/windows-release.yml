@@ -60,6 +60,9 @@ jobs:
       - name: Install Python packager
         run: python -m pip install -r projects/disk-ressurect/packaging/backend/requirements.txt
 
+      - name: Install backend test dependencies
+        run: python -m pip install -r projects/disk-ressurect/backend/requirements-test.txt
+
       - name: Run backend unit tests
         run: python -m unittest discover -s projects/disk-ressurect/backend/src/tests -v
 

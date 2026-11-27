@@ -186,6 +186,7 @@ Keep the output destination on a different physical disk from the source. A lost
 Run the Python unit suite without accessing a physical disk (discovery uses synthetic media) and the React tests:
 
 ```powershell
+python -m pip install -r backend\requirements-test.txt
 .\venv\Scripts\python.exe -m unittest discover -s backend\src\tests -v
 Push-Location frontend
 npm test
