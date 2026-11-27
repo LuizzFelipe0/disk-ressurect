@@ -62,9 +62,12 @@ class PNGIDATFragmentReconstructor:
         if self.volume_start < 0 or self.volume_end <= self.volume_start or self.cluster_size <= 0:
             raise ValueError("volume bounds and cluster size must be positive")
 
-    def reconstruct(self, signature_offsets, eligible_ranges):
+    def reconstruct(self, signature_offsets, eligible_ranges, *, prior_combinations=0,
+                    prior_bytes_read=0, prior_elapsed_seconds=0.0,
+                    prior_retained_bytes=0):
         self._read_count = 0
         started = self.clock()
+        budget_started = started - max(0.0, float(prior_elapsed_seconds))
         ranges = self._validate_ranges(eligible_ranges)
         signatures = tuple(sorted(set(int(item) for item in signature_offsets)))
         if any(item < self.volume_start or item >= self.volume_end for item in signatures):
@@ -72,13 +75,16 @@ class PNGIDATFragmentReconstructor:
         candidates = []
         candidate_data_seen = set()
         examined = pairs = bytes_read = 0
-        peak = 0
+        peak = max(0, int(prior_retained_bytes))
         stop_reason = "search_exhausted"
         for signature in signatures[:self.MAX_SIGNATURES]:
             examined += 1
             found, attempted, consumed, retained, reason = self._search_one(
-                signature, ranges, started, pairs, bytes_read,
-                sum(len(item.data) for item in candidates),
+                signature, ranges, budget_started,
+                int(prior_combinations) + pairs,
+                int(prior_bytes_read) + bytes_read,
+                max(0, int(prior_retained_bytes))
+                + sum(len(item.data) for item in candidates),
             )
             if len(found) > 1:
                 hypothesis_status = "multiple_competing_hypotheses"

@@ -3,7 +3,7 @@
 import hashlib
 import json
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from modules.catalog.entities import RecoveryCatalogSnapshot
 
@@ -19,7 +19,7 @@ class CatalogScanWorkflow:
 
     CHECKPOINT_INTERVAL_BYTES = 256 * 1024 * 1024
 
-    RAW_CHECKPOINT_IDENTITY_VERSION = 1
+    RAW_CHECKPOINT_IDENTITY_VERSION = 2
 
     def __init__(self, disk_service, deep_scan_service, validation_service, catalog_builder,
                  session=None):
@@ -52,6 +52,8 @@ class CatalogScanWorkflow:
         carving_checkpoint = None
         latest_carving_checkpoint = None
         carving_checkpoint_callback = None
+        png_recovery_progress = None
+        previous_partial_png_recoveries = ()
 
         if include_orphaned:
             try:
@@ -132,10 +134,81 @@ class CatalogScanWorkflow:
                         "stopReason",
                     )
                     if stop_reason in {"scope_complete", "session_limit", "resource_limit"}:
-                        return CatalogScanOutcome(raw_catalog_snapshot, validation_summary)
-                    raw_candidate_references, raw_candidate_data, raw_candidate_locations = (
-                        self.catalog_builder.raw_candidate_state(raw_catalog_snapshot)
-                    )
+                        png_strategies_enabled = bool(
+                            getattr(carving_options, "enable_png_partial_recovery", False)
+                            or getattr(carving_options, "enable_png_fragment_reconstruction", False)
+                        )
+                        if (png_strategies_enabled
+                                and raw_catalog_snapshot.png_recovery_progress is not None):
+                            still_current, partial_validation_bytes, fragment_validation_bytes = (
+                                self.catalog_builder.raw_png_recovery_results_are_current(
+                                    carving_source,
+                                    raw_catalog_snapshot,
+                                    precomputed_carving_ranges,
+                                    volume_start=int(volume.partition_offset),
+                                    volume_end=(int(volume.partition_offset)
+                                                + int(volume.partition_size)),
+                                )
+                            )
+                            if still_current:
+                                if partial_validation_bytes or fragment_validation_bytes:
+                                    previous_progress = raw_catalog_snapshot.png_recovery_progress
+                                    updated_progress = replace(
+                                        previous_progress,
+                                        partial_bytes_read=(
+                                            previous_progress.partial_bytes_read
+                                            + partial_validation_bytes
+                                        ),
+                                        reconstruction_bytes_read=(
+                                            previous_progress.reconstruction_bytes_read
+                                            + fragment_validation_bytes
+                                        ),
+                                    )
+                                    updated_summary = dict(
+                                        raw_catalog_snapshot.content_carving_summary or {},
+                                    )
+                                    if partial_validation_bytes:
+                                        partial_summary = dict(
+                                            updated_summary.get("pngPartialRecovery") or {},
+                                        )
+                                        partial_summary["bytesRead"] = (
+                                            updated_progress.partial_bytes_read
+                                        )
+                                        updated_summary["pngPartialRecovery"] = partial_summary
+                                    if fragment_validation_bytes:
+                                        fragment_summary = dict(
+                                            updated_summary.get("pngFragmentReconstruction") or {},
+                                        )
+                                        fragment_summary["bytesRead"] = (
+                                            updated_progress.reconstruction_bytes_read
+                                        )
+                                        updated_summary["pngFragmentReconstruction"] = fragment_summary
+                                    validated_snapshot = replace(
+                                        raw_catalog_snapshot,
+                                        png_recovery_progress=updated_progress,
+                                        content_carving_summary=updated_summary,
+                                    )
+                                    self.session.update_raw_catalog_snapshot(
+                                        checkpoint_owner,
+                                        checkpoint_identity,
+                                        raw_catalog_snapshot,
+                                        validated_snapshot,
+                                    )
+                                    raw_catalog_snapshot = validated_snapshot
+                                return CatalogScanOutcome(raw_catalog_snapshot, validation_summary)
+                            # Same source identity and size do not prove the bytes
+                            # remain unchanged; rebuild without reusing stale results.
+                            raw_catalog_snapshot = None
+                        else:
+                            return CatalogScanOutcome(raw_catalog_snapshot, validation_summary)
+                    if raw_catalog_snapshot is not None:
+                        png_recovery_progress = raw_catalog_snapshot.png_recovery_progress
+                        previous_partial_png_recoveries = (
+                            raw_catalog_snapshot.partial_png_recoveries
+                        )
+                        raw_candidate_references, raw_candidate_data, raw_candidate_locations = (
+                            self.catalog_builder.raw_candidate_state(raw_catalog_snapshot)
+                        )
 
                 carving_checkpoint = self.session.load_raw_carving_checkpoint(
                     checkpoint_owner, checkpoint_identity,
@@ -218,6 +291,10 @@ class CatalogScanWorkflow:
                             "raw_candidate_data": raw_candidate_data,
                             "raw_candidate_locations": raw_candidate_locations,
                             "defer_content_reference_commit": True,
+                        "png_recovery_progress": png_recovery_progress,
+                        "previous_partial_png_recoveries": previous_partial_png_recoveries,
+                        "previous_raw_catalog_snapshot": raw_catalog_snapshot,
+                        "png_scope_identity": checkpoint_identity,
                         })
                     snapshot = self.catalog_builder.build(
                         volume,

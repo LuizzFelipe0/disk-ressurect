@@ -1,4 +1,5 @@
 import os
+import sys
 from dataclasses import dataclass, field
 
 from modules.storage.entities import StorageSource
@@ -29,6 +30,8 @@ class PngPartialRecovery:
     idat_crc_invalid: bool
     zlib_complete: bool
     iend_valid: bool
+    source_content_size: int = 0
+    source_content_sha256: str = ""
 
     def __post_init__(self):
         if (len(self.recovery_id) != 64
@@ -39,6 +42,13 @@ class PngPartialRecovery:
             raise ValueError("Partial PNG origin and dimensions must be positive")
         if self.channels not in (3, 4):
             raise ValueError("Partial PNG pixel layout must be RGB or RGBA")
+        if (self.source_content_size < 0
+                or self.source_content_sha256 and (
+                    len(self.source_content_sha256) != 64
+                    or any(character not in "0123456789abcdef"
+                           for character in self.source_content_sha256)
+                )):
+            raise ValueError("Partial PNG source validation identity is invalid")
         rows = tuple(bytes(row) for row in self.rows)
         if not rows or len(rows) > self.height:
             raise ValueError("Partial PNG recovery row count exceeds image dimensions")
@@ -65,6 +75,97 @@ class PngPartialRecovery:
     @property
     def missing_row_range(self):
         return len(self.rows), self.height
+
+
+@dataclass(frozen=True)
+class PngSignatureOutcome:
+    """Bounded terminal evidence for one signature in the active window."""
+
+    offset: int
+    status: str
+    reason: str
+    bytes_read: int = 0
+    elapsed_seconds: float = 0.0
+
+    def __post_init__(self):
+        allowed = {
+            "completed", "partial_result", "already_complete", "unsupported",
+            "hypothesis", "ambiguous", "resource_limited", "retryable_error",
+        }
+        if self.offset < 0 or self.status not in allowed:
+            raise ValueError("PNG signature outcome is invalid")
+        if self.bytes_read < 0 or self.elapsed_seconds < 0:
+            raise ValueError("PNG signature resource accounting is invalid")
+
+
+@dataclass(frozen=True)
+class PngRecoveryProgress:
+    """Session-only PNG cursors and cumulative budgets for one recovery scope."""
+
+    scope_identity: str
+    signature_window_identity: str
+    window_signature_count: int = 0
+    discovered_signatures: int = 0
+    completed_windows: int = 0
+    partial_next_index: int = 0
+    reconstruction_next_index: int = 0
+    partial_outcomes: tuple[PngSignatureOutcome, ...] = ()
+    reconstruction_outcomes: tuple[PngSignatureOutcome, ...] = ()
+    partial_bytes_read: int = 0
+    partial_unique_bytes_read: int = 0
+    partial_elapsed_seconds: float = 0.0
+    partial_retained_bytes: int = 0
+    partial_signatures_considered: int = 0
+    partial_signatures_rejected: int = 0
+    partial_results_found: int = 0
+    reconstruction_bytes_read: int = 0
+    reconstruction_combinations: int = 0
+    reconstruction_elapsed_seconds: float = 0.0
+    reconstruction_retained_bytes: int = 0
+    reconstruction_signatures_considered: int = 0
+    discovery_bytes_read: int = 0
+    partial_stop_reason: str = "pending"
+    reconstruction_stop_reason: str = "pending"
+
+    def __post_init__(self):
+        for value in (self.scope_identity, self.signature_window_identity):
+            if (len(value) != 64
+                    or any(character not in "0123456789abcdef" for character in value)):
+                raise ValueError("PNG continuation identity must be a lowercase SHA-256 digest")
+        if (self.window_signature_count < 0 or self.window_signature_count > 256
+                or self.discovered_signatures < 0 or self.completed_windows < 0
+                or self.partial_next_index < 0 or self.reconstruction_next_index < 0
+                or self.partial_bytes_read < 0 or self.partial_unique_bytes_read < 0
+                or self.partial_retained_bytes < 0 or self.reconstruction_bytes_read < 0
+                or self.reconstruction_combinations < 0
+                or self.reconstruction_retained_bytes < 0 or self.discovery_bytes_read < 0
+                or self.reconstruction_signatures_considered < 0
+                or self.partial_signatures_considered < 0
+                or self.partial_signatures_rejected < 0 or self.partial_results_found < 0
+                or self.partial_elapsed_seconds < 0
+                or self.reconstruction_elapsed_seconds < 0):
+            raise ValueError("PNG continuation counters cannot be negative")
+        if len(self.partial_outcomes) > 256 or len(self.reconstruction_outcomes) > 256:
+            raise ValueError("PNG continuation outcomes exceed the retained signature window")
+        if any(not isinstance(item, PngSignatureOutcome)
+               for item in self.partial_outcomes + self.reconstruction_outcomes):
+            raise TypeError("PNG continuation outcomes must be typed signature results")
+
+    @property
+    def estimated_retained_bytes(self):
+        """Approximate in-memory size of bounded continuation metadata, not RSS."""
+        outcomes = self.partial_outcomes + self.reconstruction_outcomes
+        return (
+            sys.getsizeof(self)
+            + sys.getsizeof(self.scope_identity)
+            + sys.getsizeof(self.signature_window_identity)
+            + sys.getsizeof(self.partial_outcomes)
+            + sys.getsizeof(self.reconstruction_outcomes)
+            + sum(
+                sys.getsizeof(item) + sys.getsizeof(item.status) + sys.getsizeof(item.reason)
+                for item in outcomes
+            )
+        )
 
 
 @dataclass
@@ -168,3 +269,4 @@ class RecoveryCatalogSnapshot:
     usn_journal_summary: dict | None = None
     ntfs_log_file_summary: dict | None = None
     partial_png_recoveries: tuple[PngPartialRecovery, ...] = ()
+    png_recovery_progress: PngRecoveryProgress | None = None

@@ -12,7 +12,7 @@ from infrastructure.formats.png_partial_decoder import (
     PngPartialDecode,
     decode_png_partial_rows,
 )
-from modules.catalog.entities import PngPartialRecovery
+from modules.catalog.entities import PngPartialRecovery, PngSignatureOutcome
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,7 @@ class PngPartialRecoveryScan:
     rejected_count: int
     read_errors: int
     stop_reason: str
+    signature_outcomes: tuple[PngSignatureOutcome, ...] = ()
 
 
 class PngPartialRecoveryScanner:
@@ -48,15 +49,39 @@ class PngPartialRecoveryScanner:
                 or self.volume_end <= self.volume_start):
             raise ValueError("PNG partial recovery source and volume bounds are invalid")
 
-    def scan(self, signature_offsets, eligible_ranges, *, complete_png_offsets=()):
+    def scan(self, signature_offsets, eligible_ranges, *, complete_png_offsets=(),
+             retained_partial_offsets=(),
+             max_signatures=None, max_total_read_bytes=None,
+             max_total_retained_bytes=None, time_limit_seconds=None):
         started = self.clock()
         ranges = self._validate_ranges(eligible_ranges)
         signatures = tuple(sorted(set(int(offset) for offset in signature_offsets)))
         complete = {int(offset) for offset in complete_png_offsets}
+        retained_partial = {int(offset) for offset in retained_partial_offsets}
+        signature_limit = min(
+            self.MAX_SIGNATURES,
+            self.MAX_SIGNATURES if max_signatures is None else max(0, int(max_signatures)),
+        )
+        total_read_limit = min(
+            self.MAX_TOTAL_READ_BYTES,
+            self.MAX_TOTAL_READ_BYTES if max_total_read_bytes is None
+            else max(0, int(max_total_read_bytes)),
+        )
+        retained_limit = min(
+            self.MAX_TOTAL_RETAINED_BYTES,
+            self.MAX_TOTAL_RETAINED_BYTES if max_total_retained_bytes is None
+            else max(0, int(max_total_retained_bytes)),
+        )
+        time_limit = min(
+            self.TIME_LIMIT_SECONDS,
+            self.TIME_LIMIT_SECONDS if time_limit_seconds is None
+            else max(0.0, float(time_limit_seconds)),
+        )
         if any(offset < self.volume_start or offset >= self.volume_end for offset in signatures):
             raise ValueError("PNG signature is outside the selected volume")
 
         recoveries = []
+        signature_outcomes = []
         bytes_read = 0
         read_ranges = []
         retained = 0
@@ -64,12 +89,20 @@ class PngPartialRecoveryScanner:
         examined = rejected = read_errors = 0
         stop_reason = "search_exhausted"
         for signature in signatures:
-            if signature in complete:
+            if signature in retained_partial:
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "partial_result", "retained_revalidated_result",
+                ))
                 continue
-            if examined >= self.MAX_SIGNATURES:
+            if signature in complete:
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "already_complete", "contiguous_png_candidate",
+                ))
+                continue
+            if examined >= signature_limit:
                 stop_reason = "signature_limit"
                 break
-            if self.clock() - started >= self.TIME_LIMIT_SECONDS:
+            if self.clock() - started >= time_limit:
                 stop_reason = "time_limit"
                 break
             eligible = next(
@@ -77,47 +110,85 @@ class PngPartialRecoveryScanner:
             )
             if eligible is None or signature < self.volume_start:
                 rejected += 1
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "completed", "outside_eligible_range",
+                ))
                 continue
             _, range_end = eligible
             candidate_size = min(
                 self.MAX_CANDIDATE_READ_BYTES,
                 range_end - signature,
                 self.volume_end - signature,
-                self.MAX_TOTAL_READ_BYTES - bytes_read,
+                total_read_limit - bytes_read,
             )
             if candidate_size < 33:
-                stop_reason = "read_limit" if bytes_read >= self.MAX_TOTAL_READ_BYTES else "range_too_small"
+                if bytes_read >= total_read_limit:
+                    stop_reason = "read_limit"
+                    signature_outcomes.append(PngSignatureOutcome(
+                        signature, "resource_limited", stop_reason,
+                    ))
+                else:
+                    stop_reason = "range_too_small"
+                    rejected += 1
+                    signature_outcomes.append(PngSignatureOutcome(
+                        signature, "completed", stop_reason,
+                    ))
                 break
             examined += 1
+            signature_started = self.clock()
+            read_before = bytes_read
             try:
                 candidate = bytes(self.source.read_at(signature, candidate_size))
             except OSError:
                 read_errors += 1
                 stop_reason = "read_error"
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "retryable_error", stop_reason,
+                    elapsed_seconds=max(0.0, self.clock() - signature_started),
+                ))
                 break
             bytes_read += len(candidate)
             if len(candidate) != candidate_size:
                 read_ranges.append((signature, signature + len(candidate)))
                 read_errors += 1
                 stop_reason = "read_error"
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "retryable_error", stop_reason, len(candidate),
+                    max(0.0, self.clock() - signature_started),
+                ))
                 break
             read_ranges.append((signature, signature + len(candidate)))
-            if self.clock() - started >= self.TIME_LIMIT_SECONDS:
+            if self.clock() - started >= time_limit:
                 stop_reason = "time_limit"
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, "resource_limited", stop_reason, len(candidate),
+                    max(0.0, self.clock() - signature_started),
+                ))
                 break
 
             decoded: PngPartialDecode = decode_png_partial_rows(
                 candidate,
                 source_offset=signature,
                 max_input_bytes=self.MAX_CANDIDATE_READ_BYTES,
-                max_retained_bytes=max(0, self.MAX_TOTAL_RETAINED_BYTES - retained),
-                time_limit_seconds=max(0.0, self.TIME_LIMIT_SECONDS - (self.clock() - started)),
+                max_retained_bytes=max(0, retained_limit - retained),
+                time_limit_seconds=max(0.0, time_limit - (self.clock() - started)),
                 clock=self.clock,
             )
             if decoded.status != "partial" or not decoded.rows:
                 rejected += 1
                 if decoded.stop_reason in {"retained_memory_limit", "time_limit"}:
                     stop_reason = decoded.stop_reason
+                    status = "resource_limited"
+                elif decoded.status == "unsupported":
+                    status = "unsupported"
+                else:
+                    status = "completed"
+                signature_outcomes.append(PngSignatureOutcome(
+                    signature, status, decoded.stop_reason or decoded.status,
+                    bytes_read - read_before,
+                    max(0.0, self.clock() - signature_started),
+                ))
+                if status == "resource_limited":
                     break
                 continue
             packed_rows = b"".join(decoded.rows)
@@ -130,6 +201,7 @@ class PngPartialRecoveryScanner:
             recovery_identity = hashlib.sha256(
                 (f"{self.source_id}:{self.volume_id}:{signature}:"
                  f"{decoded.width}:{decoded.height}:{decoded.channels}:").encode("utf-8")
+                + hashlib.sha256(candidate).digest()
                 + packed_rows
             ).hexdigest()
             try:
@@ -149,6 +221,8 @@ class PngPartialRecoveryScanner:
                     idat_crc_invalid=decoded.idat_crc_invalid,
                     zlib_complete=decoded.zlib_complete,
                     iend_valid=decoded.iend_valid,
+                    source_content_size=len(candidate),
+                    source_content_sha256=hashlib.sha256(candidate).hexdigest(),
                 )
             except ValueError:
                 del packed_rows
@@ -157,12 +231,17 @@ class PngPartialRecoveryScanner:
             del packed_rows
             recoveries.append(recovery)
             retained += retained_row_bytes
+            signature_outcomes.append(PngSignatureOutcome(
+                signature, "partial_result", decoded.stop_reason,
+                bytes_read - read_before,
+                max(0.0, self.clock() - signature_started),
+            ))
 
         unique_bytes = self._unique_bytes_read(read_ranges)
         return PngPartialRecoveryScan(
             tuple(recoveries), len(signatures), examined, bytes_read, unique_bytes,
             max(0.0, self.clock() - started), max(retained, retained_peak_estimate),
-            rejected, read_errors, stop_reason,
+            rejected, read_errors, stop_reason, tuple(signature_outcomes),
         )
 
     def _validate_ranges(self, eligible_ranges):

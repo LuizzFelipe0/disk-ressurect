@@ -7,9 +7,12 @@ import tempfile
 import threading
 import unittest
 from dataclasses import replace
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -21,6 +24,7 @@ from modules.catalog.dto import CarvingOptionsDto
 from modules.disk.entities import NTFSVolume
 from modules.storage.entities import StorageSource
 from test_content_carver import jpeg
+from test_png_partial_recovery import PNG_SIGNATURE, _png_with_partial_idat
 from helpers import make_recovery_workflow
 
 
@@ -63,11 +67,11 @@ class SyntheticRawReader:
 
 
 class SyntheticRawSourceFactory:
-    def __init__(self, data, source_id="raw-image:synthetic-v1"):
+    def __init__(self, data, source_id="raw-image:synthetic-v1", source_type="raw_image"):
         self.data = bytearray(data)
         self.source = StorageSource(
             source_id=source_id,
-            source_type="raw_image",
+            source_type=source_type,
             display_name="Synthetic image",
             size_bytes=len(self.data),
             bytes_per_sector=512,
@@ -196,8 +200,11 @@ def make_volume(source_id, size=IMAGE_SIZE, *, partition_offset=0, partition_num
 
 class RawCatalogHarness:
     def __init__(self, image_data, *, source_id="raw-image:synthetic-v1", ranges=None,
-                 ranges_truncated=False, uncertain_ranges=None, session=None):
-        self.source_factory = SyntheticRawSourceFactory(image_data, source_id)
+                 ranges_truncated=False, uncertain_ranges=None, session=None,
+                 source_type="raw_image", enable_png_partial_recovery=False):
+        self.source_factory = SyntheticRawSourceFactory(
+            image_data, source_id, source_type=source_type,
+        )
         self.validation = SyntheticValidationService(
             self.source_factory, ranges, ranges_truncated=ranges_truncated,
             uncertain_ranges=uncertain_ranges,
@@ -213,6 +220,7 @@ class RawCatalogHarness:
             max_files=256,
             max_retained_mib=128,
             max_candidate_read_mib_per_format=256,
+            enable_png_partial_recovery=enable_png_partial_recovery,
         )
 
     def build(self):
@@ -277,6 +285,307 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
     def setUp(self):
         SessionCappedCarver.scan_budget_bytes = SCAN_BUDGET_BYTES
         SessionCappedCarver.candidate_count_cap = None
+
+    @staticmethod
+    def _png_signature_fixture(count, valid_indices=()):
+        truncated_png, original_png, original_pixels, _payload_range = (
+            _png_with_partial_idat()
+        )
+        stride = 4096
+        size = count * stride
+        data = bytearray(size)
+        eligible = []
+        expected = {}
+        valid_indices = set(valid_indices)
+        for index in range(count):
+            offset = index * stride
+            payload = truncated_png if index in valid_indices else PNG_SIGNATURE + b"\x00" * 25
+            data[offset:offset + len(payload)] = payload
+            eligible.append((offset, offset + len(payload)))
+            if index in valid_indices:
+                expected[offset] = (
+                    hashlib.sha256(truncated_png).hexdigest(),
+                    hashlib.sha256(original_png).hexdigest(),
+                    original_pixels,
+                )
+        return data, tuple(eligible), expected
+
+    def _scan_png_until_complete(self, harness, maximum_passes=300):
+        result = None
+        for _ in range(maximum_passes):
+            result = harness.build()
+            if result.snapshot.content_carving_summary.get("stopReason") == "scope_complete":
+                return result
+        self.fail(f"PNG continuation did not complete within {maximum_passes} passes")
+
+    @staticmethod
+    def _use_large_synthetic_scan_budget():
+        SessionCappedCarver.scan_budget_bytes = 2 * 1024 * 1024
+
+    def test_png_partial_continuation_processes_fifth_signature(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, expected = self._png_signature_fixture(5, {4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+
+        result = self._scan_png_until_complete(harness)
+
+        self.assertEqual(result.snapshot.content_carving_summary["stopReason"], "scope_complete")
+        self.assertEqual(len(result.snapshot.partial_png_recoveries), 1)
+        recovered = result.snapshot.partial_png_recoveries[0]
+        self.assertEqual(recovered.signature_offset, 4 * 4096)
+        self.assertEqual(recovered.source_content_sha256,
+                         expected[recovered.signature_offset][0])
+        self.assertEqual(b"".join(recovered.rows), expected[recovered.signature_offset][2][:
+            len(b"".join(recovered.rows))])
+        self.assertEqual(result.snapshot.png_recovery_progress.partial_signatures_considered, 5)
+        self.assertEqual(result.snapshot.png_recovery_progress.partial_next_index, 5)
+
+    def test_png_partial_handles_exactly_four_signatures_in_one_strategy_pass(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, expected = self._png_signature_fixture(4, {3})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+
+        result = harness.build().snapshot
+
+        self.assertEqual(result.content_carving_summary["stopReason"], "scope_complete")
+        self.assertEqual(result.png_recovery_progress.partial_signatures_considered, 4)
+        self.assertEqual(result.partial_png_recoveries[0].signature_offset, 3 * 4096)
+        self.assertEqual(len(expected), len(result.partial_png_recoveries))
+
+    def test_complete_png_candidate_precedes_partial_result_without_replacement(self):
+        self._use_large_synthetic_scan_budget()
+        partial_png, complete_png, _pixels, _range = _png_with_partial_idat()
+        stride = 8192
+        data = bytearray(2 * stride)
+        data[:len(complete_png)] = complete_png
+        second_offset = stride
+        data[second_offset:second_offset + len(partial_png)] = partial_png
+        ranges = ((0, len(complete_png)),
+                  (second_offset, second_offset + len(partial_png)))
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+
+        result = harness.build().snapshot
+
+        contiguous_pngs = [
+            node.candidate for node in result.catalog.nodes.values()
+            if node.candidate is not None
+            and node.name.endswith(".png")
+            and "content_carving" in node.candidate.discovery_methods
+        ]
+        self.assertEqual(len(contiguous_pngs), 1)
+        self.assertEqual(len(result.partial_png_recoveries), 1)
+        self.assertEqual(result.partial_png_recoveries[0].signature_offset, second_offset)
+        self.assertEqual(contiguous_pngs[0].size_bytes, len(complete_png))
+
+    def test_png_partial_continuation_advances_from_signature_256_to_257(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, expected = self._png_signature_fixture(257, {256})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+
+        result = self._scan_png_until_complete(harness)
+
+        recovered = {
+            item.signature_offset: item for item in result.snapshot.partial_png_recoveries
+        }
+        target_offset = 256 * 4096
+        self.assertIn(target_offset, recovered)
+        self.assertEqual(recovered[target_offset].source_content_sha256,
+                         expected[target_offset][0])
+        progress = result.snapshot.png_recovery_progress
+        self.assertEqual(progress.discovered_signatures, 257)
+        self.assertGreaterEqual(progress.completed_windows, 1)
+        self.assertEqual(progress.partial_signatures_considered, 257)
+        self.assertEqual(progress.discovery_bytes_read, sum(end - start for start, end in ranges))
+        self.assertEqual(result.snapshot.content_carving_summary["pngPartialRecovery"][
+            "signatureDiscoveryComplete"], True)
+
+    def test_png_partial_revalidates_same_identity_when_source_bytes_change(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, expected = self._png_signature_fixture(5, {0, 4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        first = harness.build().snapshot
+        first_partial = next(
+            item for item in first.partial_png_recoveries if item.signature_offset == 0
+        )
+        changed_data = bytearray(data)
+        replacement_prefix, _original_png, original_pixels, _ = _png_with_partial_idat()
+        replacement_pixels = bytes(value ^ 0x31 for value in original_pixels)
+        replacement_image = Image.frombytes("RGB", (48, 20), replacement_pixels)
+        replacement_buffer = BytesIO()
+        replacement_image.save(replacement_buffer, format="PNG", compress_level=1)
+        replacement_png = replacement_buffer.getvalue()
+        replacement = replacement_png[:len(replacement_prefix)]
+        self.assertNotEqual(replacement, replacement_prefix)
+        changed_data[:len(replacement)] = replacement
+        harness.source_factory.data[:] = changed_data
+
+        result = self._scan_png_until_complete(harness)
+        current = next(
+            item for item in result.snapshot.partial_png_recoveries if item.signature_offset == 0
+        )
+
+        self.assertNotEqual(current.source_content_sha256, first_partial.source_content_sha256)
+        self.assertNotEqual(b"".join(current.rows), b"".join(first_partial.rows))
+        self.assertEqual(current.source_content_sha256,
+                         hashlib.sha256(replacement).hexdigest())
+
+    def test_completed_png_session_revalidates_cached_results_before_reuse(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(1, {0})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        first = harness.build().snapshot
+        first_partial = first.partial_png_recoveries[0]
+        self.assertEqual(first.content_carving_summary["stopReason"], "scope_complete")
+
+        _prefix, _original_png, original_pixels, _ = _png_with_partial_idat()
+        changed_pixels = bytes(value ^ 0x73 for value in original_pixels)
+        changed_image = Image.frombytes("RGB", (48, 20), changed_pixels)
+        buffer = BytesIO()
+        changed_image.save(buffer, format="PNG", compress_level=1)
+        changed_png = buffer.getvalue()[:first_partial.source_content_size]
+        harness.source_factory.data[:len(changed_png)] = changed_png
+
+        second = harness.build().snapshot
+
+        self.assertIsNot(second, first)
+        self.assertEqual(len(second.partial_png_recoveries), 1)
+        self.assertNotEqual(
+            second.partial_png_recoveries[0].source_content_sha256,
+            first_partial.source_content_sha256,
+        )
+        self.assertEqual(
+            second.partial_png_recoveries[0].source_content_sha256,
+            hashlib.sha256(changed_png).hexdigest(),
+        )
+
+    def test_completed_png_cache_reuse_accounts_revalidation_reads(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(1, {0})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        first = harness.build().snapshot
+        previous_bytes = first.png_recovery_progress.partial_bytes_read
+        candidate_size = first.partial_png_recoveries[0].source_content_size
+        harness.source_factory.read_events.clear()
+
+        second = harness.build().snapshot
+
+        self.assertIsNot(second, first)
+        self.assertEqual(
+            second.png_recovery_progress.partial_bytes_read,
+            previous_bytes + candidate_size,
+        )
+        validation_reads = [
+            size for stage, _offset, size, status in harness.source_factory.read_events
+            if stage == "validation" and status == "ok"
+        ]
+        self.assertEqual(validation_reads, [candidate_size])
+
+    def test_png_partial_session_continuation_works_with_synthetic_physical_source(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(5, {4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, source_type="physical_disk",
+            source_id="physical:synthetic-disk-1",
+            enable_png_partial_recovery=True,
+        )
+
+        result = self._scan_png_until_complete(harness)
+
+        self.assertEqual(result.snapshot.source.source_type, "physical_disk")
+        self.assertEqual(len(result.snapshot.partial_png_recoveries), 1)
+        self.assertIsNone(harness.checkpoint())
+
+    def test_png_partial_and_reconstruction_progress_are_independent(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(5, {4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        harness.options = replace(
+            harness.options, enable_png_fragment_reconstruction=True,
+        )
+        from infrastructure.carving.png_idat_fragment_reconstructor import (
+            PNGIDATFragmentReconstructor,
+            PNGReconstructionResult,
+        )
+
+        limited = PNGReconstructionResult((), 4, 0, 256, 0, 2.0, 0,
+                                          "cumulative_combination_limit")
+        with patch.object(PNGIDATFragmentReconstructor, "reconstruct", return_value=limited):
+            snapshot = harness.build().snapshot
+
+        progress = snapshot.png_recovery_progress
+        self.assertEqual(progress.partial_next_index, 4)
+        self.assertEqual(progress.reconstruction_next_index, 0)
+        self.assertEqual(progress.partial_signatures_considered, 4)
+        self.assertEqual(progress.reconstruction_signatures_considered, 0)
+        self.assertEqual(snapshot.content_carving_summary["stopReason"], "resource_limit")
+
+    def test_png_progress_publication_failure_preserves_previous_generation(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(5, {4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        first = harness.build().snapshot
+        first_progress = first.png_recovery_progress
+        first_checkpoint = harness.checkpoint()
+
+        with patch.object(
+            harness.session,
+            "commit_raw_catalog_generation",
+            side_effect=RuntimeError("Injected PNG generation publication failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "PNG generation publication"):
+                harness.build()
+
+        self.assertIs(harness.session.require_snapshot(), first)
+        self.assertEqual(harness.checkpoint(), first_checkpoint)
+        self.assertEqual(harness.session.get_raw_catalog(
+            harness.workflow._raw_checkpoint_owner(harness.volume),
+            harness.workflow._raw_checkpoint_identity(
+                harness.source_factory.source, harness.volume, harness.validation.ranges,
+                False, harness.options, harness.builder.carving_checkpoint_profile(),
+            ),
+        ).png_recovery_progress, first_progress)
+        finished = self._scan_png_until_complete(harness)
+        self.assertEqual(len(finished.snapshot.partial_png_recoveries), 1)
+
+    def test_png_continuation_progress_is_not_restored_by_a_new_session(self):
+        self._use_large_synthetic_scan_budget()
+        data, ranges, _expected = self._png_signature_fixture(5, {4})
+        harness = RawCatalogHarness(
+            data, ranges=ranges, enable_png_partial_recovery=True,
+        )
+        prior = harness.build().snapshot
+        self.assertEqual(prior.png_recovery_progress.partial_next_index, 4)
+        self.assertFalse(prior.partial_png_recoveries)
+
+        new_session = RecoverySession()
+        harness.session = new_session
+        harness.workflow.session = new_session
+        restarted = harness.build().snapshot
+
+        self.assertIsNot(new_session.require_snapshot(), prior)
+        self.assertEqual(restarted.png_recovery_progress.partial_next_index, 4)
+        self.assertEqual(restarted.png_recovery_progress.partial_signatures_considered, 4)
+        self.assertFalse(restarted.partial_png_recoveries)
+        finished = self._scan_png_until_complete(harness)
+        self.assertEqual(len(finished.snapshot.partial_png_recoveries), 1)
 
     def test_four_passes_complete_scope_and_fifth_reuses_extractable_catalog(self):
         data, expected = make_image((

@@ -138,16 +138,47 @@ class RecoverySession:
             self._raw_catalogs = catalogs
             self._raw_generation = generation
 
+    def update_raw_catalog_snapshot(self, owner_key, identity_key, expected_snapshot,
+                                    snapshot):
+        """Publish bounded cache-validation accounting for the current generation."""
+        candidate_count, retained_bytes = self.raw_catalog_candidate_metrics(snapshot)
+        with self._raw_carving_lock:
+            entry = self._raw_catalogs.get(owner_key)
+            if (entry is None or entry[0] != identity_key or entry[1] is not expected_snapshot):
+                raise RuntimeError("Raw catalog generation changed during cache validation")
+            remaining_candidates, remaining_retained_bytes = self.raw_catalog_capacity(owner_key)
+            if (candidate_count > remaining_candidates
+                    or retained_bytes > remaining_retained_bytes):
+                raise RuntimeError(
+                    "Raw session limit reached while accounting cache validation; "
+                    "the previous catalog generation was preserved."
+                )
+            self._raw_catalogs[owner_key] = (
+                entry[0], snapshot, entry[2], candidate_count, retained_bytes,
+            )
+            if self.snapshot is expected_snapshot:
+                self.snapshot = snapshot
+                self.nodes = snapshot.catalog.nodes
+
     @staticmethod
     def raw_catalog_candidate_metrics(snapshot):
         candidate_count = 0
         retained_bytes = 0
         for node in snapshot.catalog.nodes.values():
             candidate = node.candidate
-            if candidate is None or "content_carving" not in candidate.discovery_methods:
+            if candidate is None or not (
+                {"content_carving", "fragment_reconstruction"}
+                & set(candidate.discovery_methods)
+            ):
                 continue
             candidate_count += 1
             retained_bytes += int(candidate.size_bytes or 0)
+        for recovery in getattr(snapshot, "partial_png_recoveries", ()):
+            candidate_count += 1
+            retained_bytes += sum(len(row) for row in recovery.rows)
+        progress = getattr(snapshot, "png_recovery_progress", None)
+        if progress is not None:
+            retained_bytes += progress.estimated_retained_bytes
         return candidate_count, retained_bytes
 
     @property
