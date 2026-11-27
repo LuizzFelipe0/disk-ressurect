@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import struct
 
 from infrastructure.filesystems.ntfs.attributes.attributes import AttributeParser
+from infrastructure.filesystems.ntfs.mft.parser import unsupported_data_attribute_reason
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class DataExtentResolution:
     data_runs: tuple[tuple[int | None, int], ...] = ()
     file_size: int = 0
     extent_count: int = 0
+    data_attribute_flags: int = 0
 
 
 @dataclass(frozen=True)
@@ -101,6 +103,7 @@ class MFTDataExtentResolver:
                 by_record_number.setdefault(index, []).append(record)
 
         attributes = []
+        common_flags = None
         seen_references = set()
         for entry in data_entries:
             reference_key = (entry.record_number, entry.sequence_number, entry.attribute_id)
@@ -146,8 +149,13 @@ class MFTDataExtentResolver:
             attribute = matching_attributes[0]
             if attribute.is_resident or attribute.highest_vcn < attribute.lowest_vcn:
                 return self._inconclusive("resident_or_invalid_nonresident_extent")
-            if attribute.flags & (0x0001 | 0x4000):
-                return self._inconclusive("compressed_or_encrypted_data_is_unsupported")
+            unsupported_reason = unsupported_data_attribute_reason(attribute.flags)
+            if unsupported_reason:
+                return self._inconclusive(unsupported_reason)
+            if common_flags is None:
+                common_flags = attribute.flags
+            elif attribute.flags != common_flags:
+                return self._inconclusive("data_extent_attribute_flags_differ")
             described_clusters = sum(count for _lcn, count in attribute.data_runs)
             if described_clusters != attribute.highest_vcn - attribute.lowest_vcn + 1:
                 return self._inconclusive("runlist_cluster_count_does_not_match_vcn_range")
@@ -187,6 +195,7 @@ class MFTDataExtentResolver:
             data_runs=tuple(combined_runs),
             file_size=file_size,
             extent_count=len(attributes),
+            data_attribute_flags=int(common_flags or 0),
         )
 
     @classmethod

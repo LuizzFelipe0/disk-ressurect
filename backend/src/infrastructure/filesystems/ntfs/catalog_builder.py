@@ -389,7 +389,10 @@ class CatalogBuilder:
                         "unknown" if fragment_reconstruction else
                         "validated" if valid and consistent is not False else "partial"
                     ),
-                    recoverability=("recoverable" if complete else "partial"),
+                    recoverability=(
+                        "unavailable" if getattr(record, "data_unsupported_reason", None)
+                        else "recoverable" if complete else "partial"
+                    ),
                     content_reference=reference,
                 )
                 node_id = candidate_id
@@ -1153,6 +1156,9 @@ class CatalogContentValidator:
             return CandidateContentValidation("unsupported", "No signature rule is available")
         if not getattr(record, "data_is_complete", True):
             return CandidateContentValidation("incomplete_metadata", "MFT data attributes are incomplete")
+        unsupported_reason = getattr(record, "data_unsupported_reason", None)
+        if unsupported_reason:
+            return CandidateContentValidation("unsupported_data_attribute", unsupported_reason)
 
         size = int(record.file_size)
         if size <= 0:

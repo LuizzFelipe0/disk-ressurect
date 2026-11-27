@@ -15,13 +15,14 @@ def _align(value, boundary=8):
     return (value + boundary - 1) & ~(boundary - 1)
 
 
-def resident_data_attribute(payload, name=None):
+def resident_data_attribute(payload, name=None, flags=0):
     name_bytes = (name or "").encode("utf-16le")
     name_offset = 24 if name else 0
     content_offset = _align(24 + len(name_bytes)) if name else 24
     length = _align(content_offset + len(payload))
     attribute = bytearray(length)
     struct.pack_into("<II", attribute, 0, 0x80, length)
+    struct.pack_into("<H", attribute, 12, flags)
     attribute[8] = 0
     attribute[9] = len(name or "")
     struct.pack_into("<H", attribute, 10, name_offset)
@@ -34,12 +35,14 @@ def resident_data_attribute(payload, name=None):
 
 
 def nonresident_data_attribute(name, *, lowest_vcn=0, highest_vcn=2,
-                               file_size=10, allocated_size=12, runlist=b"\x11\x03\x01\x00"):
+                               file_size=10, allocated_size=12, runlist=b"\x11\x03\x01\x00",
+                               flags=0):
     name_bytes = name.encode("utf-16le")
     runlist_offset = _align(64 + len(name_bytes))
     length = _align(runlist_offset + len(runlist))
     attribute = bytearray(length)
     struct.pack_into("<II", attribute, 0, 0x80, length)
+    struct.pack_into("<H", attribute, 12, flags)
     attribute[8] = 1
     attribute[9] = len(name)
     struct.pack_into("<H", attribute, 10, 64)
@@ -118,6 +121,19 @@ class NamedDataStreamMFTTests(unittest.TestCase):
         self.assertEqual(((1, 3),), stream.data_runs)
         self.assertEqual(10, stream.file_size)
         self.assertTrue(stream.is_complete)
+
+    def test_named_stream_preserves_compression_and_encryption_flags(self):
+        for flag, reason in (
+            (0x0001, "compressed_data_is_unsupported"),
+            (0x4000, "encrypted_data_is_unsupported"),
+        ):
+            with self.subTest(flag=flag):
+                record = make_record([nonresident_data_attribute("$J", flags=flag)])
+                stream = record.get_named_data_stream("$J")
+
+                self.assertEqual(flag, stream.flags)
+                self.assertEqual(reason, stream.unsupported_reason)
+                self.assertTrue(stream.is_complete)
 
     def test_complete_sparse_named_stream_reads_zero_filled_ranges(self):
         runlist = b"\x01\x01\x11\x01\x01\x00"  # one sparse cluster, then LCN 1
@@ -203,6 +219,48 @@ class NamedDataStreamReaderTests(unittest.TestCase):
 
         with self.assertRaisesRegex(FileContentError, "incomplete"):
             reader.read_named_stream(SimpleNamespace(record=record), "$J")
+
+    def test_refuses_compressed_and_encrypted_streams_before_reading(self):
+        for flag in (0x0001, 0x4000):
+            with self.subTest(flag=flag):
+                record = make_record([nonresident_data_attribute("$J", flags=flag)])
+                disk = FakeDisk(bytes(64))
+                reader = NTFSFileContentReader(disk, 0, 4, volume_size_bytes=64)
+
+                with self.assertRaises(FileContentError) as raised:
+                    reader.read_named_stream(SimpleNamespace(record=record), "$J")
+
+                self.assertEqual("unsupported_named_stream", raised.exception.status)
+                self.assertEqual([], disk.reads)
+
+    def test_unnamed_nonresident_flags_reject_compression_and_encryption_but_allow_sparse_runs(self):
+        for flag, reason in (
+            (0x0001, "compressed_data_is_unsupported"),
+            (0x4000, "encrypted_data_is_unsupported"),
+        ):
+            with self.subTest(flag=flag):
+                unsupported = make_record([nonresident_data_attribute("", flags=flag)])
+                disk = FakeDisk(bytes(64))
+                reader = NTFSFileContentReader(disk, 0, 4, volume_size_bytes=64)
+
+                with self.assertRaises(FileContentError) as raised:
+                    b"".join(reader.iter_chunks(SimpleNamespace(record=unsupported)))
+                self.assertEqual("unsupported_data_attribute", raised.exception.status)
+                self.assertEqual(reason, raised.exception.reason)
+                self.assertEqual([], disk.reads)
+
+        sparse = make_record([nonresident_data_attribute(
+            "", highest_vcn=1, file_size=8, allocated_size=4,
+            runlist=b"\x01\x01\x11\x01\x01\x00", flags=0x8000,
+        )])
+        sparse_disk = FakeDisk(bytes(4) + b"DATA")
+        sparse_reader = NTFSFileContentReader(
+            sparse_disk, 0, 4, volume_size_bytes=len(sparse_disk.data),
+        )
+        self.assertEqual(
+            b"\x00\x00\x00\x00DATA",
+            b"".join(sparse_reader.iter_chunks(SimpleNamespace(record=sparse))),
+        )
 
     def test_refuses_nonresident_named_stream_without_volume_bounds(self):
         record = make_record([nonresident_data_attribute("$J")])

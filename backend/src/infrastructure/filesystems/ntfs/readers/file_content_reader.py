@@ -24,6 +24,9 @@ class NTFSFileContentReader:
     def iter_chunks(self, node):
         record = node.record
         expected_size = int(record.file_size)
+        unsupported_reason = getattr(record, "data_unsupported_reason", None)
+        if unsupported_reason:
+            raise FileContentError("unsupported_data_attribute", unsupported_reason)
         if getattr(record, "data_is_complete", True) is False:
             raise FileContentError("incomplete_mft", "MFT data attributes are incomplete")
 
@@ -114,6 +117,9 @@ class NTFSFileContentReader:
             stream = streams.get(str(stream_name).casefold())
         if stream is None:
             raise FileContentError("missing_named_stream", f"Named stream {stream_name!r} was not found")
+        unsupported_reason = getattr(stream, "unsupported_reason", None)
+        if unsupported_reason:
+            raise FileContentError("unsupported_named_stream", unsupported_reason)
         if not bool(getattr(stream, "is_complete", False)):
             reasons = ", ".join(getattr(stream, "incomplete_reasons", ()) or ())
             detail = f": {reasons}" if reasons else ""

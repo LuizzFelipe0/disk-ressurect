@@ -14,10 +14,11 @@ def make_recovery_workflow(output_guard=None, content_reader_factory=None):
     )
 
 
-def resident_attribute(attribute_type, content):
+def resident_attribute(attribute_type, content, flags=0):
     length = (24 + len(content) + 7) & ~7
     attribute = bytearray(length)
     struct.pack_into("<II", attribute, 0, attribute_type, length)
+    struct.pack_into("<H", attribute, 12, flags)
     attribute[8] = 0
     struct.pack_into("<I", attribute, 16, len(content))
     struct.pack_into("<H", attribute, 20, 24)
@@ -26,7 +27,8 @@ def resident_attribute(attribute_type, content):
 
 
 def make_record(name="photo.jpg", payload=b"data", has_attribute_list=False,
-                record_number=0, base_file_reference=0, parent_reference=5):
+                record_number=0, base_file_reference=0, parent_reference=5,
+                data_flags=0):
     raw = bytearray(1024)
     raw[:4] = b"FILE"
     struct.pack_into("<HH", raw, 4, 0x30, 3)
@@ -47,7 +49,7 @@ def make_record(name="photo.jpg", payload=b"data", has_attribute_list=False,
     attributes = resident_attribute(0x30, file_name)
     if has_attribute_list:
         attributes += resident_attribute(0x20, b"\x00")
-    attributes += resident_attribute(0x80, payload)
+    attributes += resident_attribute(0x80, payload, data_flags)
     attributes += struct.pack("<I", 0xFFFFFFFF)
     attributes += bytes((-len(attributes)) % 8)
     raw[attribute_offset:attribute_offset + len(attributes)] = attributes

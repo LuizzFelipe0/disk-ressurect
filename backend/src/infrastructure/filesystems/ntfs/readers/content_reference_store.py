@@ -40,6 +40,7 @@ class _CompactContentRecord:
 
     __slots__ = (
         "file_size", "data_is_complete", "resident_data", "data_runs",
+        "data_attribute_flags", "data_unsupported_reason",
         "is_metadata_consistent", "data_extent_resolution",
         "data_extent_count", "data_extent_resolution_reason",
     )
@@ -50,6 +51,8 @@ class _CompactContentRecord:
         resident_data = getattr(record, "resident_data", None)
         self.resident_data = None if resident_data is None else bytes(resident_data)
         self.data_runs = tuple(tuple(run) for run in (getattr(record, "data_runs", ()) or ()))
+        self.data_attribute_flags = int(getattr(record, "data_attribute_flags", 0))
+        self.data_unsupported_reason = getattr(record, "data_unsupported_reason", None)
         self.is_metadata_consistent = getattr(record, "is_metadata_consistent", None)
         self.data_extent_resolution = getattr(record, "data_extent_resolution", None)
         self.data_extent_count = getattr(record, "data_extent_count", None)

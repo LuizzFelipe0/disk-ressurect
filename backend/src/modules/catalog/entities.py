@@ -121,13 +121,16 @@ class RecoveryCatalog:
             self.node_key(node)
             for extension in supported.intersection(selected)
             for node in self._files_by_extension.get(extension, ())
-            if int(node.size_bytes) >= threshold
+            if (int(node.size_bytes) >= threshold
+                and getattr(node.candidate, "recoverability", "unknown") != "unavailable")
         }
         return [node for node in self.file_nodes if self.node_key(node) in eligible_keys]
 
     @staticmethod
     def is_eligible(node, allowed_extensions, min_file_size=0):
         if node.is_directory:
+            return False
+        if getattr(node.candidate, "recoverability", "unknown") == "unavailable":
             return False
         extension = os.path.splitext(node.name)[1].casefold()
         return extension in allowed_extensions and int(node.size_bytes) >= min_file_size

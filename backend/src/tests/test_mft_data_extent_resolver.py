@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.disk.entities import NTFSVolume
+from modules.recovery.entities import ContentReadError
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
 from infrastructure.filesystems.ntfs.mft.data_extent_resolver import MFTDataExtentResolver
 from infrastructure.filesystems.ntfs.mft.parser import MFTRecord
@@ -27,11 +28,12 @@ def resident_attribute(attribute_type, content, attribute_id):
     return attribute
 
 
-def nonresident_data_attribute(lowest_vcn, highest_vcn, lcn, file_size, attribute_id):
+def nonresident_data_attribute(lowest_vcn, highest_vcn, lcn, file_size, attribute_id, flags=0):
     runlist = bytes((0x11, highest_vcn - lowest_vcn + 1, lcn, 0))
     length = (64 + len(runlist) + 7) & ~7
     attribute = bytearray(length)
     struct.pack_into("<II", attribute, 0, 0x80, length)
+    struct.pack_into("<H", attribute, 12, flags)
     attribute[8] = 1
     struct.pack_into("<H", attribute, 14, attribute_id)
     struct.pack_into("<QQ", attribute, 16, lowest_vcn, highest_vcn)
@@ -77,7 +79,7 @@ def make_record(index, sequence, attrs, *, base_reference=0, name="photo.jpg"):
 
 def make_fragmented_records(
     *, extension_sequence=9, listed_extension_sequence=None,
-    extension_vcns=(1, 1), extension_lcn=20,
+    extension_vcns=(1, 1), extension_lcn=20, flags=0, extension_flags=None,
 ):
     base_index, base_sequence = 42, 7
     extension_index = 43
@@ -94,13 +96,14 @@ def make_fragmented_records(
         base_index,
         base_sequence,
         [resident_attribute(0x20, b"".join(entries), 2),
-         nonresident_data_attribute(0, 0, 10, 8, 3)],
+         nonresident_data_attribute(0, 0, 10, 8, 3, flags)],
     )
     extension = make_record(
         extension_index,
         extension_sequence,
         [nonresident_data_attribute(
             extension_vcns[0], extension_vcns[1], extension_lcn, 8, 3,
+            flags if extension_flags is None else extension_flags,
         )],
         base_reference=base_reference,
         name="extension",
@@ -209,6 +212,34 @@ class MFTDataExtentResolverTests(unittest.TestCase):
         self.assertEqual("inconclusive", result.status)
         self.assertEqual("data_extent_count_outside_supported_bounds", result.reason)
 
+    def test_compressed_and_encrypted_attribute_list_extents_are_rejected(self):
+        for flag, reason in (
+            (0x0001, "compressed_data_is_unsupported"),
+            (0x4000, "encrypted_data_is_unsupported"),
+        ):
+            with self.subTest(flag=flag):
+                base, extension = make_fragmented_records(flags=flag)
+                result = MFTDataExtentResolver().resolve(
+                    base, (base, extension), cluster_size=4, volume_size_bytes=128,
+                )
+                self.assertEqual("inconclusive", result.status)
+                self.assertEqual(reason, result.reason)
+
+    def test_sparse_flag_is_preserved_and_extent_flags_must_match(self):
+        base, extension = make_fragmented_records(flags=0x8000)
+        result = MFTDataExtentResolver().resolve(
+            base, (base, extension), cluster_size=4, volume_size_bytes=128,
+        )
+        self.assertEqual("resolved", result.status)
+        self.assertEqual(0x8000, result.data_attribute_flags)
+
+        base, extension = make_fragmented_records(flags=0, extension_flags=0x8000)
+        result = MFTDataExtentResolver().resolve(
+            base, (base, extension), cluster_size=4, volume_size_bytes=128,
+        )
+        self.assertEqual("inconclusive", result.status)
+        self.assertEqual("data_extent_attribute_flags_differ", result.reason)
+
     def test_catalog_and_extractor_recover_fragmented_deleted_file_without_listing_extension(self):
         base, extension = make_fragmented_records()
         disk_image = bytearray(16_384)
@@ -306,6 +337,67 @@ class MFTDataExtentResolverTests(unittest.TestCase):
 
         self.assertEqual(0, result.recovered_count)
         self.assertEqual("incomplete_mft", result.results[0].status)
+
+    def test_catalog_marks_unsupported_data_unavailable_and_extraction_fails_closed(self):
+        base, extension = make_fragmented_records(flags=0x0001)
+        disk_image = bytearray(16_384)
+        disk_image[4096:5120] = serialize_record(base)
+        disk_image[5120:6144] = serialize_record(extension)
+        disk_image[4096 + 40:4096 + 44] = b"\xff\xd8\xff\xe0"
+        disk_image[4096 + 80:4096 + 84] = b"\x00\x00\x00\x00"
+        volume = NTFSVolume(
+            3, 1, 4096, 8192, 512, 4, 1024, 4096, 2048, ((4096, 2, 42),),
+        )
+        builder = CatalogBuilder(lambda _disk_number: FakeDisk(disk_image))
+        snapshot = builder.build(volume)
+        node = next(iter(snapshot.catalog.nodes.values()))
+
+        self.assertEqual("unavailable", node.candidate.recoverability)
+        self.assertEqual([], snapshot.catalog.eligible_files({".jpg"}))
+        self.assertFalse(snapshot.catalog.is_eligible(node, {".jpg"}))
+        _source, _volume, retained = builder.content_reference_store.resolve(
+            node.candidate.content_reference.reference_id,
+        )
+        self.assertEqual("compressed_data_is_unsupported", retained.record.data_unsupported_reason)
+
+        class SafeDestination:
+            def validate_source(self, _path, _source):
+                return None
+
+        opened_readers = []
+
+        def reader_factory(_source):
+            disk = FakeDisk(disk_image)
+            original_read_at = disk.read_at
+
+            def read_at(offset, size):
+                opened_readers.append((offset, size))
+                return original_read_at(offset, size)
+
+            disk.read_at = read_at
+            return disk
+
+        with tempfile.TemporaryDirectory() as output_directory:
+            result = make_recovery_workflow(
+                output_guard=SafeDestination(),
+                content_reader_factory=lambda _source: NTFSContentReferenceReader(
+                    reader_factory, builder.content_reference_store,
+                ),
+            ).extract_selection(snapshot, (node,), output_directory, (".jpg",))
+
+            self.assertEqual(0, result.recovered_count)
+            self.assertEqual((), result.results)
+            self.assertEqual([], opened_readers)
+            self.assertEqual([], list(Path(output_directory).rglob("*.jpg")))
+
+        reference_reader = NTFSContentReferenceReader(
+            reader_factory, builder.content_reference_store,
+        )
+        with self.assertRaises(ContentReadError) as raised:
+            b"".join(reference_reader.iter_chunks(node.candidate.content_reference))
+        self.assertEqual("unsupported_data_attribute", raised.exception.status)
+        self.assertIn("compressed_data_is_unsupported", raised.exception.reason)
+        self.assertEqual([], opened_readers)
 
 
 if __name__ == "__main__":
