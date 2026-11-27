@@ -268,6 +268,15 @@ export const SelectionSummary = styled.span`
   font-size: 11px;
 `;
 
+export const PartialRecoveryList = styled.div`
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+  label { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 9px; align-items: start; }
+  input { accent-color: ${brandColors.revive}; }
+  small { grid-column: 2; color: ${brandColors.warning}; }
+`;
+
 export const AuditActions = styled.div`
   display: flex;
   align-items: center;

@@ -3,7 +3,7 @@ import React from "react";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import type { RecoveryResult } from "../../types/recovery";
+import type { PartialPngRecoveryInfo, RecoveryResult } from "../../types/recovery";
 import { RecoveryPage } from "./index";
 
 const { recovery, treeRenderCount } = vi.hoisted(() => ({
@@ -26,6 +26,7 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
       orphanScanPerformed: true,
       availableExtensions: [],
       roots: [],
+      partialPngRecoveries: [] as PartialPngRecoveryInfo[],
       diskValidation: {
         coverageStatus: "complete",
         assessment: "inconclusive",
@@ -122,6 +123,7 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     expandedFolderIds: new Set(),
     loadingFolderIds: new Set(),
     selectedIds: new Set(),
+    selectedPartialPngIds: new Set(),
     extensions: [],
     availableExtensions: [],
     minimumSizeKb: 0,
@@ -143,6 +145,7 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     toggleFolder: vi.fn(),
     isSelected: vi.fn(() => false),
     toggleSelection: vi.fn(),
+    togglePartialPngSelection: vi.fn(),
     previewFile: vi.fn(),
     ensureAdministrator: vi.fn(),
   },
@@ -421,8 +424,13 @@ describe("RecoveryPage audit details", () => {
     const forceFresh = screen.getByRole("checkbox", {
       name: "Forçar nova auditoria completa do disco",
     });
+    const partialPng = screen.getByRole("checkbox", { name: "Buscar recortes parciais de imagens PNG" });
     expect((screen.getByLabelText("Procurar arquivos excluídos que não aparecem na lista") as HTMLInputElement).checked).toBe(true);
     expect((forceFresh as HTMLInputElement).checked).toBe(true);
+    expect((partialPng as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(partialPng);
+    expect((partialPng as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(partialPng);
     expect((scanBudget as HTMLSelectElement).value).toBe("64");
     expect((maxFiles as HTMLSelectElement).value).toBe("16384");
     expect((candidateReadBudget as HTMLSelectElement).value).toBe("1024");
@@ -432,7 +440,31 @@ describe("RecoveryPage audit details", () => {
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
       scanBudgetGiB: 64, maxFiles: 16384, maxRetainedMiB: 512,
       maxCandidateReadMiBPerFormat: 1024,
+      enablePngPartialRecovery: false,
     }, true);
+  });
+
+  it("shows partial PNG rows as separate selectable data", () => {
+    const original = recovery.catalog.partialPngRecoveries;
+    const originalSelection = recovery.selectedPartialPngIds;
+    recovery.catalog.partialPngRecoveries = [{
+      id: "partial-png-1", originalFormat: "PNG", width: 48, height: 20, pixelLayout: "RGB",
+      recoveredRows: 3, recoveredRowStart: 0, recoveredRowEndExclusive: 3,
+      missingRowStart: 3, missingRowEndExclusive: 20, sourceRanges: [], stopReason: "truncated_idat",
+      validIdatCrcCount: 0, idatCrcUnknown: true, idatCrcInvalid: false,
+      zlibComplete: false, iendValid: false, integrity: "unknown", derivedExport: true,
+    }];
+    recovery.selectedPartialPngIds = new Set(["partial-png-1"]);
+    try {
+      renderRecoveryPage();
+      goToCatalog();
+      expect(screen.getByRole("heading", { name: "Dados parciais de imagem PNG" })).toBeTruthy();
+      expect(screen.getByLabelText(/48 × 20; 3 linhas disponíveis, 17 ausentes/)).toBeTruthy();
+      expect(screen.getByText("Integridade original desconhecida")).toBeTruthy();
+    } finally {
+      recovery.catalog.partialPngRecoveries = original;
+      recovery.selectedPartialPngIds = originalSelection;
+    }
   });
 
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {

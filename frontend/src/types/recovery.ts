@@ -2,6 +2,7 @@ export type {
   CarvingOptions,
   ContentCarvingSummary,
   FragmentReconstructionEvidence,
+  PartialPngRecoveryInfo,
   PNGFragmentReconstructionSummary,
   BackendRuntimeStatus,
   CatalogInfo,
@@ -19,6 +20,7 @@ export type BackendStatus = "starting" | "ready" | "error";
 
 export interface RecoveryOptions {
   selectedNodeIds: string[];
+  selectedPartialPngIds: string[];
   excludedNodeIds: string[];
   outputDirectory: string;
   extensions: string[];

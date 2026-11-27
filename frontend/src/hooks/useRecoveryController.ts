@@ -109,8 +109,10 @@ export function useRecoveryController() {
   }, [setError]);
 
   const recover = useCallback(async () => {
-    if (!selection.selectedIds.size || !extensions.length || !outputDirectory.trim()) {
-      setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
+    const hasPartialPngSelection = selection.selectedPartialPngIds.size > 0;
+    if ((!selection.selectedIds.size && !hasPartialPngSelection)
+        || (selection.selectedIds.size > 0 && !extensions.length) || !outputDirectory.trim()) {
+    setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
       return;
     }
     if (recoveryCommandInFlight.current) return;
@@ -136,11 +138,12 @@ export function useRecoveryController() {
     try {
       const result = await recoveryService.recover({
         selectedNodeIds: [...selection.selectedIds], excludedNodeIds: [...selection.excludedIds],
+        selectedPartialPngIds: [...selection.selectedPartialPngIds],
         outputDirectory, extensions, minimumSizeKb, operationId,
       });
       if (sourceGeneration !== source.getGeneration() || catalogGeneration !== getCatalogGeneration()) return;
       setRecoveryResult(result);
-      setStatus(`Completed: ${result.recoveredCount}/${result.candidateCount} files recovered.`);
+      setStatus(`Completed: ${result.recoveredCount} files recovered; ${result.partialExportedCount ?? 0} partial PNG crop(s) exported.`);
       setProgress({ stage: "extract", completed: 1, total: 1, message: "Recovery completed." });
     } catch (cause) {
       if (sourceGeneration === source.getGeneration() && catalogGeneration === getCatalogGeneration()) {
@@ -152,7 +155,7 @@ export function useRecoveryController() {
       finishOperation(operationId);
       recoveryCommandInFlight.current = false;
     }
-  }, [selection.selectedIds, selection.excludedIds, extensions, outputDirectory, minimumSizeKb,
+  }, [selection.selectedIds, selection.excludedIds, selection.selectedPartialPngIds, extensions, outputDirectory, minimumSizeKb,
     source.getGeneration, ensureAdministrator, setError, setBusy, setProgress, setStatus,
     beginOperation, finishOperation, getCatalogGeneration]);
 

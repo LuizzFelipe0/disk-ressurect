@@ -20,6 +20,8 @@ interface ScanStepProps extends RecoveryStepProps {
   setMaxCarvedRetainedMiB: (value: CarvingOptions["maxRetainedMiB"]) => void;
   maxCandidateReadMiBPerFormat: CarvingOptions["maxCandidateReadMiBPerFormat"];
   setMaxCandidateReadMiBPerFormat: (value: CarvingOptions["maxCandidateReadMiBPerFormat"]) => void;
+  enablePngPartialRecovery: boolean;
+  setEnablePngPartialRecovery: (value: boolean) => void;
   onBack: () => void;
   onStart: () => void;
 }
@@ -28,7 +30,8 @@ export const ScanStep: React.FC<ScanStepProps> = ({
   recovery, t, includeOrphaned, setIncludeOrphaned, forceFreshValidation, setForceFreshValidation,
   scanBudgetGiB, setScanBudgetGiB, maxCarvedFiles, setMaxCarvedFiles,
   maxCarvedRetainedMiB, setMaxCarvedRetainedMiB,
-  maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat, onBack, onStart,
+  maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat,
+  enablePngPartialRecovery, setEnablePngPartialRecovery, onBack, onStart,
 }) => {
   const sourceName = recovery.disks.find((disk) =>
     String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "";
@@ -50,6 +53,13 @@ export const ScanStep: React.FC<ScanStepProps> = ({
             disabled={recovery.busy || !includeOrphaned}
             onChange={(event) => setForceFreshValidation(event.target.checked)} />{t("forceFreshValidation")}</label>
           <InfoButton description={t("forceFreshValidationInfo")} label={t("moreInfo")} />
+        </ScanOption>
+        <ScanOption>
+          <label><input type="checkbox" checked={enablePngPartialRecovery}
+            disabled={recovery.busy || !includeOrphaned}
+            onChange={(event) => setEnablePngPartialRecovery(event.target.checked)} />
+            {t("enablePngPartialRecovery")}</label>
+          <InfoButton description={t("pngPartialRecoveryInfo")} label={t("moreInfo")} />
         </ScanOption>
         <CarvingBudgetControls>
           <FormField label={t("carvingScanBudget")}>

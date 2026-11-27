@@ -10,6 +10,63 @@ SUPPORTED_CATALOG_EXTENSIONS = (
 )
 
 
+@dataclass(frozen=True)
+class PngPartialRecovery:
+    """Decoded PNG pixel rows kept separate from complete-file candidates."""
+
+    recovery_id: str
+    source_id: str
+    volume_id: str
+    signature_offset: int
+    source_ranges: tuple[tuple[int, int], ...]
+    width: int
+    height: int
+    channels: int
+    rows: tuple[bytes, ...]
+    stop_reason: str
+    valid_idat_crc_count: int
+    idat_crc_unknown: bool
+    idat_crc_invalid: bool
+    zlib_complete: bool
+    iend_valid: bool
+
+    def __post_init__(self):
+        if (len(self.recovery_id) != 64
+                or any(character not in "0123456789abcdef" for character in self.recovery_id)
+                or not self.source_id or not self.volume_id):
+            raise ValueError("Partial PNG recovery and source identities are required")
+        if self.signature_offset < 0 or self.width <= 0 or self.height <= 0:
+            raise ValueError("Partial PNG origin and dimensions must be positive")
+        if self.channels not in (3, 4):
+            raise ValueError("Partial PNG pixel layout must be RGB or RGBA")
+        rows = tuple(bytes(row) for row in self.rows)
+        if not rows or len(rows) > self.height:
+            raise ValueError("Partial PNG recovery row count exceeds image dimensions")
+        if any(len(row) != self.width * self.channels for row in rows):
+            raise ValueError("Partial PNG row size does not match its pixel layout")
+        ranges = tuple((int(start), int(end)) for start, end in self.source_ranges)
+        if (not ranges or any(start < self.signature_offset or end <= start
+                              for start, end in ranges)):
+            raise ValueError("Partial PNG source ranges are invalid")
+        if (tuple(sorted(ranges)) != ranges
+                or any(left[1] > right[0] for left, right in zip(ranges, ranges[1:]))):
+            raise ValueError("Partial PNG source ranges must be ordered and non-overlapping")
+        object.__setattr__(self, "rows", rows)
+        object.__setattr__(self, "source_ranges", ranges)
+
+    @property
+    def recovered_row_count(self):
+        return len(self.rows)
+
+    @property
+    def pixel_layout(self):
+        return "RGB" if self.channels == 3 else "RGBA"
+
+    @property
+    def missing_row_range(self):
+        return len(self.rows), self.height
+
+
 @dataclass
 class CatalogNode:
     """Filesystem-neutral tree entry; files carry a recovery candidate."""
@@ -107,3 +164,4 @@ class RecoveryCatalogSnapshot:
     recycle_bin_summary: dict | None = None
     usn_journal_summary: dict | None = None
     ntfs_log_file_summary: dict | None = None
+    partial_png_recoveries: tuple[PngPartialRecovery, ...] = ()

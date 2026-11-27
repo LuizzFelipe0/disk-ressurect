@@ -9,6 +9,7 @@ export function useCatalogSelection(
 ) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const [selectedPartialPngIds, setSelectedPartialPngIds] = useState<Set<string>>(new Set());
   const toggleSelection = useCallback((nodeId: string, checked: boolean) => {
     const next = updateTreeSelection(nodeId, checked,
       { selectedIds, excludedIds }, parentById, childrenById);
@@ -23,12 +24,26 @@ export function useCatalogSelection(
   const selectAll = useCallback(() => {
     setSelectedIds(new Set(catalog?.roots.map((node) => node.id) ?? []));
     setExcludedIds(new Set());
+    setSelectedPartialPngIds(new Set(catalog?.partialPngRecoveries?.map((item) => item.id) ?? []));
   }, [catalog]);
 
   const clearSelection = useCallback(() => {
     setSelectedIds(new Set());
     setExcludedIds(new Set());
+    setSelectedPartialPngIds(new Set());
   }, []);
 
-  return { selectedIds, excludedIds, toggleSelection, isSelected, selectAll, clearSelection };
+  const togglePartialPngSelection = useCallback((id: string, checked: boolean) => {
+    setSelectedPartialPngIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  return {
+    selectedIds, excludedIds, selectedPartialPngIds, togglePartialPngSelection,
+    toggleSelection, isSelected, selectAll, clearSelection,
+  };
 }

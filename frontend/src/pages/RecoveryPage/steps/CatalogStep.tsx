@@ -6,7 +6,7 @@ import type { WorkflowStep } from "../../../components/WorkflowSteps";
 import { sanitizeDisplayText } from "../../../utils/sanitizeDisplayText";
 import type { RecoveryStepProps } from "./types";
 import {
-  AuditActions, BrowserFrame, BrowserHeading, BrowserSection, CatalogStat, CatalogStats,
+  AuditActions, BrowserFrame, BrowserHeading, BrowserSection, CatalogStat, CatalogStats, PartialRecoveryList,
   PreviewBody, PreviewPane, SearchBox, SelectionActions, SelectionSummary, StepActions,
 } from "../style";
 
@@ -33,14 +33,14 @@ export const CatalogStep: React.FC<CatalogStepProps> = ({
   return <div hidden={activeStep !== 3}>
     <CatalogStats aria-label={t("foundFiles")}>
       <CatalogStat><span>{t("catalogItems")}</span><strong>{(recovery.catalog?.recordCount ?? 0).toLocaleString(language)}</strong></CatalogStat>
-      <CatalogStat><span>{t("selectedItems")}</span><strong>{recovery.selectedIds.size.toLocaleString(language)}</strong></CatalogStat>
+      <CatalogStat><span>{t("selectedItems")}</span><strong>{(recovery.selectedIds.size + recovery.selectedPartialPngIds.size).toLocaleString(language)}</strong></CatalogStat>
       <CatalogStat><span>{t("fileTypesCount")}</span><strong>{(recovery.catalog?.availableExtensions.length ?? 0).toLocaleString(language)}</strong></CatalogStat>
     </CatalogStats>
     <BrowserFrame><Card size="sm" variant="flat"><BrowserSection>
       <BrowserHeading>
         <div><h2>{t("foundFiles")}</h2><p>{catalogSummary}</p></div>
         <AuditActions>
-          {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size} {t("selectedItems")}</SelectionSummary>}
+          {recovery.catalog && <SelectionSummary>{recovery.selectedIds.size + recovery.selectedPartialPngIds.size} {t("selectedItems")}</SelectionSummary>}
           <SelectionActions>
             <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy || !recovery.catalog}
               onClick={recovery.selectAll}>{t("selectAll")}</Button>
@@ -63,6 +63,19 @@ export const CatalogStep: React.FC<CatalogStepProps> = ({
             onToggleSelection={recovery.toggleSelection} onPreview={onPreviewFile} language={language} />
         </> : searchActive && recovery.searchingCatalog ? <p role="status">{t("searchingCatalog")}</p>
           : <EmptyState title={searchActive ? t("noMatches") : t("noFiles")} />}
+      {(recovery.catalog?.partialPngRecoveries?.length ?? 0) > 0 && <section aria-labelledby="partial-png-heading">
+        <h3 id="partial-png-heading">{t("partialPngResultsHeading")}</h3>
+        <p>{t("partialPngResultsDescription")}</p>
+        <PartialRecoveryList>{recovery.catalog?.partialPngRecoveries?.map((item) => <label key={item.id}>
+          <input type="checkbox" checked={recovery.selectedPartialPngIds.has(item.id)} disabled={recovery.busy}
+            onChange={(event) => recovery.togglePartialPngSelection(item.id, event.target.checked)} />
+          <span>{t("partialPngItem", {
+            width: item.width, height: item.height, recoveredRows: item.recoveredRows,
+            missingRows: item.height - item.recoveredRows,
+          })}</span>
+          <small>{t("partialPngIntegrityUnknown")}</small>
+        </label>)}</PartialRecoveryList>
+      </section>}
     </BrowserSection></Card>
     <PreviewPane>
       <Card size="sm" variant="flat" hasHeader title={t("preview")}>
@@ -86,7 +99,7 @@ export const CatalogStep: React.FC<CatalogStepProps> = ({
     <StepActions>
       <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
         onClick={() => onStepChange(2)}>← {t("back")}</Button>
-      <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.catalog || !recovery.selectedIds.size}
+      <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy || !recovery.catalog || !(recovery.selectedIds.size + recovery.selectedPartialPngIds.size)}
         onClick={() => onStepChange(4)}>{t("continue")} →</Button>
     </StepActions>
   </div>;

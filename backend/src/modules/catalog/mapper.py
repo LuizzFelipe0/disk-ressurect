@@ -41,7 +41,39 @@ class CatalogMapper:
             recycle_bin_recovery=getattr(snapshot, "recycle_bin_summary", None),
             usn_journal_evidence=getattr(snapshot, "usn_journal_summary", None),
             ntfs_log_file_evidence=getattr(snapshot, "ntfs_log_file_summary", None),
+            partial_png_recoveries=tuple(
+                CatalogMapper._partial_png_recovery(item)
+                for item in getattr(snapshot, "partial_png_recoveries", ())
+            ),
         )
+
+    @staticmethod
+    def _partial_png_recovery(recovery):
+        missing_start, missing_end = recovery.missing_row_range
+        return {
+            "id": recovery.recovery_id,
+            "originalFormat": "PNG",
+            "width": recovery.width,
+            "height": recovery.height,
+            "pixelLayout": recovery.pixel_layout,
+            "recoveredRows": recovery.recovered_row_count,
+            "recoveredRowStart": 0,
+            "recoveredRowEndExclusive": recovery.recovered_row_count,
+            "missingRowStart": missing_start,
+            "missingRowEndExclusive": missing_end,
+            "sourceRanges": [
+                {"start": start, "endExclusive": end}
+                for start, end in recovery.source_ranges
+            ],
+            "stopReason": recovery.stop_reason,
+            "validIdatCrcCount": recovery.valid_idat_crc_count,
+            "idatCrcUnknown": recovery.idat_crc_unknown,
+            "idatCrcInvalid": recovery.idat_crc_invalid,
+            "zlibComplete": recovery.zlib_complete,
+            "iendValid": recovery.iend_valid,
+            "integrity": "unknown",
+            "derivedExport": True,
+        }
 
     @staticmethod
     def node(node, node_ids_by_identity):

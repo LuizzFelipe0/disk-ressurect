@@ -292,6 +292,9 @@ class CatalogScanWorkflow:
                 "enablePngFragmentReconstruction": bool(getattr(
                     carving_options, "enable_png_fragment_reconstruction", False,
                 )),
+                "enablePngPartialRecovery": bool(getattr(
+                    carving_options, "enable_png_partial_recovery", False,
+                )),
                 "sessionMaxCandidates": int(getattr(
                     self.session, "MAX_RAW_SESSION_CANDIDATES", 16384,
                 )),

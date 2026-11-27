@@ -29,6 +29,7 @@ class RecoveryProgress:
 class ExtractionSummary:
     recovered_count: int
     results: tuple[ExtractionResult, ...]
+    partial_exported_count: int = 0
 
 
 CandidateDeletionState = Literal["deleted", "not_deleted", "unknown"]

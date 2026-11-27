@@ -8,10 +8,12 @@ class RecoveryRequestDto:
     output_directory: str
     extensions: tuple[str, ...]
     minimum_size_kb: int
+    selected_partial_png_ids: tuple[str, ...] = ()
 
     @classmethod
     def from_payload(cls, payload):
         selected = payload.get("selectedNodeIds", [])
+        selected_partial_png = payload.get("selectedPartialPngIds", [])
         excluded = payload.get("excludedNodeIds", [])
         extensions = payload.get("extensions", [])
         output_directory = payload.get("outputDirectory", "")
@@ -19,6 +21,9 @@ class RecoveryRequestDto:
         for field_name, value in (("selectedNodeIds", selected), ("excludedNodeIds", excluded), ("extensions", extensions)):
             if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
                 raise ValueError(f"{field_name} must be a list of strings")
+        if (not isinstance(selected_partial_png, list)
+                or any(not isinstance(item, str) for item in selected_partial_png)):
+            raise ValueError("selectedPartialPngIds must be a list of strings")
         if not isinstance(output_directory, str):
             raise ValueError("outputDirectory must be a string")
         if isinstance(minimum_size, bool):
@@ -29,7 +34,10 @@ class RecoveryRequestDto:
             raise ValueError("minimumSizeKb must be a non-negative integer") from exc
         if minimum_size < 0:
             raise ValueError("minimumSizeKb must be a non-negative integer")
-        return cls(tuple(selected), tuple(excluded), output_directory, tuple(extensions), minimum_size)
+        return cls(
+            tuple(selected), tuple(excluded), output_directory, tuple(extensions),
+            minimum_size, tuple(selected_partial_png),
+        )
 
 
 @dataclass(frozen=True)
@@ -40,13 +48,17 @@ class RecoveryResultDto:
     results: tuple[dict, ...] = ()
     results_truncated: bool = False
     status_counts: dict[str, int] | None = None
+    partial_exported_count: int = 0
 
     def to_dict(self):
         return {
             "recoveredCount": self.recovered_count,
             "candidateCount": self.candidate_count,
             "selectedCount": self.selected_count,
-            "rejectedCount": max(0, self.candidate_count - self.recovered_count),
+            "rejectedCount": max(
+                0, self.candidate_count - self.recovered_count - self.partial_exported_count,
+            ),
+            "partialExportedCount": self.partial_exported_count,
             "statusCounts": dict(self.status_counts or {}),
             "results": list(self.results),
             "resultsTruncated": self.results_truncated,

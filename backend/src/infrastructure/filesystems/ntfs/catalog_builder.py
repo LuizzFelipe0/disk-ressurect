@@ -183,6 +183,7 @@ class CatalogBuilder:
             recycle_bin_summary = None
             usn_journal_summary = None
             ntfs_log_file_summary = None
+            partial_png_recoveries = ()
             if include_orphaned:
                 from infrastructure.recovery.extractor import Extractor
 
@@ -236,7 +237,8 @@ class CatalogBuilder:
                     Extractor.supported_extensions(),
                 ))
                 if precomputed_carving_ranges is not None:
-                    (content_carving_summary, low_confidence_carving_summary) = (
+                    (content_carving_summary, low_confidence_carving_summary,
+                     partial_png_recoveries) = (
                         self._scan_content_carving(
                             disk,
                             builder,
@@ -256,6 +258,8 @@ class CatalogBuilder:
                             volume.partition_offset,
                             volume.partition_offset + volume.partition_size,
                             volume.cluster_size,
+                             source_id,
+                             volume_id,
                         )
                     )
                 nodes = builder.nodes
@@ -275,6 +279,7 @@ class CatalogBuilder:
                 recycle_bin_summary=recycle_bin_summary,
                 usn_journal_summary=usn_journal_summary,
                 ntfs_log_file_summary=ntfs_log_file_summary,
+                partial_png_recoveries=partial_png_recoveries,
             )
             builder.release_source_tree()
             if not defer_content_reference_commit:
@@ -478,6 +483,7 @@ class CatalogBuilder:
         phase_callback, raw_candidate_references=None, raw_session_candidate_limit=None,
         raw_session_retained_byte_limit=None, raw_candidate_data=None,
         raw_candidate_locations=None, volume_start=0, volume_end=None, cluster_size=4096,
+        source_id="", volume_id="",
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -505,6 +511,7 @@ class CatalogBuilder:
         reconstruction_enabled = bool(getattr(
             options, "enable_png_fragment_reconstruction", False,
         ))
+        partial_png_enabled = bool(getattr(options, "enable_png_partial_recovery", False))
         if reconstruction_enabled:
             from infrastructure.carving.png_idat_fragment_reconstructor import (
                 PNGIDATFragmentReconstructor,
@@ -526,7 +533,7 @@ class CatalogBuilder:
             require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
             ranges_truncated=bool(ranges_truncated),
-            collect_png_signatures=reconstruction_enabled,
+            collect_png_signatures=reconstruction_enabled or partial_png_enabled,
         )
         candidate_catalog = CarvedCandidateCatalog(
             builder,
@@ -655,6 +662,52 @@ class CatalogBuilder:
                 trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = True
                 if trusted_summary["pngFragmentReconstruction"]["stopReason"] == "search_exhausted":
                     trusted_summary["pngFragmentReconstruction"]["stopReason"] = "signature_limit"
+        partial_png_recoveries = ()
+        partial_png_summary = None
+        if partial_png_enabled:
+            from infrastructure.carving.png_partial_recovery import PngPartialRecoveryScanner
+
+            partial_scan = PngPartialRecoveryScanner(
+                disk,
+                source_id=source_id,
+                volume_id=volume_id,
+                volume_start=volume_start,
+                volume_end=volume_end,
+            ).scan(
+                carving.png_signature_offsets,
+                ranges,
+                complete_png_offsets=(
+                    item.offset for item in carving.files if item.extension == ".png"
+                ),
+            )
+            partial_png_recoveries = partial_scan.recoveries
+            partial_png_summary = {
+                "enabled": True,
+                "strategy": "decoded_complete_png_rows",
+                "signaturesSeen": partial_scan.signatures_seen,
+                "signaturesExamined": partial_scan.signatures_examined,
+                "signatureDiscoveryComplete": (
+                    carving.checkpoint is None and not carving.scan_limit_reached
+                    and not carving.png_signature_set_truncated and not ranges_truncated
+                ),
+                "candidatesFound": len(partial_png_recoveries),
+                "rejectedSignatures": partial_scan.rejected_count,
+                "readErrors": partial_scan.read_errors,
+                "bytesRead": partial_scan.bytes_read,
+                "uniqueBytesRead": partial_scan.unique_bytes_read,
+                "elapsedSeconds": partial_scan.elapsed_seconds,
+                "retainedBytesEstimate": partial_scan.retained_bytes_estimate,
+                "integrity": "unknown",
+                "stopReason": partial_scan.stop_reason,
+                "limits": {
+                    "signatures": PngPartialRecoveryScanner.MAX_SIGNATURES,
+                    "candidateReadBytes": PngPartialRecoveryScanner.MAX_CANDIDATE_READ_BYTES,
+                    "totalReadBytes": PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES,
+                    "retainedBytes": PngPartialRecoveryScanner.MAX_TOTAL_RETAINED_BYTES,
+                    "timeSeconds": PngPartialRecoveryScanner.TIME_LIMIT_SECONDS,
+                },
+            }
+            trusted_summary["pngPartialRecovery"] = partial_png_summary
         low_confidence_summary = None
         if uncertain_ranges is not None:
             low_confidence_summary = self._scan_low_confidence_ranges(
@@ -667,7 +720,7 @@ class CatalogBuilder:
             if candidate_catalog.session_limit_reached:
                 trusted_summary["stopReason"] = "session_limit"
                 trusted_summary["sessionLimitReached"] = True
-        return trusted_summary, low_confidence_summary
+        return trusted_summary, low_confidence_summary, partial_png_recoveries
 
     def _scan_low_confidence_ranges(
         self, disk, candidate_catalog, uncertain_ranges, truncation, phase_callback,
