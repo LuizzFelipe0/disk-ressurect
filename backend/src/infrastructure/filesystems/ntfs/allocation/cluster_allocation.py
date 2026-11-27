@@ -181,28 +181,33 @@ class ClusterAllocationEvidence:
 
 
 class FreeClusterRangeCollector:
-    """Retain a bounded prefix of free-cluster byte ranges for content carving."""
+    """Retain a bounded window of free-cluster byte ranges for content carving."""
 
     DEFAULT_MAX_BYTES = 1024 * 1024 * 1024
     DEFAULT_MAX_RANGES = 8192
 
     def __init__(self, volume_start, cluster_size, cluster_count, *, max_bytes=DEFAULT_MAX_BYTES,
-                 max_ranges=DEFAULT_MAX_RANGES):
+                 max_ranges=DEFAULT_MAX_RANGES, start_range_index=0):
         self.volume_start = int(volume_start)
         self.cluster_size = int(cluster_size)
         self.cluster_count = max(0, int(cluster_count))
         self.max_bytes = max(0, int(max_bytes))
         self.max_ranges = max(0, int(max_ranges))
+        self.start_range_index = max(0, int(start_range_index))
         self.ranges = []
         self._run_start = None
         self._run_end = None
         self._retained_bytes = 0
         self.truncated = False
+        self._range_count = 0
+        self._byte_limit_reached = False
+        self._byte_limit_range_index = None
+        self._allocated_run_start = None
+        self._allocated_run_end = None
+        self._allocated_range_count = 0
+        self._allocated_cluster_count = 0
 
     def consume(self, bitmap_chunk, bitmap_byte_offset):
-        if self.truncated or self.max_bytes == 0 or self.max_ranges == 0:
-            self.truncated = True
-            return
         data = bytes(bitmap_chunk)
         first_cluster = int(bitmap_byte_offset) * 8
         for byte_index, value in enumerate(data):
@@ -213,6 +218,7 @@ class FreeClusterRangeCollector:
             # A zero bitmap byte represents eight adjacent free clusters. Handle
             # this common case in one step; inspect partial bytes bit by bit.
             if value == 0 and valid == 8:
+                self._flush_allocated_run()
                 self._consume_run(cluster, cluster + 8)
                 continue
             bit = 0
@@ -222,48 +228,86 @@ class FreeClusterRangeCollector:
                 while run_end < valid and (not bool(value & (1 << run_end))) == is_free:
                     run_end += 1
                 if is_free:
+                    self._flush_allocated_run()
                     self._consume_run(cluster + bit, cluster + run_end)
                 else:
                     self._flush_run()
+                    self._consume_allocated_run(cluster + bit, cluster + run_end)
                 bit = run_end
 
     def finish(self):
         self._flush_run()
+        self._flush_allocated_run()
+        window_end = self.start_range_index + self.max_ranges
+        has_more = self._range_count > window_end
+        covered_end = min(window_end, self._range_count)
+        if self._byte_limit_range_index is not None:
+            covered_end = min(covered_end, self._byte_limit_range_index)
+        pending_count = max(0, self._range_count - covered_end)
+        self.truncated = self._byte_limit_reached or has_more
         return {
             "ranges": tuple(self.ranges),
             "retainedBytes": self._retained_bytes,
             "rangeCapBytes": self.max_bytes,
             "truncated": self.truncated,
+            "rangeWindowStartIndex": self.start_range_index,
+            "rangeWindowEndIndex": covered_end,
+            "observedRangeCount": self._range_count,
+            "pendingRangeCount": pending_count,
+            "nextRangeIndex": (
+                window_end if has_more and not self._byte_limit_reached else None
+            ),
+            "byteLimitReached": self._byte_limit_reached,
+            "allocationEvidenceExcludedRangeCount": self._allocated_range_count,
+            "allocationEvidenceExcludedClusterCount": self._allocated_cluster_count,
         }
+
+    def _consume_allocated_run(self, start, end):
+        if self._allocated_run_end == start:
+            self._allocated_run_end = end
+        else:
+            self._flush_allocated_run()
+            self._allocated_run_start, self._allocated_run_end = start, end
+
+    def _flush_allocated_run(self):
+        if self._allocated_run_start is None or self._allocated_run_end is None:
+            return
+        cluster_count = self._allocated_run_end - self._allocated_run_start
+        if cluster_count > 0:
+            self._allocated_range_count += 1
+            self._allocated_cluster_count += cluster_count
+        self._allocated_run_start = None
+        self._allocated_run_end = None
 
     def _consume_run(self, start, end):
         if self._run_end == start:
             self._run_end = end
         else:
             self._flush_run()
-            if not self.truncated:
-                self._run_start, self._run_end = start, end
-        if self._run_start is not None:
-            pending_bytes = (self._run_end - self._run_start) * self.cluster_size
-            if self._retained_bytes + pending_bytes >= self.max_bytes:
-                allowed = max(0, self.max_bytes - self._retained_bytes)
-                allowed_clusters = allowed // self.cluster_size
-                self._run_end = self._run_start + allowed_clusters
-                self.truncated = True
-                self._flush_run()
+            self._run_start, self._run_end = start, end
 
     def _flush_run(self):
         if self._run_start is None or self._run_end is None:
             return
         cluster_count = self._run_end - self._run_start
         if cluster_count > 0:
-            byte_count = cluster_count * self.cluster_size
-            self.ranges.append((
-                self.volume_start + self._run_start * self.cluster_size,
-                self.volume_start + self._run_end * self.cluster_size,
-            ))
-            self._retained_bytes += byte_count
-            if len(self.ranges) >= self.max_ranges or self._retained_bytes >= self.max_bytes:
-                self.truncated = True
+            range_index = self._range_count
+            self._range_count += 1
+            if (self.start_range_index <= range_index
+                    < self.start_range_index + self.max_ranges
+                    and not self._byte_limit_reached):
+                available_bytes = max(0, self.max_bytes - self._retained_bytes)
+                available_clusters = available_bytes // self.cluster_size
+                retained_clusters = min(cluster_count, available_clusters)
+                if retained_clusters:
+                    self.ranges.append((
+                        self.volume_start + self._run_start * self.cluster_size,
+                        self.volume_start + (self._run_start + retained_clusters)
+                        * self.cluster_size,
+                    ))
+                    self._retained_bytes += retained_clusters * self.cluster_size
+                if retained_clusters < cluster_count:
+                    self._byte_limit_reached = True
+                    self._byte_limit_range_index = range_index
         self._run_start = None
         self._run_end = None

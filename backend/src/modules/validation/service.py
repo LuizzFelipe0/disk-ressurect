@@ -14,7 +14,7 @@ class ValidationService:
     def validate_disk(
         self, disk_number: int, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume: NTFSVolume | None = None, content_carving_range_budget_bytes=None,
-        force_fresh=False,
+        force_fresh=False, content_carving_range_start_index=0,
     ):
         validator = getattr(self.inventory, "validate_disk", None)
         if validator is None:
@@ -37,6 +37,8 @@ class ValidationService:
                 orphan_scan_volume,
                 content_carving_range_budget_bytes,
                 validation_snapshot=snapshot,
+                **({"content_carving_range_start_index": content_carving_range_start_index}
+                   if content_carving_range_start_index else {}),
             )
             if report.get("validation_snapshot_mismatch"):
                 if invalidator is not None:
@@ -48,6 +50,7 @@ class ValidationService:
                     retain_orphans_for_offset,
                     orphan_scan_volume,
                     content_carving_range_budget_bytes,
+                    content_carving_range_start_index,
                 )
         else:
             report = self._validate_fresh(
@@ -57,6 +60,7 @@ class ValidationService:
                 retain_orphans_for_offset,
                 orphan_scan_volume,
                 content_carving_range_budget_bytes,
+                content_carving_range_start_index,
             )
 
         snapshot_saver = getattr(self.repository, "save_validation_snapshot", None)
@@ -68,25 +72,32 @@ class ValidationService:
     def validate_source(
         self, source, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+        content_carving_range_start_index=0,
     ):
         validator = getattr(self.inventory, "validate_source", None)
         if validator is None:
             raise NotImplementedError("This inventory does not support source validation")
+        kwargs = ({"content_carving_range_start_index": content_carving_range_start_index}
+                  if content_carving_range_start_index else {})
         return validator(
             source, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
-            content_carving_range_budget_bytes,
+            content_carving_range_budget_bytes, **kwargs,
         )
 
     @staticmethod
     def _validate_fresh(
         validator, disk_number, progress_callback, retain_orphans_for_offset,
         orphan_scan_volume, content_carving_range_budget_bytes,
+        content_carving_range_start_index=0,
     ):
         if retain_orphans_for_offset is None:
             return validator(disk_number, progress_callback)
+        kwargs = ({"content_carving_range_start_index": content_carving_range_start_index}
+                  if content_carving_range_start_index else {})
         return validator(
             disk_number, progress_callback, retain_orphans_for_offset, orphan_scan_volume,
             content_carving_range_budget_bytes=content_carving_range_budget_bytes,
+            **kwargs,
         )
 
     @staticmethod

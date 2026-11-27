@@ -909,6 +909,154 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
             [reader.closed for reader in harness.source_factory.readers], [True, True],
         )
 
+    def test_trusted_free_range_pages_reach_later_candidates_and_keep_prior_candidates(self):
+        data, expected = make_image(((128, b"first"), (4224, b"second")), size=8192)
+        harness = RawCatalogHarness(data)
+        all_ranges = ((0, 2048), (4096, 6144))
+        bitmap_sha256 = hashlib.sha256(b"synthetic allocation bitmap v1").hexdigest()
+
+        class PagedValidation:
+            def __init__(self):
+                self.starts = []
+
+            def validate_source(self, _source, *_args, retain_orphans_for_offset,
+                                content_carving_range_start_index=0, **_kwargs):
+                self.starts.append(content_carving_range_start_index)
+                start = content_carving_range_start_index
+                selected = all_ranges[start:start + 1]
+                pending = max(0, len(all_ranges) - (start + len(selected)))
+                next_index = start + 1 if pending else None
+                page = {
+                    "rangeWindowStartIndex": start,
+                    "rangeWindowEndIndex": start + len(selected),
+                    "observedRangeCount": len(all_ranges),
+                    "pendingRangeCount": pending,
+                    "nextRangeIndex": next_index,
+                    "byteLimitReached": False,
+                    "truncated": bool(pending),
+                    "retainedBytes": sum(end - begin for begin, end in selected),
+                    "rangeCapBytes": 8192,
+                }
+                check = {
+                    "partitionOffset": retain_orphans_for_offset,
+                    "bitmapAllocation": {"bitmapSha256": bitmap_sha256},
+                    "contentCarvingRangeProgress": page,
+                }
+                return {
+                    "ntfs_checks": (check,),
+                    "orphan_records_by_partition": {retain_orphans_for_offset: {}},
+                    "content_carving_ranges_by_partition": {
+                        retain_orphans_for_offset: selected,
+                    },
+                    "content_carving_ranges_truncated_by_partition": {
+                        retain_orphans_for_offset: bool(pending),
+                    },
+                }
+
+            @staticmethod
+            def summary(_report):
+                return {"coverageStatus": "complete"}
+
+        validation = PagedValidation()
+        harness.validation = validation
+        harness.workflow.validation_service = validation
+        first = harness.build()
+        first_summary = first.snapshot.content_carving_summary
+        self.assertEqual(first_summary["stopReason"], "range_collection_truncated")
+        self.assertEqual(first_summary["rangePage"]["pendingRangeCount"], 1)
+        self.assertEqual(
+            first_summary["rangePage"]["allocationBitmapSha256"], bitmap_sha256,
+        )
+        self.assertEqual(
+            set(harness.carved_candidates(first.snapshot)), {128},
+        )
+
+        second = harness.build()
+        self.assertEqual(validation.starts, [0, 1])
+        self.assertEqual(
+            set(harness.carved_candidates(second.snapshot)), {128, 4224},
+        )
+        self.assertEqual(second.snapshot.content_carving_summary["stopReason"], "scope_complete")
+        self.assertEqual(
+            second.snapshot.content_carving_summary["rangePage"]["cumulativeBytesScanned"],
+            4096,
+        )
+        self.assertIsNone(harness.session.load_raw_range_progress(
+            harness.workflow._raw_checkpoint_owner(harness.volume),
+            harness.workflow._raw_range_scope_key(
+                harness.source_factory.source, harness.volume, harness.options,
+            ),
+        ))
+        self.assertEqual(
+            harness.carved_candidates(second.snapshot)[128][1],
+            expected[128],
+        )
+        self.assertEqual(
+            harness.carved_candidates(second.snapshot)[4224][1],
+            expected[4224],
+        )
+
+    def test_changed_allocation_bitmap_resets_range_page_before_carving(self):
+        data, _expected = make_image(((4224, b"second"),), size=8192)
+        harness = RawCatalogHarness(data)
+        owner = harness.workflow._raw_checkpoint_owner(harness.volume)
+        scope = harness.workflow._raw_range_scope_key(
+            harness.source_factory.source, harness.volume, harness.options,
+        )
+        old_bitmap = hashlib.sha256(b"old allocation bitmap").hexdigest()
+        new_bitmap = hashlib.sha256(b"new allocation bitmap").hexdigest()
+        harness.session._raw_range_progress[owner] = (
+            scope,
+            {"bitmapSha256": old_bitmap, "nextRangeIndex": 1, "totalScanBytes": 2048},
+            1,
+        )
+
+        class ChangedBitmapValidation:
+            def __init__(self):
+                self.starts = []
+
+            def validate_source(self, _source, *_args, retain_orphans_for_offset,
+                                content_carving_range_start_index=0, **_kwargs):
+                self.starts.append(content_carving_range_start_index)
+                selected = ((0, 2048),) if content_carving_range_start_index == 0 else ((4096, 6144),)
+                page = {
+                    "rangeWindowStartIndex": content_carving_range_start_index,
+                    "rangeWindowEndIndex": content_carving_range_start_index + 1,
+                    "observedRangeCount": 2,
+                    "pendingRangeCount": 1 if content_carving_range_start_index == 0 else 0,
+                    "nextRangeIndex": 1 if content_carving_range_start_index == 0 else None,
+                    "byteLimitReached": False,
+                    "truncated": content_carving_range_start_index == 0,
+                    "retainedBytes": 2048,
+                    "rangeCapBytes": 8192,
+                }
+                return {
+                    "ntfs_checks": ({
+                        "partitionOffset": retain_orphans_for_offset,
+                        "bitmapAllocation": {"bitmapSha256": new_bitmap},
+                        "contentCarvingRangeProgress": page,
+                    },),
+                    "orphan_records_by_partition": {retain_orphans_for_offset: {}},
+                    "content_carving_ranges_by_partition": {retain_orphans_for_offset: selected},
+                    "content_carving_ranges_truncated_by_partition": {
+                        retain_orphans_for_offset: content_carving_range_start_index == 0,
+                    },
+                }
+
+            @staticmethod
+            def summary(_report):
+                return {"coverageStatus": "complete"}
+
+        validation = ChangedBitmapValidation()
+        harness.validation = validation
+        harness.workflow.validation_service = validation
+        result = harness.build()
+        self.assertEqual(validation.starts, [1, 0])
+        self.assertEqual(set(harness.carved_candidates(result.snapshot)), set())
+        stored = harness.session.load_raw_range_progress(owner, scope)
+        self.assertEqual(stored["bitmapSha256"], new_bitmap)
+        self.assertEqual(stored["nextRangeIndex"], 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

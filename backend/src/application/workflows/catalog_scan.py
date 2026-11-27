@@ -19,7 +19,7 @@ class CatalogScanWorkflow:
 
     CHECKPOINT_INTERVAL_BYTES = 256 * 1024 * 1024
 
-    RAW_CHECKPOINT_IDENTITY_VERSION = 2
+    RAW_CHECKPOINT_IDENTITY_VERSION = 3
 
     def __init__(self, disk_service, deep_scan_service, validation_service, catalog_builder,
                  session=None):
@@ -53,6 +53,12 @@ class CatalogScanWorkflow:
         latest_carving_checkpoint = None
         carving_checkpoint_callback = None
         png_recovery_progress = None
+        range_scope_key = None
+        range_progress = None
+        range_progress_invalidated = False
+        range_start_index = 0
+        bitmap_sha256 = None
+        carving_range_progress = {}
 
         if include_orphaned:
             try:
@@ -63,6 +69,18 @@ class CatalogScanWorkflow:
                 if validate_source:
                     source = self.catalog_builder.source_factory.get_source(volume.source_id)
                     carving_source = source
+                    if self.session is not None:
+                        range_scope_key = self._raw_range_scope_key(
+                            source, volume, carving_options,
+                        )
+                        range_progress = self.session.load_raw_range_progress(
+                            self._raw_checkpoint_owner(volume), range_scope_key,
+                        )
+                        if range_progress is not None:
+                            range_start_index = int(range_progress.get("nextRangeIndex", 0))
+                    range_kwargs = ({
+                        "content_carving_range_start_index": range_start_index,
+                    } if range_start_index else {})
                     report = self.validation_service.validate_source(
                         source,
                         validation_progress_callback,
@@ -71,8 +89,12 @@ class CatalogScanWorkflow:
                         content_carving_range_budget_bytes=(
                             int(carving_options.scan_budget_gib) * 1024**3
                         ),
+                        **range_kwargs,
                     )
                 else:
+                    range_kwargs = ({
+                        "content_carving_range_start_index": range_start_index,
+                    } if range_start_index else {})
                     report = self.validation_service.validate_disk(
                         volume.disk_number,
                         validation_progress_callback,
@@ -82,7 +104,46 @@ class CatalogScanWorkflow:
                             int(carving_options.scan_budget_gib) * 1024**3
                         ),
                         **validation_options,
+                        **range_kwargs,
                     )
+                check = next((
+                    item for item in report.get("ntfs_checks", ())
+                    if int(item.get("partitionOffset", -1)) == int(volume.partition_offset)
+                ), {})
+                bitmap_sha256 = (check.get("bitmapAllocation") or {}).get("bitmapSha256")
+                carving_range_progress = dict(
+                    check.get("contentCarvingRangeProgress") or {},
+                )
+                if bitmap_sha256:
+                    carving_range_progress["bitmapSha256"] = bitmap_sha256
+                expected_bitmap_sha256 = (range_progress or {}).get("bitmapSha256")
+                if (range_start_index and expected_bitmap_sha256
+                        and bitmap_sha256 != expected_bitmap_sha256):
+                    # The allocation map changed. Discard the stale cursor and
+                    # recollect the first window before any carving is performed.
+                    range_start_index = 0
+                    range_progress = None
+                    range_progress_invalidated = True
+                    report = self.validation_service.validate_source(
+                        source,
+                        validation_progress_callback,
+                        retain_orphans_for_offset=int(volume.partition_offset),
+                        orphan_scan_volume=volume,
+                        content_carving_range_budget_bytes=(
+                            int(carving_options.scan_budget_gib) * 1024**3
+                        ),
+                        **validation_options,
+                    )
+                    check = next((
+                        item for item in report.get("ntfs_checks", ())
+                        if int(item.get("partitionOffset", -1)) == int(volume.partition_offset)
+                    ), {})
+                    bitmap_sha256 = (check.get("bitmapAllocation") or {}).get("bitmapSha256")
+                    carving_range_progress = dict(
+                        check.get("contentCarvingRangeProgress") or {},
+                    )
+                    if bitmap_sha256:
+                        carving_range_progress["bitmapSha256"] = bitmap_sha256
                 validation_summary = self.validation_service.summary(report)
                 partition_offset = int(volume.partition_offset)
                 precomputed_orphans = report.get("orphan_records_by_partition", {}).get(
@@ -108,6 +169,10 @@ class CatalogScanWorkflow:
             include_orphaned and precomputed_carving_ranges is not None
             and source_id and self.session is not None
         )
+        if raw_checkpointing and carving_source is not None:
+            range_scope_key = range_scope_key or self._raw_range_scope_key(
+                carving_source, volume, carving_options,
+            )
         checkpoint_scope = (
             self.session.raw_carving_operation() if raw_checkpointing else nullcontext()
         )
@@ -119,11 +184,93 @@ class CatalogScanWorkflow:
             raw_session_candidate_limit = None
             raw_session_retained_byte_limit = None
             if raw_checkpointing:
+                latest_range_progress = (
+                    range_progress if range_progress_invalidated else
+                    self.session.load_raw_range_progress(
+                        self._raw_checkpoint_owner(volume), range_scope_key,
+                    )
+                )
+                if latest_range_progress != range_progress:
+                    # Validation ran before the session scan lock. A concurrent
+                    # scan may have advanced the page while this operation waited.
+                    range_progress = latest_range_progress
+                    range_start_index = int(
+                        (range_progress or {}).get("nextRangeIndex", 0),
+                    )
+                    report = self.validation_service.validate_source(
+                        carving_source,
+                        validation_progress_callback,
+                        retain_orphans_for_offset=int(volume.partition_offset),
+                        orphan_scan_volume=volume,
+                        content_carving_range_budget_bytes=(
+                            int(carving_options.scan_budget_gib) * 1024**3
+                        ),
+                        content_carving_range_start_index=range_start_index,
+                    )
+                    check = next((
+                        item for item in report.get("ntfs_checks", ())
+                        if int(item.get("partitionOffset", -1))
+                        == int(volume.partition_offset)
+                    ), {})
+                    bitmap_sha256 = (
+                        (check.get("bitmapAllocation") or {}).get("bitmapSha256")
+                    )
+                    carving_range_progress = dict(
+                        check.get("contentCarvingRangeProgress") or {},
+                    )
+                    if bitmap_sha256:
+                        carving_range_progress["bitmapSha256"] = bitmap_sha256
+                    if (range_start_index and range_progress
+                            and bitmap_sha256 != range_progress.get("bitmapSha256")):
+                        range_progress = None
+                        range_start_index = 0
+                        range_progress_invalidated = True
+                        report = self.validation_service.validate_source(
+                            carving_source,
+                            validation_progress_callback,
+                            retain_orphans_for_offset=int(volume.partition_offset),
+                            orphan_scan_volume=volume,
+                            content_carving_range_budget_bytes=(
+                                int(carving_options.scan_budget_gib) * 1024**3
+                            ),
+                            content_carving_range_start_index=0,
+                        )
+                        check = next((
+                            item for item in report.get("ntfs_checks", ())
+                            if int(item.get("partitionOffset", -1))
+                            == int(volume.partition_offset)
+                        ), {})
+                        bitmap_sha256 = (
+                            (check.get("bitmapAllocation") or {}).get("bitmapSha256")
+                        )
+                        carving_range_progress = dict(
+                            check.get("contentCarvingRangeProgress") or {},
+                        )
+                        if bitmap_sha256:
+                            carving_range_progress["bitmapSha256"] = bitmap_sha256
+                    validation_summary = self.validation_service.summary(report)
+                    partition_offset = int(volume.partition_offset)
+                    precomputed_orphans = report.get(
+                        "orphan_records_by_partition", {},
+                    ).get(partition_offset)
+                    precomputed_carving_ranges = report.get(
+                        "content_carving_ranges_by_partition", {},
+                    ).get(partition_offset)
+                    carving_ranges_truncated = report.get(
+                        "content_carving_ranges_truncated_by_partition", {},
+                    ).get(partition_offset, False)
+                    precomputed_uncertain_carving_ranges = report.get(
+                        "uncertain_content_carving_ranges_by_partition", {},
+                    ).get(partition_offset)
+                    uncertain_carving_ranges_truncated = report.get(
+                        "uncertain_content_carving_ranges_truncated_by_partition", {},
+                    ).get(partition_offset)
                 carving_profile = self.catalog_builder.carving_checkpoint_profile()
                 checkpoint_owner = self._raw_checkpoint_owner(volume)
                 checkpoint_identity = self._raw_checkpoint_identity(
                     carving_source, volume, precomputed_carving_ranges,
                     carving_ranges_truncated, carving_options, carving_profile,
+                    bitmap_sha256=bitmap_sha256,
                 )
                 raw_catalog_snapshot = self.session.get_raw_catalog(
                     checkpoint_owner, checkpoint_identity,
@@ -277,6 +424,10 @@ class CatalogScanWorkflow:
                         "png_recovery_progress": png_recovery_progress,
                         "previous_raw_catalog_snapshot": raw_catalog_snapshot,
                         "png_scope_identity": checkpoint_identity,
+                        "raw_range_progress": range_progress,
+                        "range_page_progress": carving_range_progress,
+                        "range_scope_key": range_scope_key,
+                        "range_start_index": range_start_index,
                         })
                     snapshot = self.catalog_builder.build(
                         volume,
@@ -307,6 +458,13 @@ class CatalogScanWorkflow:
                         snapshot,
                         latest_carving_checkpoint,
                         self.catalog_builder.content_reference_store,
+                        range_progress=self._next_raw_range_progress(
+                            range_scope_key,
+                            range_progress,
+                            carving_range_progress,
+                            snapshot.content_carving_summary or {},
+                            bitmap_sha256,
+                        ),
                     )
                 except Exception:
                     self.catalog_builder.content_reference_store.abort_catalog()
@@ -319,7 +477,7 @@ class CatalogScanWorkflow:
             return CatalogScanOutcome(snapshot, validation_summary)
 
     def _raw_checkpoint_identity(self, source, volume, ranges, ranges_truncated,
-                                 carving_options, carving_profile):
+                                 carving_options, carving_profile, *, bitmap_sha256=None):
         candidate_read_mib = int(getattr(
             carving_options, "max_candidate_read_mib_per_format", 256,
         ))
@@ -338,8 +496,9 @@ class CatalogScanWorkflow:
                 "mftOffset": int(volume.mft_offset),
                 "mftSize": int(volume.mft_size),
             },
-            "eligibleRanges": sorted((int(start), int(end)) for start, end in ranges),
-            "rangesTruncated": bool(ranges_truncated),
+            "allocationEvidenceIdentity": self._raw_range_identity(
+                bitmap_sha256, ranges, ranges_truncated,
+            ),
             "carverProfile": carving_profile,
             "candidateOptions": {
                 "maxFiles": int(getattr(carving_options, "max_files", 16384)),
@@ -361,6 +520,83 @@ class CatalogScanWorkflow:
         }
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _raw_range_identity(bitmap_sha256, ranges, ranges_truncated):
+        if bitmap_sha256:
+            return {"bitmapSha256": str(bitmap_sha256)}
+        return {
+            "eligibleRanges": sorted((int(start), int(end)) for start, end in ranges),
+            "rangesTruncated": bool(ranges_truncated),
+        }
+
+    @staticmethod
+    def _raw_range_scope_key(source, volume, carving_options):
+        """Stable session owner for paging one source/volume/options scope."""
+        payload = {
+            "version": 1,
+            "sourceId": source.source_id,
+            "sourceSize": int(getattr(source, "size_bytes", getattr(source, "size", 0))),
+            "sourceBytesPerSector": int(getattr(source, "bytes_per_sector", 512)),
+            "partitionNumber": int(volume.partition_number),
+            "partitionOffset": int(volume.partition_offset),
+            "partitionSize": int(volume.partition_size),
+            "bytesPerSector": int(volume.bytes_per_sector),
+            "clusterSize": int(volume.cluster_size),
+            "recordSize": int(volume.record_size),
+            "scanBudgetGiB": int(getattr(carving_options, "scan_budget_gib", 1)),
+            "maxFiles": int(getattr(carving_options, "max_files", 16384)),
+            "maxRetainedMiB": int(getattr(carving_options, "max_retained_mib", 128)),
+            "maxCandidateReadMiBPerFormat": int(getattr(
+                carving_options, "max_candidate_read_mib_per_format", 256,
+            )),
+            "pngReconstruction": bool(getattr(
+                carving_options, "enable_png_fragment_reconstruction", False,
+            )),
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _next_raw_range_progress(scope_key, previous, page, summary, bitmap_sha256):
+        if not scope_key or not bitmap_sha256 or not page:
+            return None
+        previous = previous or {}
+        scanned_before = int(previous.get("totalScanBytes", 0))
+        scanned_now = max(0, int(summary.get("bytesScanned", 0)))
+        stop_reason = str(summary.get("stopReason", ""))
+        page_complete = (
+            scanned_now >= int(summary.get("rangeBytesRetained", 0))
+            and not summary.get("scanLimitReached", False)
+            and not summary.get("candidateLimitReached", False)
+            and not summary.get("fileCountLimitReached", False)
+            and not summary.get("retainedBytesLimitReached", False)
+            and stop_reason not in {
+                "session_limit", "resource_limit", "budget_exhausted",
+                "advanced_recovery_pending",
+            }
+        )
+        next_index = page.get("nextRangeIndex")
+        pending_ranges = int(page.get("pendingRangeCount", 0))
+        if (page_complete and pending_ranges > 0 and next_index is not None
+                and not page.get("byteLimitReached", False)):
+            cursor = int(next_index)
+        elif (page_complete and pending_ranges == 0
+              and not page.get("truncated", False)
+              and not page.get("byteLimitReached", False)):
+            return None
+        else:
+            cursor = int(previous.get(
+                "nextRangeIndex", page.get("rangeWindowStartIndex", 0),
+            ))
+        return {
+            "scopeKey": scope_key,
+            "bitmapSha256": str(bitmap_sha256),
+            "nextRangeIndex": cursor,
+            "totalScanBytes": scanned_before + scanned_now,
+            "pendingRangeCount": pending_ranges,
+            "stopReason": stop_reason or "incomplete_page",
+        }
 
     @staticmethod
     def _raw_checkpoint_owner(volume):

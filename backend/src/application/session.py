@@ -19,6 +19,8 @@ class RecoverySession:
         self._raw_carving_checkpoints = {}
         self._raw_carving_checkpoint_bytes = 0
         self._raw_catalogs = {}
+        self._raw_range_progress = {}
+        self._raw_range_progress_lock = threading.RLock()
         self._raw_generation = 0
         self._raw_carving_lock = threading.RLock()
 
@@ -50,6 +52,14 @@ class RecoverySession:
                 return None
             return entry[1]
 
+    def load_raw_range_progress(self, owner_key, scope_key):
+        """Return trusted-range continuation only for the matching source scope."""
+        with self._raw_range_progress_lock:
+            entry = self._raw_range_progress.get(owner_key)
+            if entry is None or entry[0] != scope_key:
+                return None
+            return dict(entry[1])
+
     def raw_catalog_generation(self, owner_key, identity_key):
         with self._raw_carving_lock:
             entry = self._raw_catalogs.get(owner_key)
@@ -73,6 +83,7 @@ class RecoverySession:
 
     def commit_raw_catalog_generation(
         self, owner_key, identity_key, snapshot, checkpoint, content_reference_store,
+        range_progress=None,
     ):
         """Atomically publish the candidate catalog, cursor and content references."""
         candidate_count, retained_bytes = self.raw_catalog_candidate_metrics(snapshot)
@@ -129,6 +140,17 @@ class RecoverySession:
                     identity_key, snapshot, generation, candidate_count, retained_bytes,
                 ),
             }
+            range_progress_entries = {
+                key: entry for key, entry in self._raw_range_progress.items()
+                if key != owner_key
+            }
+            if range_progress is not None:
+                range_progress_entries[owner_key] = (
+                    str(range_progress["scopeKey"]),
+                    {key: value for key, value in range_progress.items()
+                     if key != "scopeKey"},
+                    generation,
+                )
             checkpoint_bytes = sum(entry[2] for entry in checkpoints.values())
             # Commit the staged resolver before publishing the matching session
             # generation. All allocations and capacity checks have already passed.
@@ -136,6 +158,8 @@ class RecoverySession:
             self._raw_carving_checkpoints = checkpoints
             self._raw_carving_checkpoint_bytes = checkpoint_bytes
             self._raw_catalogs = catalogs
+            with self._raw_range_progress_lock:
+                self._raw_range_progress = range_progress_entries
             self._raw_generation = generation
 
     def update_raw_catalog_snapshot(self, owner_key, identity_key, expected_snapshot,
@@ -200,6 +224,8 @@ class RecoverySession:
             self._raw_carving_checkpoints.clear()
             self._raw_carving_checkpoint_bytes = 0
             self._raw_catalogs.clear()
+            with self._raw_range_progress_lock:
+                self._raw_range_progress = {}
 
     @classmethod
     def _estimate_raw_checkpoint_bytes(cls, owner_key, identity_key, checkpoint):

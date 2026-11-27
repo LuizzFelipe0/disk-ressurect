@@ -153,6 +153,10 @@ class CatalogBuilder:
               png_recovery_progress=None,
               previous_raw_catalog_snapshot=None,
               png_scope_identity=None,
+              raw_range_progress=None,
+              range_page_progress=None,
+              range_scope_key=None,
+              range_start_index=0,
               defer_content_reference_commit=False):
         source = None
         if getattr(volume, "source_id", None) and self.source_factory is not None:
@@ -270,6 +274,10 @@ class CatalogBuilder:
                             png_recovery_progress,
                             previous_raw_catalog_snapshot,
                             png_scope_identity,
+                            raw_range_progress,
+                            range_page_progress,
+                            range_scope_key,
+                            range_start_index,
                         )
                     )
                 nodes = builder.nodes
@@ -499,6 +507,8 @@ class CatalogBuilder:
         source_id="", volume_id="", png_recovery_progress=None,
         previous_raw_catalog_snapshot=None,
         png_scope_identity=None,
+        raw_range_progress=None, range_page_progress=None,
+        range_scope_key=None, range_start_index=0,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -508,7 +518,11 @@ class CatalogBuilder:
                 * 1024**2
             )
             carver_options = {
-                "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
+                "max_scan_bytes": max(
+                    0,
+                    int(options.scan_budget_gib) * 1024**3
+                    - int((raw_range_progress or {}).get("totalScanBytes", 0)),
+                ),
                 "max_files": min(
                     int(options.max_files), int(raw_session_candidate_limit),
                 ) if raw_session_candidate_limit is not None else int(options.max_files),
@@ -535,7 +549,7 @@ class CatalogBuilder:
                 self._revalidate_png_fragment_candidates(
                     disk,
                     previous_raw_catalog_snapshot,
-                    ranges,
+                    ((int(volume_start), int(volume_end)),),
                     volume_start=volume_start,
                     volume_end=volume_end,
                 )
@@ -555,11 +569,8 @@ class CatalogBuilder:
             retained_candidates=raw_candidate_references,
             retained_candidate_data=raw_candidate_data,
             candidate_restore_ranges=(
-                tuple(ranges) + tuple(
-                    interval
-                    for intervals in (uncertain_ranges or {}).values()
-                    for interval in intervals
-                ) if raw_candidate_references is not None else None
+                ((int(volume_start), int(volume_end)),)
+                if raw_candidate_references is not None else None
             ),
             require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
@@ -841,6 +852,58 @@ class CatalogBuilder:
             "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
             "rangeCount": len(ranges),
             "rangeCollectionTruncated": bool(ranges_truncated),
+            "rangePage": {
+                "startIndex": int((range_page_progress or {}).get(
+                    "rangeWindowStartIndex", range_start_index,
+                )),
+                "endIndex": int((range_page_progress or {}).get(
+                    "rangeWindowEndIndex", range_start_index + len(ranges),
+                )),
+                "observedRangeCount": int((range_page_progress or {}).get(
+                    "observedRangeCount", len(ranges),
+                )),
+                "retainedRangeCount": len(ranges),
+                "eligibleBytes": sum(end - start for start, end in ranges),
+                "previouslyExaminedRangeCount": int(range_start_index),
+                "pendingRangeCount": int((range_page_progress or {}).get(
+                    "pendingRangeCount", 0,
+                )),
+                "omittedRangeCount": int((range_page_progress or {}).get(
+                    "pendingRangeCount", 0,
+                )),
+                "unreadableRangeCount": None,
+                "allocationEvidenceExcludedRangeCount": (
+                    int(range_page_progress["allocationEvidenceExcludedRangeCount"])
+                    if "allocationEvidenceExcludedRangeCount" in (range_page_progress or {})
+                    else None
+                ),
+                "allocationEvidenceExcludedClusterCount": (
+                    int(range_page_progress["allocationEvidenceExcludedClusterCount"])
+                    if "allocationEvidenceExcludedClusterCount" in (range_page_progress or {})
+                    else None
+                ),
+                "collectionScopeComplete": not bool(ranges_truncated),
+                "scanScopeComplete": (
+                    carving.bytes_scanned >= sum(end - start for start, end in ranges)
+                    and not carving.scan_limit_reached
+                    and not carving.candidate_limit_reached
+                    and not carving.file_count_limit_reached
+                    and not carving.retained_bytes_limit_reached
+                ),
+                "byteLimitReached": bool((range_page_progress or {}).get(
+                    "byteLimitReached", False,
+                )),
+                "truncated": bool(ranges_truncated),
+                "scopeKey": range_scope_key,
+                "allocationBitmapSha256": (
+                    (range_page_progress or {}).get("bitmapSha256")
+                    or (raw_range_progress or {}).get("bitmapSha256")
+                ),
+                "cumulativeBytesScanned": (
+                    int((raw_range_progress or {}).get("totalScanBytes", 0))
+                    + int(carving.bytes_scanned)
+                ),
+            },
             "confidence": "trusted_free_space",
             "stopReason": self._carving_stop_reason(
                 carving, ranges_truncated,
@@ -1113,6 +1176,11 @@ class CatalogBuilder:
             summary[key]["rangeCollectionCapBytes"] = (
                 ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
             )
+            scope_complete = summary[key]["stopReason"] == "scope_complete"
+            summary[key]["pendingRangeCount"] = 0 if scope_complete else None
+            summary[key]["omittedRangeCount"] = 0 if scope_complete else None
+            summary[key]["scopeComplete"] = scope_complete
+            summary[key]["continuationSupported"] = False
             if candidate_catalog.session_limit_reached:
                 summary[key]["stopReason"] = "session_limit"
                 summary[key]["sessionLimitReached"] = True
