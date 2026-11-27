@@ -173,7 +173,6 @@ class RecoveryCommandHandler:
                 extensions=request.extensions,
                 min_file_size_kb=request.minimum_size_kb,
                 progress_callback=self._progress(emit),
-                selected_partial_png_ids=request.selected_partial_png_ids,
             )
             details = tuple({
                 "name": str(getattr(item.node, "name", ""))[:260],
@@ -189,12 +188,11 @@ class RecoveryCommandHandler:
                 recovered_count=summary.recovered_count,
                 candidate_count=len(summary.results),
                 selected_count=(
-                    len(request.selected_node_ids) + len(request.selected_partial_png_ids)
+                    len(request.selected_node_ids)
                 ),
                 results=details,
                 results_truncated=len(summary.results) > len(details),
                 status_counts=status_counts,
-                partial_exported_count=getattr(summary, "partial_exported_count", 0),
             ).to_dict()
         raise ValueError(f"Unknown operation: {operation}")
 

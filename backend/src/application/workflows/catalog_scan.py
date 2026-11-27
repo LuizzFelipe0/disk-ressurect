@@ -53,7 +53,6 @@ class CatalogScanWorkflow:
         latest_carving_checkpoint = None
         carving_checkpoint_callback = None
         png_recovery_progress = None
-        previous_partial_png_recoveries = ()
 
         if include_orphaned:
             try:
@@ -135,12 +134,11 @@ class CatalogScanWorkflow:
                     )
                     if stop_reason in {"scope_complete", "session_limit", "resource_limit"}:
                         png_strategies_enabled = bool(
-                            getattr(carving_options, "enable_png_partial_recovery", False)
-                            or getattr(carving_options, "enable_png_fragment_reconstruction", False)
+                            getattr(carving_options, "enable_png_fragment_reconstruction", False)
                         )
                         if (png_strategies_enabled
                                 and raw_catalog_snapshot.png_recovery_progress is not None):
-                            still_current, partial_validation_bytes, fragment_validation_bytes = (
+                            still_current, fragment_validation_bytes = (
                                 self.catalog_builder.raw_png_recovery_results_are_current(
                                     carving_source,
                                     raw_catalog_snapshot,
@@ -151,14 +149,10 @@ class CatalogScanWorkflow:
                                 )
                             )
                             if still_current:
-                                if partial_validation_bytes or fragment_validation_bytes:
+                                if fragment_validation_bytes:
                                     previous_progress = raw_catalog_snapshot.png_recovery_progress
                                     updated_progress = replace(
                                         previous_progress,
-                                        partial_bytes_read=(
-                                            previous_progress.partial_bytes_read
-                                            + partial_validation_bytes
-                                        ),
                                         reconstruction_bytes_read=(
                                             previous_progress.reconstruction_bytes_read
                                             + fragment_validation_bytes
@@ -167,14 +161,6 @@ class CatalogScanWorkflow:
                                     updated_summary = dict(
                                         raw_catalog_snapshot.content_carving_summary or {},
                                     )
-                                    if partial_validation_bytes:
-                                        partial_summary = dict(
-                                            updated_summary.get("pngPartialRecovery") or {},
-                                        )
-                                        partial_summary["bytesRead"] = (
-                                            updated_progress.partial_bytes_read
-                                        )
-                                        updated_summary["pngPartialRecovery"] = partial_summary
                                     if fragment_validation_bytes:
                                         fragment_summary = dict(
                                             updated_summary.get("pngFragmentReconstruction") or {},
@@ -203,9 +189,6 @@ class CatalogScanWorkflow:
                             return CatalogScanOutcome(raw_catalog_snapshot, validation_summary)
                     if raw_catalog_snapshot is not None:
                         png_recovery_progress = raw_catalog_snapshot.png_recovery_progress
-                        previous_partial_png_recoveries = (
-                            raw_catalog_snapshot.partial_png_recoveries
-                        )
                         raw_candidate_references, raw_candidate_data, raw_candidate_locations = (
                             self.catalog_builder.raw_candidate_state(raw_catalog_snapshot)
                         )
@@ -292,7 +275,6 @@ class CatalogScanWorkflow:
                             "raw_candidate_locations": raw_candidate_locations,
                             "defer_content_reference_commit": True,
                         "png_recovery_progress": png_recovery_progress,
-                        "previous_partial_png_recoveries": previous_partial_png_recoveries,
                         "previous_raw_catalog_snapshot": raw_catalog_snapshot,
                         "png_scope_identity": checkpoint_identity,
                         })
@@ -368,9 +350,6 @@ class CatalogScanWorkflow:
                 "maxCandidateReadBytes": candidate_read_mib * 3 * 1024**2,
                 "enablePngFragmentReconstruction": bool(getattr(
                     carving_options, "enable_png_fragment_reconstruction", False,
-                )),
-                "enablePngPartialRecovery": bool(getattr(
-                    carving_options, "enable_png_partial_recovery", False,
                 )),
                 "sessionMaxCandidates": int(getattr(
                     self.session, "MAX_RAW_SESSION_CANDIDATES", 16384,

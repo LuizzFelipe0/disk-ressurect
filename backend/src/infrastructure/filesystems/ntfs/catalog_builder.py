@@ -151,7 +151,6 @@ class CatalogBuilder:
               raw_candidate_data=None,
               raw_candidate_locations=None,
               png_recovery_progress=None,
-              previous_partial_png_recoveries=(),
               previous_raw_catalog_snapshot=None,
               png_scope_identity=None,
               defer_content_reference_commit=False):
@@ -191,7 +190,6 @@ class CatalogBuilder:
             recycle_bin_summary = None
             usn_journal_summary = None
             ntfs_log_file_summary = None
-            partial_png_recoveries = ()
             updated_png_recovery_progress = None
             if include_orphaned:
                 from infrastructure.recovery.extractor import Extractor
@@ -247,7 +245,7 @@ class CatalogBuilder:
                 ))
                 if precomputed_carving_ranges is not None:
                     (content_carving_summary, low_confidence_carving_summary,
-                     partial_png_recoveries, updated_png_recovery_progress) = (
+                     updated_png_recovery_progress) = (
                         self._scan_content_carving(
                             disk,
                             builder,
@@ -270,7 +268,6 @@ class CatalogBuilder:
                              source_id,
                              volume_id,
                             png_recovery_progress,
-                            previous_partial_png_recoveries,
                             previous_raw_catalog_snapshot,
                             png_scope_identity,
                         )
@@ -292,7 +289,6 @@ class CatalogBuilder:
                 recycle_bin_summary=recycle_bin_summary,
                 usn_journal_summary=usn_journal_summary,
                 ntfs_log_file_summary=ntfs_log_file_summary,
-                partial_png_recoveries=partial_png_recoveries,
                 png_recovery_progress=updated_png_recovery_progress,
             )
             builder.release_source_tree()
@@ -501,7 +497,7 @@ class CatalogBuilder:
         raw_session_retained_byte_limit=None, raw_candidate_data=None,
         raw_candidate_locations=None, volume_start=0, volume_end=None, cluster_size=4096,
         source_id="", volume_id="", png_recovery_progress=None,
-        previous_partial_png_recoveries=(), previous_raw_catalog_snapshot=None,
+        previous_raw_catalog_snapshot=None,
         png_scope_identity=None,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
@@ -530,9 +526,7 @@ class CatalogBuilder:
         reconstruction_enabled = bool(getattr(
             options, "enable_png_fragment_reconstruction", False,
         ))
-        partial_png_enabled = bool(getattr(options, "enable_png_partial_recovery", False))
         session_scoped_continuation = bool(png_scope_identity)
-        previous_partial_png_recoveries = tuple(previous_partial_png_recoveries or ())
         retained_png_fragment_candidates = ()
         reconstruction_revalidation_bytes = 0
         reconstruction_source_changed = False
@@ -546,38 +540,6 @@ class CatalogBuilder:
                     volume_end=volume_end,
                 )
             )
-        if partial_png_enabled:
-            from infrastructure.carving.png_partial_recovery import PngPartialRecoveryScanner
-
-        partial_revalidation_bytes = 0
-        partial_source_changed = False
-        if partial_png_enabled and previous_partial_png_recoveries:
-            prior_partial_bytes = (
-                png_recovery_progress.partial_bytes_read
-                if png_recovery_progress is not None else 0
-            )
-            retained_partial_png_recoveries, partial_revalidation_bytes, partial_source_changed = (
-                self._revalidate_partial_png_recoveries(
-                    disk,
-                    previous_partial_png_recoveries,
-                    ranges,
-                    source_id=source_id,
-                    volume_id=volume_id,
-                    volume_start=volume_start,
-                    volume_end=volume_end,
-                    remaining_bytes=max(
-                        0,
-                        PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES - prior_partial_bytes,
-                    ),
-                )
-            )
-            if partial_source_changed:
-                # A same-ID source may still have changed bytes. Restart scan
-                # progress so earlier signatures are reconsidered in this session.
-                checkpoint = None
-                png_recovery_progress = None
-        else:
-            retained_partial_png_recoveries = previous_partial_png_recoveries
         if reconstruction_source_changed:
             checkpoint = None
             png_recovery_progress = None
@@ -602,7 +564,7 @@ class CatalogBuilder:
             require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
             ranges_truncated=bool(ranges_truncated),
-            collect_png_signatures=reconstruction_enabled or partial_png_enabled,
+            collect_png_signatures=reconstruction_enabled,
             defer_png_signature_scan=bool(
                 png_recovery_progress is not None
                 and png_recovery_progress.window_signature_count
@@ -632,7 +594,6 @@ class CatalogBuilder:
                 "volume": volume_id,
                 "ranges": ranges,
                 "reconstruction": reconstruction_enabled,
-                "partial": partial_png_enabled,
             }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
         if (png_recovery_progress is None
                 or png_recovery_progress.scope_identity != png_scope_identity):
@@ -655,32 +616,22 @@ class CatalogBuilder:
                     png_recovery_progress.completed_windows
                     + (1 if previous_window_count else 0)
                 ),
-                partial_next_index=0,
                 reconstruction_next_index=0,
-                partial_outcomes=(),
                 reconstruction_outcomes=(),
-                partial_stop_reason="pending",
                 reconstruction_stop_reason="pending",
             )
-        if partial_revalidation_bytes or reconstruction_revalidation_bytes:
+        if reconstruction_revalidation_bytes:
             png_recovery_progress = replace(
                 png_recovery_progress,
-                partial_bytes_read=(
-                    png_recovery_progress.partial_bytes_read + partial_revalidation_bytes
-                ),
                 reconstruction_bytes_read=(
                     png_recovery_progress.reconstruction_bytes_read
                     + reconstruction_revalidation_bytes
-                ),
-                partial_retained_bytes=sum(
-                    sum(len(row) for row in item.rows)
-                    for item in retained_partial_png_recoveries
                 ),
                 reconstruction_retained_bytes=sum(
                     len(item.data) for item in retained_png_fragment_candidates
                 ),
             )
-        if not (reconstruction_enabled or partial_png_enabled):
+        if not reconstruction_enabled:
             png_recovery_progress = None
         updated_png_recovery_progress = png_recovery_progress
         if updated_png_recovery_progress is not None:
@@ -906,164 +857,6 @@ class CatalogBuilder:
             trusted_summary["pngFragmentReconstruction"] = reconstruction_summary
             if carving.png_signature_set_truncated:
                 trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = True
-        partial_png_recoveries = tuple(retained_partial_png_recoveries)
-        partial_png_summary = None
-        if partial_png_enabled:
-            from infrastructure.carving.png_partial_recovery import PngPartialRecoveryScanner
-
-            partial_index = png_recovery_progress.partial_next_index
-            partial_batch = signature_offsets[
-                partial_index:partial_index + PngPartialRecoveryScanner.MAX_SIGNATURES
-            ]
-            partial_remaining_reads = max(
-                0,
-                PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES
-                - png_recovery_progress.partial_bytes_read,
-            )
-            partial_remaining_retained = max(
-                0,
-                PngPartialRecoveryScanner.MAX_TOTAL_RETAINED_BYTES
-                - png_recovery_progress.partial_retained_bytes,
-            )
-            partial_remaining_time = max(
-                0.0,
-                PngPartialRecoveryScanner.TIME_LIMIT_SECONDS
-                - png_recovery_progress.partial_elapsed_seconds,
-            )
-            partial_scan = PngPartialRecoveryScanner(
-                disk,
-                source_id=source_id,
-                volume_id=volume_id,
-                volume_start=volume_start,
-                volume_end=volume_end,
-            ).scan(
-                partial_batch,
-                ranges,
-                complete_png_offsets=(
-                    item.offset for item in carving.files if item.extension == ".png"
-                ),
-                retained_partial_offsets=(
-                    item.signature_offset for item in partial_png_recoveries
-                ),
-                max_signatures=PngPartialRecoveryScanner.MAX_SIGNATURES,
-                max_total_read_bytes=partial_remaining_reads,
-                max_total_retained_bytes=partial_remaining_retained,
-                time_limit_seconds=partial_remaining_time,
-            )
-            partial_png_recoveries = tuple({
-                item.recovery_id: item
-                for item in (*partial_png_recoveries, *partial_scan.recoveries)
-            }.values())
-            partial_outcomes = (
-                png_recovery_progress.partial_outcomes
-                + partial_scan.signature_outcomes
-            )
-            resource_outcome_index = next((
-                partial_index + index
-                for index, item in enumerate(partial_scan.signature_outcomes)
-                if item.status in {"resource_limited", "retryable_error"}
-            ), None)
-            partial_next_index = partial_index + len(partial_scan.signature_outcomes)
-            if resource_outcome_index is not None:
-                partial_next_index = resource_outcome_index
-            partial_added_rows = sum(
-                sum(len(row) for row in item.rows)
-                for item in partial_scan.recoveries
-            )
-            considered = sum(
-                item.reason != "retained_verified_result"
-                for item in partial_scan.signature_outcomes
-            )
-            rejected = sum(
-                item.status in {"completed", "unsupported"}
-                for item in partial_scan.signature_outcomes
-            )
-            updated_png_recovery_progress = replace(
-                updated_png_recovery_progress,
-                partial_next_index=partial_next_index,
-                partial_outcomes=partial_outcomes,
-                partial_bytes_read=(
-                    png_recovery_progress.partial_bytes_read + partial_scan.bytes_read
-                ),
-                partial_unique_bytes_read=(
-                    png_recovery_progress.partial_unique_bytes_read
-                    + partial_scan.unique_bytes_read
-                ),
-                partial_elapsed_seconds=(
-                    png_recovery_progress.partial_elapsed_seconds
-                    + partial_scan.elapsed_seconds
-                ),
-                partial_retained_bytes=(
-                    png_recovery_progress.partial_retained_bytes + partial_added_rows
-                ),
-                partial_signatures_considered=(
-                    png_recovery_progress.partial_signatures_considered + considered
-                ),
-                partial_signatures_rejected=(
-                    png_recovery_progress.partial_signatures_rejected + rejected
-                ),
-                partial_results_found=(
-                    png_recovery_progress.partial_results_found
-                    + len(partial_scan.recoveries)
-                ),
-                partial_stop_reason=(
-                    partial_scan.stop_reason
-                    if partial_scan.stop_reason in {
-                        "read_limit", "retained_memory_limit", "time_limit",
-                    } else partial_scan.stop_reason
-                    if partial_scan.stop_reason == "read_error"
-                    else "pending"
-                ),
-            )
-            partial_page_complete = partial_next_index >= len(signature_offsets)
-            raw_scan_complete = (
-                not carving.scan_limit_reached
-                and not carving.png_signature_set_truncated
-                and not ranges_truncated
-                and (carving.checkpoint is None
-                     or carving.checkpoint.range_index >= len(ranges))
-            )
-            partial_strategy_complete = (
-                partial_page_complete and raw_scan_complete
-                and updated_png_recovery_progress.partial_stop_reason == "pending"
-            )
-            partial_png_summary = {
-                "enabled": True,
-                "strategy": "decoded_complete_png_rows",
-                "signaturesSeen": updated_png_recovery_progress.discovered_signatures,
-                "signaturesExamined": updated_png_recovery_progress.partial_signatures_considered,
-                "signatureDiscoveryComplete": raw_scan_complete,
-                "discoveryBytesRead": updated_png_recovery_progress.discovery_bytes_read,
-                "candidatesFound": len(partial_png_recoveries),
-                "rejectedSignatures": updated_png_recovery_progress.partial_signatures_rejected,
-                "readErrors": partial_scan.read_errors,
-                "bytesRead": updated_png_recovery_progress.partial_bytes_read,
-                "uniqueBytesRead": updated_png_recovery_progress.partial_unique_bytes_read,
-                "elapsedSeconds": updated_png_recovery_progress.partial_elapsed_seconds,
-                "retainedBytesEstimate": updated_png_recovery_progress.partial_retained_bytes,
-                "integrity": "unknown",
-                "stopReason": (
-                    "search_exhausted" if partial_strategy_complete
-                    else updated_png_recovery_progress.partial_stop_reason
-                    if updated_png_recovery_progress.partial_stop_reason != "pending"
-                    else "signature_limit" if not partial_page_complete
-                    else "signature_page_pending"
-                ),
-                "nextSignatureIndex": updated_png_recovery_progress.partial_next_index,
-                "retainedSignatureOffsets": len(signature_offsets),
-                "completedSignatureWindows": updated_png_recovery_progress.completed_windows,
-                "limits": {
-                    "signatures": PngPartialRecoveryScanner.MAX_SIGNATURES,
-                    "candidateReadBytes": PngPartialRecoveryScanner.MAX_CANDIDATE_READ_BYTES,
-                    "totalReadBytes": PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES,
-                    "retainedBytes": PngPartialRecoveryScanner.MAX_TOTAL_RETAINED_BYTES,
-                    "timeSeconds": PngPartialRecoveryScanner.TIME_LIMIT_SECONDS,
-                    "sessionBytes": PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES,
-                    "sessionRetainedBytes": PngPartialRecoveryScanner.MAX_TOTAL_RETAINED_BYTES,
-                    "sessionSeconds": PngPartialRecoveryScanner.TIME_LIMIT_SECONDS,
-                },
-            }
-            trusted_summary["pngPartialRecovery"] = partial_png_summary
         raw_scan_complete = (
             not carving.scan_limit_reached
             and not carving.png_signature_set_truncated
@@ -1080,24 +873,12 @@ class CatalogBuilder:
             >= len(signature_offsets)
             or updated_png_recovery_progress.reconstruction_stop_reason != "pending"
         )
-        partial_page_complete = (
-            not png_progress_active
-            or
-            not partial_png_enabled
-            or updated_png_recovery_progress.partial_next_index >= len(signature_offsets)
-            or updated_png_recovery_progress.partial_stop_reason in {
-                "read_limit", "retained_memory_limit", "time_limit",
-            }
-        )
-        page_complete = reconstruction_page_complete and partial_page_complete
+        page_complete = reconstruction_page_complete
         terminal_resource_limit = png_progress_active and (
             updated_png_recovery_progress.reconstruction_stop_reason in {
                 "combination_limit", "cumulative_combination_limit", "read_limit",
                 "cumulative_read_limit", "time_limit", "cumulative_time_limit",
                 "memory_limit", "cumulative_memory_limit",
-            }
-            or updated_png_recovery_progress.partial_stop_reason in {
-                "read_limit", "retained_memory_limit", "time_limit",
             }
         )
         if (session_scoped_continuation and page_complete and not terminal_resource_limit
@@ -1115,11 +896,8 @@ class CatalogBuilder:
                     signature_window_identity=hashlib.sha256(b"[]").hexdigest(),
                     window_signature_count=0,
                     completed_windows=updated_png_recovery_progress.completed_windows + 1,
-                    partial_next_index=0,
                     reconstruction_next_index=0,
-                    partial_outcomes=(),
                     reconstruction_outcomes=(),
-                    partial_stop_reason="pending",
                     reconstruction_stop_reason="pending",
                 )
             carving = replace(
@@ -1142,9 +920,6 @@ class CatalogBuilder:
             reconstruction_enabled
             and updated_png_recovery_progress.reconstruction_next_index
             < updated_png_recovery_progress.window_signature_count
-            or partial_png_enabled
-            and updated_png_recovery_progress.partial_next_index
-            < updated_png_recovery_progress.window_signature_count
             or not raw_scan_complete
         )
         if terminal_resource_limit:
@@ -1158,10 +933,6 @@ class CatalogBuilder:
             trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = (
                 carving.png_signature_set_truncated
             )
-        if partial_png_summary is not None:
-            trusted_summary["pngPartialRecovery"]["signatureDiscoveryComplete"] = (
-                raw_scan_complete
-            )
         low_confidence_summary = None
         if uncertain_ranges is not None:
             low_confidence_summary = self._scan_low_confidence_ranges(
@@ -1174,90 +945,25 @@ class CatalogBuilder:
             if candidate_catalog.session_limit_reached:
                 trusted_summary["stopReason"] = "session_limit"
                 trusted_summary["sessionLimitReached"] = True
-        return (
-            trusted_summary, low_confidence_summary, partial_png_recoveries,
-            updated_png_recovery_progress,
-        )
-
-    @staticmethod
-    def _revalidate_partial_png_recoveries(
-        disk, recoveries, eligible_ranges, *, source_id, volume_id,
-        volume_start, volume_end, remaining_bytes,
-    ):
-        from infrastructure.carving.png_partial_recovery import PngPartialRecoveryScanner
-
-        valid = []
-        bytes_read = 0
-        source_changed = False
-        ranges = tuple(sorted((int(start), int(end)) for start, end in eligible_ranges))
-        for recovery in recoveries:
-            size = int(getattr(recovery, "source_content_size", 0))
-            digest = str(getattr(recovery, "source_content_sha256", ""))
-            offset = int(recovery.signature_offset)
-            interval = next((
-                (start, end) for start, end in ranges
-                if start <= offset and offset + size <= end
-            ), None)
-            if (recovery.source_id != source_id or recovery.volume_id != volume_id
-                    or size < 33 or size > PngPartialRecoveryScanner.MAX_CANDIDATE_READ_BYTES
-                    or not digest or interval is None or offset < volume_start
-                    or offset + size > volume_end):
-                source_changed = True
-                continue
-            if bytes_read + size > remaining_bytes:
-                raise RuntimeError(
-                    "PNG partial result revalidation reached the cumulative session read limit; "
-                    "the previous catalog generation was preserved."
-                )
-            content = bytes(disk.read_at(offset, size))
-            bytes_read += len(content)
-            if len(content) != size:
-                raise OSError(f"Short PNG partial source revalidation read at {offset:#x}")
-            if hashlib.sha256(content).hexdigest() != digest:
-                source_changed = True
-                continue
-            valid.append(recovery)
-        return tuple(valid), bytes_read, source_changed
+        return trusted_summary, low_confidence_summary, updated_png_recovery_progress
 
     def raw_png_recovery_results_are_current(self, source, snapshot, eligible_ranges,
                                              *, volume_start, volume_end):
         """Revalidate cached PNG evidence before reusing a completed session catalog."""
         progress = snapshot.png_recovery_progress
-        partials = tuple(snapshot.partial_png_recoveries)
         has_fragment_candidates = any(
             node.candidate is not None
             and "fragment_reconstruction" in node.candidate.discovery_methods
             for node in snapshot.catalog.nodes.values()
         )
-        if not partials and not has_fragment_candidates:
-            return True, 0, 0
+        if not has_fragment_candidates:
+            return True, 0
         if self.source_factory is None:
             raise RuntimeError("PNG recovery cache cannot be revalidated without a source reader")
 
         disk = self.source_factory.open_reader(source)
-        partial_bytes_read = 0
         fragment_bytes_read = 0
         try:
-            if partials:
-                from infrastructure.carving.png_partial_recovery import (
-                    PngPartialRecoveryScanner,
-                )
-
-                prior_bytes = progress.partial_bytes_read if progress is not None else 0
-                valid_partials, partial_bytes_read, partial_changed = self._revalidate_partial_png_recoveries(
-                    disk,
-                    partials,
-                    eligible_ranges,
-                    source_id=source.source_id,
-                    volume_id=snapshot.volume_id,
-                    volume_start=volume_start,
-                    volume_end=volume_end,
-                    remaining_bytes=max(
-                        0, PngPartialRecoveryScanner.MAX_TOTAL_READ_BYTES - prior_bytes,
-                    ),
-                )
-                if partial_changed or len(valid_partials) != len(partials):
-                    return False, partial_bytes_read, fragment_bytes_read
             if has_fragment_candidates:
                 from infrastructure.carving.png_idat_fragment_reconstructor import (
                     PNGIDATFragmentReconstructor,
@@ -1277,8 +983,8 @@ class CatalogBuilder:
                     ),
                 )
                 if fragment_changed or not valid_candidates:
-                    return False, partial_bytes_read, fragment_bytes_read
-            return True, partial_bytes_read, fragment_bytes_read
+                    return False, fragment_bytes_read
+            return True, fragment_bytes_read
         finally:
             disk.close()
 

@@ -11,7 +11,6 @@ class CarvingOptionsDto:
     max_retained_mib: int = 512
     max_candidate_read_mib_per_format: int = 1024
     enable_png_fragment_reconstruction: bool = False
-    enable_png_partial_recovery: bool = False
 
     SCAN_BUDGETS_GIB = (1, 4, 16, 64)
     FILE_COUNT_LIMITS = (256, 512, 1024, 2048, 4096, 8192, 16384)
@@ -48,20 +47,15 @@ class CarvingOptionsDto:
         )
         if not isinstance(enable_png_fragment_reconstruction, bool):
             raise ValueError("carvingOptions.enablePngFragmentReconstruction must be a boolean")
-        enable_png_partial_recovery = payload.get("enablePngPartialRecovery", False)
-        if not isinstance(enable_png_partial_recovery, bool):
-            raise ValueError("carvingOptions.enablePngPartialRecovery must be a boolean")
         unknown = set(payload) - {
             "scanBudgetGiB", "maxFiles", "maxRetainedMiB",
             "maxCandidateReadMiBPerFormat", "enablePngFragmentReconstruction",
-            "enablePngPartialRecovery",
         }
         if unknown:
             raise ValueError("carvingOptions contains unsupported fields")
         return cls(
             scan_budget_gib, max_files, max_retained_mib,
             candidate_read_mib_per_format, enable_png_fragment_reconstruction,
-            enable_png_partial_recovery,
         )
 
 
@@ -202,7 +196,6 @@ class CatalogDto:
     recycle_bin_recovery: dict | None = None
     usn_journal_evidence: dict | None = None
     ntfs_log_file_evidence: dict | None = None
-    partial_png_recoveries: tuple[dict, ...] = ()
 
     def to_dict(self):
         result = {
@@ -225,8 +218,6 @@ class CatalogDto:
             result["usnJournalEvidence"] = self.usn_journal_evidence
         if self.ntfs_log_file_evidence is not None:
             result["ntfsLogFileEvidence"] = self.ntfs_log_file_evidence
-        if self.partial_png_recoveries:
-            result["partialPngRecoveries"] = list(self.partial_png_recoveries)
         return result
 
 

@@ -26,13 +26,11 @@ class RecoveryWorkflow:
         content_reader_factory,
         signature_validator,
         extractor_factory,
-        partial_png_exporter=None,
     ):
         self.output_guard = output_guard
         self.content_reader_factory = content_reader_factory
         self.signature_validator = signature_validator
         self.extractor_factory = extractor_factory
-        self.partial_png_exporter = partial_png_exporter
 
     def preview_file(self, snapshot, node):
         """Return a bounded preview read from the same source as the catalog."""
@@ -78,7 +76,6 @@ class RecoveryWorkflow:
         min_file_size_kb=0,
         progress_callback: ProgressCallback | None = None,
         excluded_nodes=(),
-        selected_partial_png_ids=(),
     ):
         if not isinstance(output_directory, (str, os.PathLike)) or not os.fspath(output_directory).strip():
             raise ValueError("Choose a recovery destination folder before extracting files")
@@ -91,23 +88,6 @@ class RecoveryWorkflow:
             content_reader=self.content_reader_factory(source),
         )
         extractor.set_filters(extensions, min_file_size_kb)
-        selected_partial_png_ids = tuple(selected_partial_png_ids)
-        if len(set(selected_partial_png_ids)) != len(selected_partial_png_ids):
-            raise ValueError("Selected partial PNG recovery IDs must be unique")
-        partial_by_id = {
-            item.recovery_id: item
-            for item in getattr(snapshot, "partial_png_recoveries", ())
-        }
-        unknown_partial_ids = set(selected_partial_png_ids) - partial_by_id.keys()
-        if unknown_partial_ids:
-            raise ValueError("Selected partial PNG recovery is not in the current catalog")
-        partial_items = tuple(partial_by_id[item] for item in selected_partial_png_ids)
-        if partial_items and self.partial_png_exporter is None:
-            raise ValueError("Partial PNG export is unavailable")
-        if any(item.source_id != source.source_id for item in partial_items):
-            raise ValueError("Partial PNG content belongs to a different storage source")
-        if any(item.volume_id != snapshot.volume_id for item in partial_items):
-            raise ValueError("Partial PNG content belongs to a different volume")
         result_callback = None
         if progress_callback is not None:
             result_callback = lambda completed, total, result: self._notify(
@@ -125,18 +105,7 @@ class RecoveryWorkflow:
             excluded_nodes=excluded_nodes,
         )
         results = list(extractor.results)
-        partial_exported_count = 0
-        for index, item in enumerate(partial_items, 1):
-            result = self.partial_png_exporter.export(item, output_directory)
-            results.append(result)
-            partial_exported_count += result.status == "partial_exported"
-            self._notify(
-                progress_callback, "partial_png_export", index, len(partial_items),
-                f"{result.status}: {result.path}",
-            )
-        return ExtractionSummary(
-            recovered_count, tuple(results), partial_exported_count,
-        )
+        return ExtractionSummary(recovered_count, tuple(results))
 
     @staticmethod
     def _snapshot_source(snapshot):

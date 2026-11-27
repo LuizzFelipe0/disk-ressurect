@@ -16,7 +16,6 @@ from infrastructure.storage.factory import create_block_reader, raw_image_source
 from modules.storage.service import StorageService
 from infrastructure.formats.signature import FileSignatureValidator
 from infrastructure.recovery.extractor import Extractor
-from infrastructure.recovery.png_partial_exporter import PngPartialExporter
 from modules.catalog.service import CatalogService
 from modules.disk.service import DiskService
 from modules.deep_scan.service import DeepScanService
@@ -76,7 +75,6 @@ def create_handler(cache_path=None, inventory=None, workflow=None, scan_reposito
             OutputSafetyGuard(),
             lambda source: NTFSContentReferenceReader(reader_factory, reference_store),
             FileSignatureValidator, Extractor,
-            partial_png_exporter=PngPartialExporter(),
         ),
         source_resolver=storage_service.get_physical_source,
         storage_service=storage_service,

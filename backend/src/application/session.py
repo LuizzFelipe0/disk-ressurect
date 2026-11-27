@@ -173,9 +173,6 @@ class RecoverySession:
                 continue
             candidate_count += 1
             retained_bytes += int(candidate.size_bytes or 0)
-        for recovery in getattr(snapshot, "partial_png_recoveries", ()):
-            candidate_count += 1
-            retained_bytes += sum(len(row) for row in recovery.rows)
         progress = getattr(snapshot, "png_recovery_progress", None)
         if progress is not None:
             retained_bytes += progress.estimated_retained_bytes

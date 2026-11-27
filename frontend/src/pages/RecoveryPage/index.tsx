@@ -41,7 +41,6 @@ export const RecoveryPage: React.FC = () => {
   const [activeStep, setActiveStep] = React.useState<WorkflowStep>(1);
   const [catalogStepVisited, setCatalogStepVisited] = React.useState(false);
   const [includeOrphaned, setIncludeOrphaned] = React.useState(true);
-  const [enablePngPartialRecovery, setEnablePngPartialRecovery] = React.useState(false);
   const [forceFreshValidation, setForceFreshValidation] = React.useState(true);
   const [scanBudgetGiB, setScanBudgetGiB] = React.useState<CarvingOptions["scanBudgetGiB"]>(64);
   const [maxCarvedFiles, setMaxCarvedFiles] = React.useState<CarvingOptions["maxFiles"]>(16384);
@@ -161,7 +160,7 @@ export const RecoveryPage: React.FC = () => {
   };
 
   const highestAvailableStep: WorkflowStep = recovery.catalog
-    ? (recovery.selectedIds.size + recovery.selectedPartialPngIds.size) ? 4 : 3
+    ? recovery.selectedIds.size ? 4 : 3
     : recovery.selectedVolumeId ? 2 : 1;
   const workflowLabels: [string, string, string, string, string] = [
     t("home"), t("storageStep"), t("scanStep"), t("catalogStep"), t("recoveryStep"),
@@ -172,7 +171,6 @@ export const RecoveryPage: React.FC = () => {
       maxFiles: maxCarvedFiles,
       maxRetainedMiB: maxCarvedRetainedMiB,
       maxCandidateReadMiBPerFormat,
-      enablePngPartialRecovery,
     }, forceFreshValidation);
     if (built) setActiveStep(3);
   };
@@ -203,8 +201,6 @@ export const RecoveryPage: React.FC = () => {
         maxCarvedRetainedMiB={maxCarvedRetainedMiB} setMaxCarvedRetainedMiB={setMaxCarvedRetainedMiB}
         maxCandidateReadMiBPerFormat={maxCandidateReadMiBPerFormat}
         setMaxCandidateReadMiBPerFormat={setMaxCandidateReadMiBPerFormat}
-        enablePngPartialRecovery={enablePngPartialRecovery}
-        setEnablePngPartialRecovery={setEnablePngPartialRecovery}
         onBack={() => setActiveStep(1)} onStart={() => void runCatalogBuild()} />}
 
       <CatalogStep recovery={recovery} language={language} t={t} visited={catalogStepVisited}
@@ -231,9 +227,6 @@ export const RecoveryPage: React.FC = () => {
           recovered: recovery.recoveryResult.recoveredCount,
           rejected: recovery.recoveryResult.rejectedCount ?? 0,
         })}</p>
-        {(recovery.recoveryResult.partialExportedCount ?? 0) > 0 && <p>
-          {t("partialPngExportsSummary", { count: recovery.recoveryResult.partialExportedCount ?? 0 })}
-        </p>}
         {recovery.recoveryResult.candidateCount === 0 && <p role="status">{t("noRecoveryCandidates")}</p>}
         {recovery.recoveryResult.resultsTruncated && <p>{t("recoveryResultsTruncated")}</p>}
         <ul>{(recovery.recoveryResult.results ?? []).map((item, index) => <li key={`${item.path}:${index}`}>

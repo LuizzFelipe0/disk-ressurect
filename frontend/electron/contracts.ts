@@ -25,29 +25,6 @@ export interface CarvingOptions {
   maxRetainedMiB: 128 | 256 | 512;
   maxCandidateReadMiBPerFormat: 256 | 512 | 1024;
   enablePngFragmentReconstruction?: boolean;
-  enablePngPartialRecovery?: boolean;
-}
-
-export interface PartialPngRecoveryInfo {
-  id: string;
-  originalFormat: "PNG";
-  width: number;
-  height: number;
-  pixelLayout: "RGB" | "RGBA";
-  recoveredRows: number;
-  recoveredRowStart: number;
-  recoveredRowEndExclusive: number;
-  missingRowStart: number;
-  missingRowEndExclusive: number;
-  sourceRanges: Array<{ start: number; endExclusive: number }>;
-  stopReason: string;
-  validIdatCrcCount: number;
-  idatCrcUnknown: boolean;
-  idatCrcInvalid: boolean;
-  zlibComplete: boolean;
-  iendValid: boolean;
-  integrity: "unknown";
-  derivedExport: true;
 }
 
 export interface FragmentReconstructionEvidence {
@@ -175,7 +152,6 @@ export interface CatalogInfo {
   recycleBinRecovery?: RecycleBinRecoverySummary;
   usnJournalEvidence?: UsnJournalEvidenceSummary;
   ntfsLogFileEvidence?: NtfsLogFileEvidenceSummary;
-  partialPngRecoveries?: PartialPngRecoveryInfo[];
   availableExtensions: string[];
   roots: CatalogNode[];
 }
@@ -282,7 +258,6 @@ export interface RecoveryResult {
   candidateCount: number;
   selectedCount?: number;
   rejectedCount?: number;
-  partialExportedCount?: number;
   statusCounts?: Record<string, number>;
   results?: Array<{ name: string; path: string; status: string; reason: string; bytesWritten: number }>;
   resultsTruncated?: boolean;
@@ -311,7 +286,6 @@ export interface DesktopApi {
   previewFile(nodeId: string): Promise<FilePreview>;
   recover(options: {
     selectedNodeIds: string[];
-    selectedPartialPngIds: string[];
     excludedNodeIds: string[];
     outputDirectory: string;
     extensions: string[];

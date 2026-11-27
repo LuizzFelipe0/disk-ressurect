@@ -11,7 +11,7 @@ export const RecoveryStep: React.FC<RecoveryStageProps> = ({ recovery, t, onBack
   <PageIntro><Eyebrow>{t("recoveryStep")}</Eyebrow><h1>{t("recoverSelected")}</h1>
     <p>{t("chooseDestinationDescription")}</p></PageIntro>
   <Card size="sm" variant="flat">
-    <div><strong>{t("selectedItems")}: {recovery.selectedIds.size + recovery.selectedPartialPngIds.size}</strong></div>
+    <div><strong>{t("selectedItems")}: {recovery.selectedIds.size}</strong></div>
     <DestinationRow>
       <DestinationInput><FormField label={t("saveFiles")}><Input type="text" aria-label={t("saveFiles")}
         value={recovery.outputDirectory} disabled={recovery.busy} placeholder={t("chooseFolderPlaceholder")}
@@ -27,7 +27,7 @@ export const RecoveryStep: React.FC<RecoveryStageProps> = ({ recovery, t, onBack
     <Button className="brand-button--success" variant="success" size="md"
       disabled={recovery.busy || !recovery.outputDirectory.trim()
         || (recovery.selectedIds.size > 0 && !recovery.extensions.length)
-        || !(recovery.selectedIds.size + recovery.selectedPartialPngIds.size)}
+        || !recovery.selectedIds.size}
       onClick={() => void recovery.recover()}>{recovery.busy ? t("recovering") : t("recoverSelected")}</Button>
   </StepActions>
 </>;
