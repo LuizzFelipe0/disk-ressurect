@@ -11,7 +11,7 @@ def evaluate_carving(files, manifest):
     eligible_entries = []
     for entry in manifest.entries:
         if entry.negative_reason is None and entry.expected_recovery not in {
-                "partial_png_rows_only", "miss_without_metadata", "ntfs_runlist_component"}:
+                "miss_without_metadata", "ntfs_runlist_component"}:
             expected_by_hash.setdefault(entry.sha256, []).append(entry)
             if entry.expected_recovery == "contiguous_carving":
                 eligible_entries.append(entry)

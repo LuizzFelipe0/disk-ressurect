@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from io import BytesIO
 import random
 from pathlib import Path
-import zlib
 
 from PIL import Image
 
@@ -24,8 +23,6 @@ class BuiltDataset:
     path: Path
     manifest: GroundTruthManifest
     ntfs_runs: tuple[tuple[int | None, int], ...]
-    partial_png_offset: int
-    partial_png_original_pixels: bytes
 
 
 def _image_bytes(seed, *, format_name, quality=88, progressive=False):
@@ -45,20 +42,6 @@ def _image_bytes(seed, *, format_name, quality=88, progressive=False):
         if decoded.format != format_name or decoded.size != (width, height):
             raise AssertionError("Generated media fixture did not decode as expected")
     return encoded, pixels, (width, height)
-
-
-def _partial_png(seed):
-    original, pixels, (width, height) = _image_bytes(seed, format_name="PNG")
-    cursor = len(PNG_SIGNATURE)
-    while cursor + 12 <= len(original):
-        length = int.from_bytes(original[cursor:cursor + 4], "big")
-        kind = original[cursor + 4:cursor + 8]
-        payload_start = cursor + 8
-        if kind == b"IDAT":
-            cut = payload_start + max(16, length * 3 // 4)
-            return original[:cut], original, pixels, width, height
-        cursor += length + 12
-    raise AssertionError("Generated PNG has no IDAT chunk")
 
 
 def _free_ranges(size_bytes, allocated_clusters):
@@ -99,7 +82,6 @@ def create_dataset(path, size_bytes, *, seed=72531):
             seed + 2, format_name="JPEG", quality=72, progressive=True,
         )
         png_contiguous, _pixels, _geometry = _image_bytes(seed + 3, format_name="PNG")
-        partial_bytes, partial_original, partial_pixels, width, height = _partial_png(seed + 4)
 
         contig_offset = 1024 * 1024
         duplicate_offset = 2 * 1024 * 1024
@@ -110,7 +92,6 @@ def create_dataset(path, size_bytes, *, seed=72531):
         metadata_second = 12 * 1024 * 1024
         untracked_first = 16 * 1024 * 1024
         untracked_second = 20 * 1024 * 1024
-        partial_offset = 24 * 1024 * 1024
         false_signature_offset = 30 * 1024 * 1024
 
         put(contig_offset, jpeg_contiguous)
@@ -126,9 +107,6 @@ def create_dataset(path, size_bytes, *, seed=72531):
         unknown_split = max(512, len(jpeg_progressive) // 2)
         put(untracked_first, jpeg_progressive[:unknown_split])
         put(untracked_second, jpeg_progressive[unknown_split:])
-        put(partial_offset, partial_bytes)
-        partial_cluster_end = partial_offset + CLUSTER_SIZE
-        put(partial_offset + len(partial_bytes), b"\xa5" * (partial_cluster_end - partial_offset - len(partial_bytes)))
         put(false_signature_offset, b"\xff\xd8\xff" + b"not-a-jpeg" * 8)
 
     metadata_first_cluster = metadata_first // CLUSTER_SIZE
@@ -138,8 +116,6 @@ def create_dataset(path, size_bytes, *, seed=72531):
     allocated_clusters = {metadata_first_cluster}
     allocated_clusters.update(range(metadata_second_cluster,
                                     metadata_second_cluster + metadata_second_clusters))
-    # A synthetic allocated cluster immediately after the damaged PNG bounds the eligible range.
-    allocated_clusters.add(partial_offset // CLUSTER_SIZE + 1)
     eligible_ranges = _free_ranges(size_bytes, allocated_clusters)
     excluded_ranges = tuple(
         (cluster * CLUSTER_SIZE, (cluster + 1) * CLUSTER_SIZE)
@@ -168,9 +144,6 @@ def create_dataset(path, size_bytes, *, seed=72531):
                                   corruption_regions=((overwrite_offset + len(damaged) // 2,
                                                        overwrite_offset + len(damaged) // 2 + 1),),
                                   expected_recovery="reject_or_inconclusive", negative_reason="middle byte overwritten"),
-        GroundTruthEntry.original("partial-png", partial_original,
-                                  physical_ranges=((partial_offset, partial_offset + len(partial_bytes)),),
-                                  expected_recovery="partial_png_rows_only"),
         GroundTruthEntry.original("fully-overwritten-negative", b"original-content-absent",
                                   fragmentation="overwritten", allocation_evidence="not_present",
                                   expected_recovery="no_candidate", negative_reason="original bytes are not in the source"),
@@ -182,4 +155,4 @@ def create_dataset(path, size_bytes, *, seed=72531):
         overwrite_regions=((overwrite_offset + len(damaged) // 2,
                             overwrite_offset + len(damaged) // 2 + 1),),
     )
-    return BuiltDataset(path, manifest, ntfs_runs, partial_offset, partial_pixels)
+    return BuiltDataset(path, manifest, ntfs_runs)

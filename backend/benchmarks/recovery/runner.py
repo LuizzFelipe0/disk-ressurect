@@ -16,17 +16,16 @@ import tracemalloc
 
 from infrastructure.carving.content_carver import RawContentCarver
 from infrastructure.carving.png_idat_fragment_reconstructor import PNGIDATFragmentReconstructor
-from infrastructure.carving.png_partial_recovery import PngPartialRecoveryScanner
 from infrastructure.filesystems.ntfs.allocation.cluster_allocation import FreeClusterRangeCollector
 from infrastructure.filesystems.ntfs.readers.file_content_reader import NTFSFileContentReader
-from infrastructure.recovery.png_partial_exporter import PngPartialExporter
 from infrastructure.validation.disk_auditor import DiskReadCoverage
-from .datasets import CLUSTER_SIZE, _partial_png, create_dataset
+from .datasets import CLUSTER_SIZE, create_dataset
 from .evaluation import evaluate_carving
 from .ground_truth import GroundTruthEntry, GroundTruthManifest
 from .read_coverage import InstrumentedReader
 from .readers import FileReader, MemoryReader
 from .resource_measurement import measure, process_memory_bytes
+from .session_continuation import run_session_continuation_benchmark
 
 
 def _media(seed, fmt="JPEG", progressive=False):
@@ -73,33 +72,19 @@ def _carver(source, manifest, *, measured):
 
 
 def _signature_coverage_case(count, *, seed):
-    partial_data, original_png, original_pixels, width, _height = _partial_png(seed)
     block_size = 8192
     data = bytearray(block_size * count)
+    signature = b"\x89PNG\r\n\x1a\n"
     signature_offsets = []
-    fixture_ranges = []
-    truth_entries = []
-    partial_indexes = {min(3, count - 1), 4, 256}
-    partial_indexes = {index for index in partial_indexes if index < count}
+    eligible_ranges = []
     for index in range(count):
         offset = index * block_size
         signature_offsets.append(offset)
-        if index in partial_indexes:
-            payload = partial_data
-            truth_entries.append(GroundTruthEntry.original(
-                f"partial-{index}", original_png,
-                physical_ranges=((offset, offset + len(payload)),),
-                expected_recovery="partial_png_rows_only",
-            ))
-        else:
-            payload = b"\x89PNG\r\n\x1a\n" + b"bad-signature-candidate" * 4
-        data[offset:offset + len(payload)] = payload
-        fixture_ranges.append((offset, offset + len(payload)))
-    eligible_ranges = tuple(fixture_ranges)
-    manifest = GroundTruthManifest(
-        seed=seed, workload=f"png-signature-coverage-{count}", size_bytes=len(data),
-        entries=tuple(truth_entries), eligible_ranges=eligible_ranges, excluded_ranges=(),
-    )
+        data[offset:offset + len(signature)] = signature
+        fake_header = b"not-a-complete-png-candidate".ljust(48 - len(signature), b"\0")
+        data[offset + len(signature):offset + 48] = fake_header
+        eligible_ranges.append((offset, offset + 48))
+
     source = InstrumentedReader(MemoryReader(data), size=len(data), capture_events=True)
     with source.stage("content_carving"):
         scan = RawContentCarver(
@@ -113,73 +98,28 @@ def _signature_coverage_case(count, *, seed):
         reconstruction = PNGIDATFragmentReconstructor(
             source, volume_start=0, volume_end=len(data), cluster_size=CLUSTER_SIZE,
         ).reconstruct(scan.png_signature_offsets, eligible_ranges)
-    partial_scanner = PngPartialRecoveryScanner(
-        source, source_id="phase5b-synthetic", volume_id="signature-fixture",
-        volume_start=0, volume_end=len(data),
-    )
-    partial_event_start = len(source.events)
-    with source.stage("partial_png_decoding"):
-        partial_first = partial_scanner.scan(
-            scan.png_signature_offsets, eligible_ranges,
-            complete_png_offsets=(item.offset for item in scan.files if item.extension == ".png"),
-        )
-        partial_second = partial_scanner.scan(
-            scan.png_signature_offsets, eligible_ranges,
-            complete_png_offsets=(item.offset for item in scan.files if item.extension == ".png"),
-        )
-    recoveries_by_offset = {item.signature_offset: item for item in partial_first.recoveries}
-    exact_rows = 0
-    exact_partial_ids = []
-    for entry, index in zip(truth_entries, sorted(partial_indexes)):
-        offset = index * block_size
-        recovery = recoveries_by_offset.get(offset)
-        if recovery is not None:
-            recovered = b"".join(recovery.rows)
-            if recovered == original_pixels[:len(recovered)]:
-                exact_rows += len(recovered)
-                exact_partial_ids.append(entry.file_id)
-    partial_events = source.events[partial_event_start:]
-    examined_offsets = {
-        offset for stage, offset, _requested, _successful, _status in partial_events
-        if stage == "partial_png_decoding"
-    }
-    oracle_pending_offsets = sorted(
-        index * block_size for index in partial_indexes
-        if index * block_size not in examined_offsets
-    )
     return {
         "scenario": f"{count}_png_signatures",
+        "seed": seed,
         "eligibleSignatureCountInOracle": count,
         "signatureOffsetsDetectedByOracle": count,
-        "signatureCountObservedByProductionTelemetry": None,
         "signaturesRetained": len(scan.png_signature_offsets),
         "signaturesOmittedBy256CapAtLeast": max(0, count - len(scan.png_signature_offsets)),
         "signatureSetTruncated": scan.png_signature_set_truncated,
+        "fragmentSearchSignaturesSeen": reconstruction.signatures_seen,
         "fragmentSearchSignaturesExamined": reconstruction.signatures_examined,
         "fragmentSearchCombinations": reconstruction.combinations,
+        "fragmentSearchCandidates": len(reconstruction.candidates),
         "fragmentSearchStopReason": reconstruction.stop_reason,
-        "partialSignaturesSeen": partial_first.signatures_seen,
-        "partialSignaturesExamined": partial_first.signatures_examined,
-        "partialStopReason": partial_first.stop_reason,
-        "knownPartialCandidatesPendingOrOmitted": oracle_pending_offsets,
-        "partialOffsetsActuallyReadFirstCall": sorted(examined_offsets),
-        "partialBytesReadFirstCall": partial_first.bytes_read,
-        "partialBytesReadSecondCall": partial_second.bytes_read,
-        "additionalRecoveriesOnSecondEquivalentCall": len({
-            item.recovery_id for item in partial_second.recoveries
-        } - {item.recovery_id for item in partial_first.recoveries}),
-        "recoveredPartialOriginalIds": exact_partial_ids,
-        "originalPixelBytesCorrectlyDecoded": exact_rows,
-        "oracleHashUsedByAlgorithm": False,
-        "oracleCutLocationsProvidedToAlgorithm": False,
+        "bytesScanned": scan.bytes_scanned,
+        "candidateBytesRead": scan.candidate_bytes_read,
         "readCoverage": source.report(),
         "oracle": {
-            "knownSignatures": sorted(signature_offsets),
-            "partialImageSha256": [item.sha256 for item in truth_entries],
-            "partialOffsets": sorted(index * block_size for index in partial_indexes),
+            "knownSignatures": signature_offsets,
+            "sha256UsedByAlgorithm": False,
+            "fragmentLocationsProvidedToAlgorithm": False,
         },
     }
-
 
 def _range_and_resume_experiments(seed):
     jpeg, _pixels, _geometry = _media(seed)
@@ -250,6 +190,7 @@ def run_tier1(seed=72531):
         "seed": seed,
         "signatureCoverage": cases,
         "rangeAndResume": range_results,
+        "sessionContinuation": run_session_continuation_benchmark(),
     }
 
 
@@ -314,35 +255,6 @@ def run_file_workload(size_bytes, *, seed=72531, repeats=3):
                     instrumented, volume_start=0, volume_end=instrumented.size,
                     cluster_size=CLUSTER_SIZE,
                 ).reconstruct(signature_offsets, built.manifest.eligible_ranges))
-            with instrumented.stage("partial_png_decoding"):
-                partial_result, partial_metrics = measure(lambda: PngPartialRecoveryScanner(
-                    instrumented, source_id="phase5b-file-source", volume_id="synthetic-bitmap",
-                    volume_start=0, volume_end=instrumented.size,
-                ).scan(signature_offsets, built.manifest.eligible_ranges,
-                       complete_png_offsets=(item.offset for item in last_result.files if item.extension == ".png")))
-            partial_bytes = sum(sum(len(row) for row in item.rows) for item in partial_result.recoveries)
-            correct_partial_bytes = 0
-            incorrect_partial_attributions = 0
-            exports = []
-            output_dir = Path(work_dir / "exports")
-            for recovery in partial_result.recoveries:
-                decoded_rows = b"".join(recovery.rows)
-                if decoded_rows == built.partial_png_original_pixels[:len(decoded_rows)]:
-                    correct_partial_bytes += len(decoded_rows)
-                else:
-                    incorrect_partial_attributions += 1
-                export = PngPartialExporter().export(recovery, str(output_dir))
-                decoded_export = None
-                if export.status == "partial_exported":
-                    from PIL import Image
-                    with Image.open(export.path) as image:
-                        image.load()
-                        decoded_export = {
-                            "size": list(image.size),
-                            "matchesOriginalPixelPrefix": image.tobytes() == decoded_rows,
-                        }
-                exports.append({"status": export.status, "bytesWritten": export.bytes_written,
-                                "decoded": decoded_export})
 
             metrics = instrumented.report()
             timings = [item["wallSeconds"] for item in measurements]
@@ -450,20 +362,6 @@ def run_file_workload(size_bytes, *, seed=72531, repeats=3):
                     "wallSeconds": recon_metrics["wallSeconds"],
                     "cpuSeconds": recon_metrics["cpuSeconds"],
                     "scope": "production component run on the file-backed synthetic source",
-                },
-                "partialPng": {
-                    "signaturesSeen": partial_result.signatures_seen,
-                    "signaturesExamined": partial_result.signatures_examined,
-                    "recoveries": len(partial_result.recoveries),
-                    "partialPixelBytes": partial_bytes,
-                    "originalPixelBytesCorrectlyDecoded": correct_partial_bytes,
-                    "incorrectPartialAttributions": incorrect_partial_attributions,
-                    "derivedExports": exports,
-                    "originalFileBytesRecovered": 0,
-                    "integrity": "unknown",
-                    "stopReason": partial_result.stop_reason,
-                    "wallSeconds": partial_metrics["wallSeconds"],
-                    "cpuSeconds": partial_metrics["cpuSeconds"],
                 },
                 "ntfsRunlistComponent": {
                     "status": "exact" if metadata_match else "mismatch",

@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import sys
 from types import SimpleNamespace
+
+BACKEND_SRC = Path(__file__).resolve().parents[1].parent / "src"
+sys.path.insert(0, str(BACKEND_SRC))
 
 from recovery.evaluation import evaluate_carving
 from recovery.ground_truth import GroundTruthEntry, GroundTruthManifest
 from recovery.read_coverage import InstrumentedReader
 from recovery.readers import MemoryReader
+from recovery.session_continuation import run_session_continuation_benchmark
 
 
 class BenchmarkInfrastructureTests(unittest.TestCase):
@@ -95,6 +101,25 @@ class BenchmarkInfrastructureTests(unittest.TestCase):
         self.assertEqual(result["missedOriginalIds"], ["second-copy"])
         self.assertEqual(result["falseAcceptedCandidateCount"], 1)
         self.assertEqual(result["falseAcceptedCandidates"][0]["groundTruthNegativeId"], "overwritten")
+
+    def test_session_benchmark_recovers_complete_png_after_contiguous_miss(self):
+        result = run_session_continuation_benchmark()
+        control, continued = result["cases"]
+
+        self.assertEqual(control["signatureCount"], 4)
+        self.assertEqual(continued["signatureCount"], 5)
+        self.assertEqual(0, continued["contiguousPngCandidates"])
+        self.assertEqual(1, continued["exactOriginalMatchesAfterSearch"])
+        self.assertEqual(1, continued["completeReconstructionHypotheses"])
+        self.assertEqual("scope_complete", continued["scopeStopReason"])
+        self.assertEqual(5, continued["uniqueSignaturesExamined"])
+        self.assertEqual(64, result["limits"]["combinationsPerPass"])
+        self.assertEqual(256, result["limits"]["combinationsCumulativeMaximum"])
+        self.assertEqual(8 * 1024 * 1024, result["limits"]["readBytesPerPassMaximum"])
+        self.assertEqual(16 * 1024 * 1024,
+                         result["limits"]["retainedBytesEstimateMaximum"])
+        self.assertFalse(continued["oraclePassedIntoSearch"])
+        self.assertFalse(continued["oraclePositionsPassedIntoSearch"])
 
 
 if __name__ == "__main__":

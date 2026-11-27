@@ -22,6 +22,10 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 .\venv\Scripts\python.exe -m unittest discover -s backend\benchmarks\tests -v
 ```
 
+Tier 1 also includes an in-memory session-continuation workload. It compares the existing contiguous carver with the `RecoverySession` → `CatalogScanWorkflow` → `CatalogBuilder` path for a complete PNG made of two cluster-aligned `IDAT` chunks separated by a foreign chunk. The fifth-signature case demonstrates continuation beyond the four-signature strategy pass; the SHA-256 is read by the benchmark oracle only after the workflow finishes. This is a narrow synthetic gain, not general PNG defragmentation or a physical-media performance claim.
+
+That workload reports total and unique source reads, reconstruction reads, evaluated combinations, session/checkpoint retained-memory estimates, `tracemalloc`/process-memory measurements and stop reasons. The PNG reconstructor's declared limits are reported independently: 64 candidate evaluations per pass, four passes (256 cumulative), 8 MiB reads per pass (32 MiB cumulative), 2 MiB per candidate, 2 seconds per pass (8 seconds cumulative), and a 16 MiB retained-object estimate. These are separate from the 4-signature strategy batch, 256-signature retained window, and dataset-size ceiling. Retained-object accounting is an estimate and does not represent process RSS. Tiny in-memory timings are smoke measurements only.
+
 ## Package boundary
 
 The Python packager analyzes only `backend/src/bootstrap.py` and collects `application`, `infrastructure`, `modules` and `presentation` from `backend/src`. This package is a sibling of `src`, and production source has no imports from `recovery`. Test-only Pillow is listed in `backend/requirements-test.txt`; production packaging requirements do not install it. Electron Builder packages frontend `dist`, its package metadata and the separately built backend executable; it does not include the repository's `backend/benchmarks` directory.
