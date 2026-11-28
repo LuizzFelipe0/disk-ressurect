@@ -28,6 +28,9 @@ export function useRecoveryController() {
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
   const catalogBuildRequest = useRef(0);
   const recoveryCommandInFlight = useRef(false);
+  const activeCatalogOperationId = useRef<string | null>(null);
+  const [catalogBuildActive, setCatalogBuildActive] = useState(false);
+  const [catalogCancellationRequested, setCatalogCancellationRequested] = useState(false);
 
   const clearCatalog = useCallback(() => {
     clearBrowser();
@@ -69,6 +72,9 @@ export function useRecoveryController() {
     const catalogGeneration = getCatalogGeneration();
     const requestId = ++catalogBuildRequest.current;
     const operationId = beginOperation();
+    activeCatalogOperationId.current = operationId;
+    setCatalogBuildActive(true);
+    setCatalogCancellationRequested(false);
     setError("");
     setProgress(null);
     setStatus(includeOrphaned
@@ -94,10 +100,26 @@ export function useRecoveryController() {
     } finally {
       if (requestId === catalogBuildRequest.current) setBusy(false);
       finishOperation(operationId);
+      activeCatalogOperationId.current = null;
+      setCatalogBuildActive(false);
+      setCatalogCancellationRequested(false);
       recoveryCommandInFlight.current = false;
     }
   }, [source.selectedVolumeId, ensureAdministrator, clearCatalog, beginOperation,
     finishOperation, getCatalogGeneration, setCatalog, setRootParents, setBusy, setError, setProgress, setStatus]);
+
+  const cancelCatalogBuild = useCallback(async () => {
+    const operationId = activeCatalogOperationId.current;
+    if (!operationId) return false;
+    try {
+      const result = await recoveryService.cancelOperation(operationId);
+      if (result.accepted) setCatalogCancellationRequested(true);
+      return result.accepted;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    }
+  }, [setError, setStatus]);
 
   const chooseOutputDirectory = useCallback(async () => {
     try {
@@ -164,7 +186,8 @@ export function useRecoveryController() {
   }, []);
 
   return {
-    backendStatus, isAdministrator, busy, error, status, progress,
+    backendStatus, isAdministrator, busy, error, status, progress, catalogBuildActive,
+    catalogCancellationRequested,
     disks: source.disks, selectedDiskNumber: source.selectedDiskNumber,
     volumes: source.volumes, selectedVolumeId: source.selectedVolumeId, partitionScanCanResume,
     catalog, preview, previewLoading, searchQuery, setSearchQuery, searchResult, searchingCatalog,
@@ -173,6 +196,6 @@ export function useRecoveryController() {
     refreshDisks: source.refreshDisks, selectDisk: source.selectDisk,
     findPartitions: source.findPartitions, selectVolume: source.selectVolume, buildCatalog,
     chooseOutputDirectory, recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory,
-    ensureAdministrator, backendSessionGeneration,
+    ensureAdministrator, backendSessionGeneration, cancelCatalogBuild,
   };
 }

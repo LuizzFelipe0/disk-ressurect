@@ -29,6 +29,8 @@ export const recoveryService = {
   ): Promise<CatalogInfo> => getApi().scanCatalog(
     volumeId, includeOrphaned, carvingOptions, forceFreshValidation, operationId,
   ),
+  cancelOperation: (operationId: string): Promise<{ accepted: boolean }> =>
+    getApi().cancelOperation(operationId),
   searchCatalog: (query: string): Promise<CatalogSearchResult> => getApi().searchCatalog(query),
   listSupportedFileTypes: (): Promise<string[]> => getApi().listSupportedFileTypes(),
   getChildren: (nodeId: string): Promise<CatalogNode[]> => getApi().getChildren(nodeId),

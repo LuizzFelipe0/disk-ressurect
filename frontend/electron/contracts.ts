@@ -128,6 +128,21 @@ export interface ContentCarvingSummary {
   formatsAttempted?: string[];
   validationScope?: string;
   pngFragmentReconstruction?: PNGFragmentReconstructionSummary;
+  continuation?: {
+    passes: number;
+    stopReason: string;
+    pendingRangeCount: number;
+    maxPasses: number;
+  };
+  stopReason?: string;
+  rangePage?: {
+    observedRangeCount: number;
+    retainedRangeCount: number;
+    pendingRangeCount: number;
+    collectionScopeComplete: boolean;
+    scanScopeComplete: boolean;
+    byteLimitReached: boolean;
+  };
 }
 
 export interface LowConfidenceCarvingTier extends ContentCarvingSummary {
@@ -280,6 +295,7 @@ export interface DesktopApi {
     forceFreshValidation?: boolean,
     operationId?: string,
   ): Promise<CatalogInfo>;
+  cancelOperation(operationId: string): Promise<{ accepted: boolean }>;
   searchCatalog(query: string): Promise<CatalogSearchResult>;
   listSupportedFileTypes(): Promise<string[]>;
   getChildren(nodeId: string): Promise<CatalogNode[]>;

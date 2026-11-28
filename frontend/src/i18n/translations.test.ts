@@ -39,6 +39,9 @@ describe("application translations", () => {
         scannedAt: "2026-11-23T12:00:00Z", coverage: 100,
       })).toContain("2026-11-23");
       expect(translate(language, "forceFreshValidation")).toBeTruthy();
+      expect(translate(language, "enablePngFragmentReconstruction")).toBeTruthy();
+      expect(translate(language, "pngFragmentReconstructionInfo")).toBeTruthy();
+      expect(translate(language, "trustedRangeIncomplete", { reason: "range_collection_truncated" })).toContain("range_collection_truncated");
     }
   });
 

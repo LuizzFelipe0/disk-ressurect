@@ -12,6 +12,9 @@ const api: DesktopApi = {
       ...(carvingOptions ? { carvingOptions } : {}),
     },
   ),
+  cancelOperation: (operationId) => ipcRenderer.invoke(
+    "recovery:cancel-operation", { operationId },
+  ),
   searchCatalog: (query) => ipcRenderer.invoke("recovery:search-catalog", { query }),
   listSupportedFileTypes: () => ipcRenderer.invoke("recovery:list-file-types"),
   getChildren: (nodeId) => ipcRenderer.invoke("recovery:catalog-children", { nodeId }),

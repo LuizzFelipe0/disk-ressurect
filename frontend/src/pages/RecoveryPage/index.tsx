@@ -47,6 +47,8 @@ export const RecoveryPage: React.FC = () => {
   const [maxCarvedRetainedMiB, setMaxCarvedRetainedMiB] = React.useState<CarvingOptions["maxRetainedMiB"]>(512);
   const [maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat] =
     React.useState<CarvingOptions["maxCandidateReadMiBPerFormat"]>(1024);
+  const [enablePngFragmentReconstruction, setEnablePngFragmentReconstruction] =
+    React.useState(false);
   const [auditOpen, setAuditOpen] = React.useState(false);
   const [recoveryResultsOpen, setRecoveryResultsOpen] = React.useState(false);
   const [filtersOpen, setFiltersOpen] = React.useState(false);
@@ -171,6 +173,7 @@ export const RecoveryPage: React.FC = () => {
       maxFiles: maxCarvedFiles,
       maxRetainedMiB: maxCarvedRetainedMiB,
       maxCandidateReadMiBPerFormat,
+      enablePngFragmentReconstruction,
     }, forceFreshValidation);
     if (built) setActiveStep(3);
   };
@@ -201,6 +204,8 @@ export const RecoveryPage: React.FC = () => {
         maxCarvedRetainedMiB={maxCarvedRetainedMiB} setMaxCarvedRetainedMiB={setMaxCarvedRetainedMiB}
         maxCandidateReadMiBPerFormat={maxCandidateReadMiBPerFormat}
         setMaxCandidateReadMiBPerFormat={setMaxCandidateReadMiBPerFormat}
+        enablePngFragmentReconstruction={enablePngFragmentReconstruction}
+        setEnablePngFragmentReconstruction={setEnablePngFragmentReconstruction}
         onBack={() => setActiveStep(1)} onStart={() => void runCatalogBuild()} />}
 
       <CatalogStep recovery={recovery} language={language} t={t} visited={catalogStepVisited}
@@ -315,6 +320,8 @@ export const RecoveryPage: React.FC = () => {
           || contentCarving.candidateLimitReached
           || contentCarving.fileCountLimitReached
           || contentCarving.retainedBytesLimitReached
+          || (contentCarving.continuation?.stopReason !== undefined
+            && contentCarving.continuation.stopReason !== "scope_complete")
           || carvingHasReachedFormatLimit(contentCarving)
         )}>
           {t("contentCarvingResult", {
@@ -327,6 +334,8 @@ export const RecoveryPage: React.FC = () => {
             || contentCarving.candidateLimitReached
             || contentCarving.fileCountLimitReached
             || contentCarving.retainedBytesLimitReached
+            || (contentCarving.continuation?.stopReason !== undefined
+              && contentCarving.continuation.stopReason !== "scope_complete")
             || carvingHasReachedFormatLimit(contentCarving)) && ` ${t("contentCarvingLimited")}`}
         </ValidationNotice>}
         {contentCarving && <section aria-label={t("carvingDiagnosticsHeading")}>
@@ -351,6 +360,42 @@ export const RecoveryPage: React.FC = () => {
               : contentCarving.validationScope,
           })}</p>}
           {renderFormatDiagnostics(contentCarving)}
+          {contentCarving.rangePage && <p role="status">
+            {t("trustedRangeSummary", {
+              retained: contentCarving.rangePage.retainedRangeCount,
+              observed: contentCarving.rangePage.observedRangeCount,
+              pending: contentCarving.rangePage.pendingRangeCount,
+            })}
+            {!contentCarving.rangePage.scanScopeComplete
+              || !contentCarving.rangePage.collectionScopeComplete
+              ? ` ${t("trustedRangeIncomplete", { reason: contentCarving.stopReason ?? "unknown" })}`
+              : ` ${t("trustedRangeComplete")}`}
+          </p>}
+          {contentCarving.continuation && <p role="status">
+            {t("continuationSummary", {
+              passes: contentCarving.continuation.passes,
+              maximum: contentCarving.continuation.maxPasses,
+              pending: contentCarving.continuation.pendingRangeCount,
+              reason: contentCarving.continuation.stopReason,
+            })}
+          </p>}
+        </section>}
+        {contentCarving?.pngFragmentReconstruction && <section aria-label={t("pngReconstructionHeading")}>
+          <h3>{t("pngReconstructionHeading")}</h3>
+          <ValidationNotice role="status" $inconclusive={!contentCarving.pngFragmentReconstruction.signatureDiscoveryComplete
+            || contentCarving.pngFragmentReconstruction.stopReason !== "search_exhausted"}>
+            {t("pngReconstructionSummary", {
+              signatures: contentCarving.pngFragmentReconstruction.signaturesExamined,
+              total: contentCarving.pngFragmentReconstruction.signaturesSeen,
+              candidates: contentCarving.pngFragmentReconstruction.candidatesFound,
+              hypotheses: contentCarving.pngFragmentReconstruction.structuralHypotheses,
+              combinations: contentCarving.pngFragmentReconstruction.combinationsEvaluated,
+              bytes: contentCarving.pngFragmentReconstruction.bytesRead.toLocaleString(language),
+              seconds: contentCarving.pngFragmentReconstruction.elapsedSeconds.toFixed(2),
+              stop: contentCarving.pngFragmentReconstruction.stopReason,
+            })}
+          </ValidationNotice>
+          <p>{t("pngReconstructionIntegrityNotice")}</p>
         </section>}
         {recycleBinRecovery && <section aria-label={t("recycleBinRecoveryHeading")}>
           <h3>{t("recycleBinRecoveryHeading")}</h3>
