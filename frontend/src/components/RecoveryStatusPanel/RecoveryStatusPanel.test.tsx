@@ -37,7 +37,7 @@ describe("RecoveryStatusPanel", () => {
     expect(progress.getAttribute("aria-valuenow")).toBe("25");
     expect(progress.getAttribute("aria-valuetext")).toBe("25%");
     expect(progress.querySelector("span")?.textContent).toBe("25%");
-    expect((progress.firstElementChild as HTMLElement).style.height).toBe("1.875rem");
+    expect((progress.firstElementChild as HTMLElement).style.height).toBe("3rem");
     fireEvent.click(screen.getByRole("button", { name: "Retry scan" }));
     expect(onRetryScan).toHaveBeenCalledTimes(1);
   });

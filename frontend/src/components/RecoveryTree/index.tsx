@@ -80,7 +80,7 @@ export const RecoveryTree = React.memo<RecoveryTreeProps>(({
     pendingFocusIndex.current = null;
   }, [activeIndex, window.startIndex, window.endIndex]);
 
-  if (!flattened.nodes.length) return <EmptyState title={t("noFiles")} />;
+  if (!flattened.nodes.length) return <div role="status"><EmptyState title={t("noFiles")} /></div>;
 
   const focusIndex = (requestedIndex: number) => {
     const index = Math.max(0, Math.min(flattened.nodes.length - 1, requestedIndex));

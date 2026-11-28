@@ -14,7 +14,7 @@ describe("DiskAuditOverlay", () => {
     </DiskAuditOverlay>);
 
     expect(screen.getByRole("dialog", { name: "Disk audit details" }).getAttribute("aria-modal")).toBe("true");
-    expect(screen.getByRole("dialog").id).toBe("audit-dialog");
+    expect(document.getElementById("audit-dialog")?.contains(screen.getByRole("dialog"))).toBe(true);
     expect(screen.getByText("Audit results")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -31,6 +31,8 @@ describe("DiskAuditOverlay", () => {
 
     const backdrop = screen.getByRole("dialog").parentElement;
     if (!backdrop) throw new Error("Dialog backdrop was not rendered");
+    fireEvent.mouseDown(screen.getByText("Audit results"));
+    expect(onClose).toHaveBeenCalledTimes(1);
     fireEvent.mouseDown(backdrop);
     expect(onClose).toHaveBeenCalledTimes(2);
   });
