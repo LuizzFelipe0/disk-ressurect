@@ -18,15 +18,16 @@ export const RecoveryStep: React.FC<RecoveryStageProps> = ({ recovery, t, onBack
         onChange={recovery.setOutputDirectory} /></FormField></DestinationInput>
       <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
         onClick={() => void recovery.chooseOutputDirectory()}>{t("chooseFolder")}</Button>
-      <InfoButton description={t(recovery.rawImage ? "rawDestinationNotice" : "physicalDestinationNotice")}
-        label={t("moreInfo")} />
+      <InfoButton description={t("physicalDestinationNotice")} label={t("moreInfo")} />
     </DestinationRow>
   </Card>
   <StepActions>
     <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
       onClick={onBack}>← {t("back")}</Button>
     <Button className="brand-button--success" variant="success" size="md"
-      disabled={recovery.busy || !recovery.outputDirectory.trim() || !recovery.extensions.length}
+      disabled={recovery.busy || !recovery.outputDirectory.trim()
+        || (recovery.selectedIds.size > 0 && !recovery.extensions.length)
+        || !recovery.selectedIds.size}
       onClick={() => void recovery.recover()}>{recovery.busy ? t("recovering") : t("recoverSelected")}</Button>
   </StepActions>
 </>;

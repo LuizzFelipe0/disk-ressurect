@@ -28,6 +28,9 @@ export function useRecoveryController() {
   const [recoveryResult, setRecoveryResult] = useState<RecoveryResult | null>(null);
   const catalogBuildRequest = useRef(0);
   const recoveryCommandInFlight = useRef(false);
+  const activeCatalogOperationId = useRef<string | null>(null);
+  const [catalogBuildActive, setCatalogBuildActive] = useState(false);
+  const [catalogCancellationRequested, setCatalogCancellationRequested] = useState(false);
 
   const clearCatalog = useCallback(() => {
     clearBrowser();
@@ -55,7 +58,7 @@ export function useRecoveryController() {
     recoveryCommandInFlight.current = true;
     setBusy(true);
     const generation = getCatalogGeneration();
-    if (!source.rawImage && !await ensureAdministrator()) {
+    if (!await ensureAdministrator()) {
       recoveryCommandInFlight.current = false;
       setBusy(false);
       return false;
@@ -69,6 +72,9 @@ export function useRecoveryController() {
     const catalogGeneration = getCatalogGeneration();
     const requestId = ++catalogBuildRequest.current;
     const operationId = beginOperation();
+    activeCatalogOperationId.current = operationId;
+    setCatalogBuildActive(true);
+    setCatalogCancellationRequested(false);
     setError("");
     setProgress(null);
     setStatus(includeOrphaned
@@ -94,10 +100,26 @@ export function useRecoveryController() {
     } finally {
       if (requestId === catalogBuildRequest.current) setBusy(false);
       finishOperation(operationId);
+      activeCatalogOperationId.current = null;
+      setCatalogBuildActive(false);
+      setCatalogCancellationRequested(false);
       recoveryCommandInFlight.current = false;
     }
-  }, [source.selectedVolumeId, source.rawImage, ensureAdministrator, clearCatalog, beginOperation,
+  }, [source.selectedVolumeId, ensureAdministrator, clearCatalog, beginOperation,
     finishOperation, getCatalogGeneration, setCatalog, setRootParents, setBusy, setError, setProgress, setStatus]);
+
+  const cancelCatalogBuild = useCallback(async () => {
+    const operationId = activeCatalogOperationId.current;
+    if (!operationId) return false;
+    try {
+      const result = await recoveryService.cancelOperation(operationId);
+      if (result.accepted) setCatalogCancellationRequested(true);
+      return result.accepted;
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      return false;
+    }
+  }, [setError, setStatus]);
 
   const chooseOutputDirectory = useCallback(async () => {
     try {
@@ -109,8 +131,9 @@ export function useRecoveryController() {
   }, [setError]);
 
   const recover = useCallback(async () => {
-    if (!selection.selectedIds.size || !extensions.length || !outputDirectory.trim()) {
-      setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
+    if (!selection.selectedIds.size
+        || (selection.selectedIds.size > 0 && !extensions.length) || !outputDirectory.trim()) {
+    setError(!outputDirectory.trim() ? "Choose a destination folder to continue." : "Select files and at least one file type.");
       return;
     }
     if (recoveryCommandInFlight.current) return;
@@ -118,7 +141,7 @@ export function useRecoveryController() {
     setBusy(true);
     const sourceGeneration = source.getGeneration();
     const catalogGeneration = getCatalogGeneration();
-    if (!source.rawImage && !await ensureAdministrator()) {
+    if (!await ensureAdministrator()) {
       recoveryCommandInFlight.current = false;
       setBusy(false);
       return;
@@ -140,7 +163,7 @@ export function useRecoveryController() {
       });
       if (sourceGeneration !== source.getGeneration() || catalogGeneration !== getCatalogGeneration()) return;
       setRecoveryResult(result);
-      setStatus(`Completed: ${result.recoveredCount}/${result.candidateCount} files recovered.`);
+      setStatus(`Completed: ${result.recoveredCount} files recovered.`);
       setProgress({ stage: "extract", completed: 1, total: 1, message: "Recovery completed." });
     } catch (cause) {
       if (sourceGeneration === source.getGeneration() && catalogGeneration === getCatalogGeneration()) {
@@ -153,7 +176,7 @@ export function useRecoveryController() {
       recoveryCommandInFlight.current = false;
     }
   }, [selection.selectedIds, selection.excludedIds, extensions, outputDirectory, minimumSizeKb,
-    source.getGeneration, source.rawImage, ensureAdministrator, setError, setBusy, setProgress, setStatus,
+    source.getGeneration, ensureAdministrator, setError, setBusy, setProgress, setStatus,
     beginOperation, finishOperation, getCatalogGeneration]);
 
   const setExtensionSelected = useCallback((extension: string, checked: boolean) => {
@@ -163,15 +186,16 @@ export function useRecoveryController() {
   }, []);
 
   return {
-    backendStatus, isAdministrator, busy, error, status, progress,
-    disks: source.disks, rawImage: source.rawImage, selectedDiskNumber: source.selectedDiskNumber,
+    backendStatus, isAdministrator, busy, error, status, progress, catalogBuildActive,
+    catalogCancellationRequested,
+    disks: source.disks, selectedDiskNumber: source.selectedDiskNumber,
     volumes: source.volumes, selectedVolumeId: source.selectedVolumeId, partitionScanCanResume,
     catalog, preview, previewLoading, searchQuery, setSearchQuery, searchResult, searchingCatalog,
     childrenById, parentById, loadingFolderIds, expandedFolderIds, toggleFolder, previewFile,
     ...selection, availableExtensions, extensions, minimumSizeKb, outputDirectory, recoveryResult,
-    refreshDisks: source.refreshDisks, selectDisk: source.selectDisk, selectRawImage: source.selectRawImage,
+    refreshDisks: source.refreshDisks, selectDisk: source.selectDisk,
     findPartitions: source.findPartitions, selectVolume: source.selectVolume, buildCatalog,
     chooseOutputDirectory, recover, setExtensionSelected, setMinimumSizeKb, setOutputDirectory,
-    ensureAdministrator, backendSessionGeneration,
+    ensureAdministrator, backendSessionGeneration, cancelCatalogBuild,
   };
 }

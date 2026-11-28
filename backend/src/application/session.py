@@ -19,6 +19,8 @@ class RecoverySession:
         self._raw_carving_checkpoints = {}
         self._raw_carving_checkpoint_bytes = 0
         self._raw_catalogs = {}
+        self._raw_range_progress = {}
+        self._raw_range_progress_lock = threading.RLock()
         self._raw_generation = 0
         self._raw_carving_lock = threading.RLock()
 
@@ -27,6 +29,38 @@ class RecoverySession:
         """Serialize raw catalog builds so one session cursor has one writer."""
         with self._raw_carving_lock:
             yield
+
+    @contextmanager
+    def catalog_scan_operation(self):
+        """Serialize bounded catalog continuation for every registered source."""
+        with self._raw_carving_lock:
+            yield
+
+    def load_scan_checkpoint(self, owner_key, identity_key):
+        """Load a cursor tied to the current session-published catalog generation."""
+        return self.load_raw_carving_checkpoint(owner_key, identity_key)
+
+    def get_scan_catalog(self, owner_key, identity_key):
+        """Return a candidate generation for a compatible source and volume scope."""
+        return self.get_raw_catalog(owner_key, identity_key)
+
+    def load_scan_range_progress(self, owner_key, scope_key):
+        """Load continuation progress for a compatible registered-source scope."""
+        return self.load_raw_range_progress(owner_key, scope_key)
+
+    def scan_catalog_capacity(self, owner_key):
+        """Return the remaining session candidate and retained-payload limits."""
+        return self.raw_catalog_capacity(owner_key)
+
+    def commit_scan_generation(
+        self, owner_key, identity_key, snapshot, checkpoint, content_reference_store,
+        range_progress=None,
+    ):
+        """Atomically publish a source-neutral session catalog generation."""
+        return self.commit_raw_catalog_generation(
+            owner_key, identity_key, snapshot, checkpoint, content_reference_store,
+            range_progress=range_progress,
+        )
 
     def load_raw_carving_checkpoint(self, owner_key, identity_key):
         """Return a cursor only when it matches the committed catalog generation."""
@@ -49,6 +83,14 @@ class RecoverySession:
             if entry is None or entry[0] != identity_key:
                 return None
             return entry[1]
+
+    def load_raw_range_progress(self, owner_key, scope_key):
+        """Return trusted-range continuation only for the matching source scope."""
+        with self._raw_range_progress_lock:
+            entry = self._raw_range_progress.get(owner_key)
+            if entry is None or entry[0] != scope_key:
+                return None
+            return dict(entry[1])
 
     def raw_catalog_generation(self, owner_key, identity_key):
         with self._raw_carving_lock:
@@ -73,6 +115,7 @@ class RecoverySession:
 
     def commit_raw_catalog_generation(
         self, owner_key, identity_key, snapshot, checkpoint, content_reference_store,
+        range_progress=None,
     ):
         """Atomically publish the candidate catalog, cursor and content references."""
         candidate_count, retained_bytes = self.raw_catalog_candidate_metrics(snapshot)
@@ -129,6 +172,17 @@ class RecoverySession:
                     identity_key, snapshot, generation, candidate_count, retained_bytes,
                 ),
             }
+            range_progress_entries = {
+                key: entry for key, entry in self._raw_range_progress.items()
+                if key != owner_key
+            }
+            if range_progress is not None:
+                range_progress_entries[owner_key] = (
+                    str(range_progress["scopeKey"]),
+                    {key: value for key, value in range_progress.items()
+                     if key != "scopeKey"},
+                    generation,
+                )
             checkpoint_bytes = sum(entry[2] for entry in checkpoints.values())
             # Commit the staged resolver before publishing the matching session
             # generation. All allocations and capacity checks have already passed.
@@ -136,7 +190,55 @@ class RecoverySession:
             self._raw_carving_checkpoints = checkpoints
             self._raw_carving_checkpoint_bytes = checkpoint_bytes
             self._raw_catalogs = catalogs
+            with self._raw_range_progress_lock:
+                self._raw_range_progress = range_progress_entries
             self._raw_generation = generation
+            # Publish the same candidate generation that now owns the staged
+            # content references. A later page failure must leave extraction
+            # pointed at this last successfully committed generation.
+            self.snapshot = snapshot
+            self.nodes = snapshot.catalog.nodes
+            self._node_ids_by_identity = {}
+
+    def update_raw_catalog_snapshot(self, owner_key, identity_key, expected_snapshot,
+                                    snapshot):
+        """Publish bounded cache-validation accounting for the current generation."""
+        candidate_count, retained_bytes = self.raw_catalog_candidate_metrics(snapshot)
+        with self._raw_carving_lock:
+            entry = self._raw_catalogs.get(owner_key)
+            if (entry is None or entry[0] != identity_key or entry[1] is not expected_snapshot):
+                raise RuntimeError("Raw catalog generation changed during cache validation")
+            remaining_candidates, remaining_retained_bytes = self.raw_catalog_capacity(owner_key)
+            if (candidate_count > remaining_candidates
+                    or retained_bytes > remaining_retained_bytes):
+                raise RuntimeError(
+                    "Raw session limit reached while accounting cache validation; "
+                    "the previous catalog generation was preserved."
+                )
+            self._raw_catalogs[owner_key] = (
+                entry[0], snapshot, entry[2], candidate_count, retained_bytes,
+            )
+            if self.snapshot is expected_snapshot:
+                self.snapshot = snapshot
+                self.nodes = snapshot.catalog.nodes
+                self._node_ids_by_identity = {}
+
+    def update_scan_catalog_snapshot(self, owner_key, identity_key, expected_snapshot,
+                                     snapshot):
+        """Update summary metadata without dropping its committed cursor generation."""
+        return self.update_raw_catalog_snapshot(
+            owner_key, identity_key, expected_snapshot, snapshot,
+        )
+
+    def replace_scan_catalog_snapshot(self, owner_key, expected_snapshot, snapshot):
+        """Replace a committed page summary while keeping its cursor identity."""
+        with self._raw_carving_lock:
+            entry = self._raw_catalogs.get(owner_key)
+            if entry is None or entry[1] is not expected_snapshot:
+                return False
+            return self.update_scan_catalog_snapshot(
+                owner_key, entry[0], expected_snapshot, snapshot,
+            )
 
     @staticmethod
     def raw_catalog_candidate_metrics(snapshot):
@@ -144,10 +246,16 @@ class RecoverySession:
         retained_bytes = 0
         for node in snapshot.catalog.nodes.values():
             candidate = node.candidate
-            if candidate is None or "content_carving" not in candidate.discovery_methods:
+            if candidate is None or not (
+                {"content_carving", "fragment_reconstruction"}
+                & set(candidate.discovery_methods)
+            ):
                 continue
             candidate_count += 1
             retained_bytes += int(candidate.size_bytes or 0)
+        progress = getattr(snapshot, "png_recovery_progress", None)
+        if progress is not None:
+            retained_bytes += progress.estimated_retained_bytes
         return candidate_count, retained_bytes
 
     @property
@@ -172,6 +280,8 @@ class RecoverySession:
             self._raw_carving_checkpoints.clear()
             self._raw_carving_checkpoint_bytes = 0
             self._raw_catalogs.clear()
+            with self._raw_range_progress_lock:
+                self._raw_range_progress = {}
 
     @classmethod
     def _estimate_raw_checkpoint_bytes(cls, owner_key, identity_key, checkpoint):
@@ -183,6 +293,9 @@ class RecoverySession:
             + owner_bytes
             + sys.getsizeof(identity_key)
             + len(checkpoint.signature_carry)
+            + sys.getsizeof(checkpoint.png_signature_offsets)
+            + sum(sys.getsizeof(value) for value in checkpoint.png_signature_offsets)
+            + sys.getsizeof(checkpoint.png_signature_set_truncated)
         )
 
     def register_volume(self, volume, source_id=None):

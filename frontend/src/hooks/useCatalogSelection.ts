@@ -30,5 +30,8 @@ export function useCatalogSelection(
     setExcludedIds(new Set());
   }, []);
 
-  return { selectedIds, excludedIds, toggleSelection, isSelected, selectAll, clearSelection };
+  return {
+    selectedIds, excludedIds,
+    toggleSelection, isSelected, selectAll, clearSelection,
+  };
 }

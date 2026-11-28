@@ -63,28 +63,32 @@ class DiskInventory:
     def validate_disk(
         self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+        content_carving_range_start_index=0,
     ):
         """Read and audit the entire physical disk without modifying its contents."""
         return DiskValidationAuditor(self.enumerator, self.disk_factory).validate(
             int(disk_number), progress_callback, retain_orphans_for_offset,
             orphan_scan_volume, content_carving_range_budget_bytes,
+            content_carving_range_start_index=content_carving_range_start_index,
         )
 
     def validate_disk_with_snapshot(
         self, disk_number, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
-        validation_snapshot=None,
+        validation_snapshot=None, content_carving_range_start_index=0,
     ):
         """Revalidate metadata while reusing an explicitly historical read snapshot."""
         return DiskValidationAuditor(self.enumerator, self.disk_factory).validate(
             int(disk_number), progress_callback, retain_orphans_for_offset,
             orphan_scan_volume, content_carving_range_budget_bytes,
+            content_carving_range_start_index=content_carving_range_start_index,
             validation_snapshot=validation_snapshot,
         )
 
     def validate_source(
         self, source, progress_callback=None, retain_orphans_for_offset=None,
         orphan_scan_volume=None, content_carving_range_budget_bytes=None,
+        content_carving_range_start_index=0,
     ):
         if self.source_reader_factory is None:
             raise NotImplementedError("Storage source validation is unavailable")
@@ -92,4 +96,5 @@ class DiskInventory:
             source, self.source_reader_factory, progress_callback,
             retain_orphans_for_offset, orphan_scan_volume,
             content_carving_range_budget_bytes,
+            content_carving_range_start_index=content_carving_range_start_index,
         )

@@ -64,6 +64,14 @@ def mp4():
             + box(b"mdat", b"media") + box(b"moov", b"metadata"))
 
 
+def mov():
+    def box(kind, payload):
+        return (len(payload) + 8).to_bytes(4, "big") + kind + payload
+
+    return (box(b"ftyp", b"qt  \x00\x00\x00\x00qt  ")
+            + box(b"mdat", b"media") + box(b"moov", b"metadata"))
+
+
 def compound_office(kind="word"):
     free, eoc, fat_sector = 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFFFD
     data = bytearray(512 * 19)
@@ -234,6 +242,7 @@ class RawContentCarverTests(unittest.TestCase):
             (office_zip("xl/workbook.xml"), ".xlsx"),
             (office_zip("xl/workbook.xml", ("xl/vbaProject.bin",)), ".xlsm"),
             (mp4(), ".mp4"),
+            (mov(), ".mov"),
         )
         for candidate, extension in candidates:
             with self.subTest(extension=extension), tempfile.TemporaryDirectory() as directory:
@@ -259,6 +268,21 @@ class RawContentCarverTests(unittest.TestCase):
         stats = {item.extension: item for item in result.format_stats}
         self.assertEqual(stats[".mp4"].candidates_examined, 1)
         self.assertEqual(stats[".mp4"].files_found, 1)
+        self.assertEqual(stats[".mp4"].candidate_bytes_read, len(candidate))
+
+    def test_carves_quicktime_mov_with_the_shared_bounded_iso_bmff_reader(self):
+        disk = FakeDisk(size=4096)
+        candidate = mov()
+        disk.data[509:509 + len(candidate)] = candidate
+
+        result = RawContentCarver(disk, chunk_size=512).scan([(0, disk.size)])
+
+        self.assertEqual([(item.offset, item.extension, item.data) for item in result.files],
+                         [(509, ".mov", candidate)])
+        stats = {item.extension: item for item in result.format_stats}
+        self.assertEqual(stats[".mp4"].candidates_examined, 1)
+        self.assertEqual(stats[".mp4"].files_found, 1)
+        self.assertEqual(stats[".mp4"].candidate_bytes_read, len(candidate))
 
     def test_finds_rtf_across_scan_boundary_and_cfb_office_candidate(self):
         fixtures = (
@@ -547,6 +571,31 @@ class RawContentCarverTests(unittest.TestCase):
         self.assertTrue(scan_reads)
         self.assertNotIn(0, [offset for offset, _ in disk.reads])
         self.assertGreater(resumed.candidate_restore_bytes_read, 0)
+
+    def test_png_signature_offsets_survive_checkpoint_resume_only_when_enabled(self):
+        disk = FakeDisk(size=2048)
+        signature = b"\x89PNG\r\n\x1a\n"
+        disk.data[:len(signature)] = signature
+        disk.data[600:600 + len(signature)] = signature
+
+        first = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)], collect_png_signatures=True,
+        )
+        self.assertEqual((0,), first.png_signature_offsets)
+        self.assertEqual((0,), first.checkpoint.png_signature_offsets)
+
+        resumed = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)], resume_checkpoint=first.checkpoint,
+            collect_png_signatures=True,
+        )
+        self.assertEqual((0, 600), resumed.png_signature_offsets)
+        self.assertEqual((0, 600), resumed.checkpoint.png_signature_offsets)
+
+        default = RawContentCarver(disk, chunk_size=512, max_scan_bytes=512).scan(
+            [(0, disk.size)],
+        )
+        self.assertEqual((), default.png_signature_offsets)
+        self.assertNotEqual(first.checkpoint.scan_profile, default.checkpoint.scan_profile)
 
     def test_raising_candidate_limit_resumes_after_saved_candidates_without_duplicates(self):
         disk = FakeDisk(size=8192)

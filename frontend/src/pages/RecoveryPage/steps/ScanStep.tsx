@@ -20,6 +20,8 @@ interface ScanStepProps extends RecoveryStepProps {
   setMaxCarvedRetainedMiB: (value: CarvingOptions["maxRetainedMiB"]) => void;
   maxCandidateReadMiBPerFormat: CarvingOptions["maxCandidateReadMiBPerFormat"];
   setMaxCandidateReadMiBPerFormat: (value: CarvingOptions["maxCandidateReadMiBPerFormat"]) => void;
+  enablePngFragmentReconstruction: boolean;
+  setEnablePngFragmentReconstruction: (value: boolean) => void;
   onBack: () => void;
   onStart: () => void;
 }
@@ -29,9 +31,10 @@ export const ScanStep: React.FC<ScanStepProps> = ({
   scanBudgetGiB, setScanBudgetGiB, maxCarvedFiles, setMaxCarvedFiles,
   maxCarvedRetainedMiB, setMaxCarvedRetainedMiB,
   maxCandidateReadMiBPerFormat, setMaxCandidateReadMiBPerFormat, onBack, onStart,
+  enablePngFragmentReconstruction, setEnablePngFragmentReconstruction,
 }) => {
-  const sourceName = recovery.rawImage?.displayName
-    ?? recovery.disks.find((disk) => String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "";
+  const sourceName = recovery.disks.find((disk) =>
+    String(disk.number) === recovery.selectedDiskNumber)?.displayName ?? "";
   const volumeName = recovery.volumes.find((volume) => volume.id === recovery.selectedVolumeId)?.name;
 
   return <>
@@ -50,6 +53,13 @@ export const ScanStep: React.FC<ScanStepProps> = ({
             disabled={recovery.busy || !includeOrphaned}
             onChange={(event) => setForceFreshValidation(event.target.checked)} />{t("forceFreshValidation")}</label>
           <InfoButton description={t("forceFreshValidationInfo")} label={t("moreInfo")} />
+        </ScanOption>
+        <ScanOption>
+          <label><input type="checkbox" checked={enablePngFragmentReconstruction}
+            disabled={recovery.busy || !includeOrphaned}
+            onChange={(event) => setEnablePngFragmentReconstruction(event.target.checked)} />
+            {t("enablePngFragmentReconstruction")}</label>
+          <InfoButton description={t("pngFragmentReconstructionInfo")} label={t("moreInfo")} />
         </ScanOption>
         <CarvingBudgetControls>
           <FormField label={t("carvingScanBudget")}>
@@ -93,6 +103,10 @@ export const ScanStep: React.FC<ScanStepProps> = ({
     <StepActions>
       <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
         onClick={onBack}>← {t("back")}</Button>
+      {recovery.catalogBuildActive && <Button className="brand-button--ghost" variant="ghost" size="md"
+        disabled={recovery.catalogCancellationRequested}
+        onClick={() => void recovery.cancelCatalogBuild()}>
+        {t(recovery.catalogCancellationRequested ? "cancelRequested" : "cancelScan")}</Button>}
       <Button className="brand-button--primary" variant="primary" size="md" disabled={recovery.busy}
         onClick={onStart}>{recovery.busy ? t("scanInProgress") : t("startScan")}</Button>
     </StepActions>

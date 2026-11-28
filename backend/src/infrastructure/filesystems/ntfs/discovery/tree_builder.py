@@ -134,6 +134,8 @@ class TreeBuilder:
             if result.status == "resolved":
                 record.data_runs = list(result.data_runs)
                 record.data_is_complete = True
+                record.data_attribute_flags = result.data_attribute_flags
+                record.data_unsupported_reason = None
                 self.data_extent_resolution_counts["resolved"] += 1
             elif result.status == "inconclusive":
                 self.data_extent_resolution_counts["inconclusive"] += 1

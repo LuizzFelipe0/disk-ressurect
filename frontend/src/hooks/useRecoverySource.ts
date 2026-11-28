@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { recoveryService } from "../services/recoveryService";
-import type { DiskInfo, RawImageSource, VolumeInfo } from "../types/recovery";
+import type { DiskInfo, VolumeInfo } from "../types/recovery";
 import type { useRecoveryOperationState } from "./useRecoveryOperationState";
 
 const LAST_SELECTED_DISK_KEY = "disk-ressurect:last-selected-disk";
@@ -24,7 +24,6 @@ export function useRecoverySource(
     setPartitionScanCanResume, ensureAdministrator, beginOperation, finishOperation,
   } = operation;
   const [disks, setDisks] = useState<DiskInfo[]>([]);
-  const [rawImage, setRawImage] = useState<RawImageSource | null>(null);
   const [selectedDiskNumber, setSelectedDiskNumber] = useState("");
   const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
   const [selectedVolumeId, setSelectedVolumeId] = useState("");
@@ -36,7 +35,6 @@ export function useRecoverySource(
   const refreshDisks = useCallback(async (preserveCurrentSource = true) => {
     if (!preserveCurrentSource) {
       sourceGeneration.current += 1;
-      setRawImage(null);
       setSelectedDiskNumber("");
       setSelectedVolumeId("");
       setVolumes([]);
@@ -101,7 +99,6 @@ export function useRecoverySource(
     appliedBackendGeneration.current = backendSessionGeneration;
     sourceGeneration.current += 1;
     partitionRequestId.current += 1;
-    setRawImage(null);
     setSelectedDiskNumber("");
     setSelectedVolumeId("");
     setVolumes([]);
@@ -117,7 +114,6 @@ export function useRecoverySource(
     if (selectedDisk) window.localStorage.setItem(LAST_SELECTED_DISK_KEY, diskCacheIdentity(selectedDisk));
     else window.localStorage.removeItem(LAST_SELECTED_DISK_KEY);
     setPartitionScanCanResume(Boolean(selectedDisk?.deepScanResumeAvailable));
-    setRawImage(null);
     sourceGeneration.current += 1;
     setSelectedDiskNumber(diskNumber);
     setVolumes(savedPartitions);
@@ -133,36 +129,13 @@ export function useRecoverySource(
     }
   }, [clearCatalog, disks, setError, setPartitionScanCanResume, setStatus]);
 
-  const selectRawImage = useCallback(async () => {
-    const requestGeneration = sourceGeneration.current;
-    setBusy(true);
-    setError("");
-    try {
-      const selected = await recoveryService.selectRawImage();
-      if (!selected || requestGeneration !== sourceGeneration.current) return;
-      sourceGeneration.current += 1;
-      setRawImage(selected);
-      setSelectedDiskNumber("");
-      setSelectedVolumeId("");
-      setVolumes([]);
-      setPartitionScanCanResume(false);
-      clearCatalog();
-      setStatus("Raw image selected. Search it for NTFS partitions.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-      setStatus("Unable to open the selected raw image.");
-    } finally {
-      setBusy(false);
-    }
-  }, [clearCatalog, setBusy, setError, setPartitionScanCanResume, setStatus]);
-
   const findPartitions = useCallback(async (deepScan: boolean, resume = false) => {
-    if ((!selectedDiskNumber && !rawImage) || partitionScanInFlight.current) return;
+    if (!selectedDiskNumber || partitionScanInFlight.current) return;
     partitionScanInFlight.current = true;
     setBusy(true);
     const generation = sourceGeneration.current;
     const requestId = ++partitionRequestId.current;
-    if (!rawImage && !await ensureAdministrator()) {
+    if (!await ensureAdministrator()) {
       partitionScanInFlight.current = false;
       setBusy(false);
       return;
@@ -178,21 +151,10 @@ export function useRecoverySource(
     if (!resume) setPartitionScanCanResume(false);
     setStatus(resume ? "Resuming lost-partition scan…" : deepScan ? "Searching for lost NTFS partitions…" : "Scanning partitions…");
     try {
-      const foundVolumes = rawImage
-        ? await recoveryService.listSourcePartitions(rawImage.sourceId, deepScan, operationId)
-        : await recoveryService.listPartitions(Number(selectedDiskNumber), deepScan, resume, operationId);
+      const foundVolumes = await recoveryService.listPartitions(
+        Number(selectedDiskNumber), deepScan, resume, operationId,
+      );
       if (requestId !== partitionRequestId.current || generation !== sourceGeneration.current) return;
-      if (rawImage) {
-        setVolumes(foundVolumes);
-        setSelectedVolumeId("");
-        clearCatalog();
-        setStatus(foundVolumes.length
-          ? `${foundVolumes.length} NTFS volume(s) found in the selected image.`
-          : deepScan
-            ? "Deep scan found no readable NTFS volumes in the selected image."
-            : "No readable NTFS volumes were found in the selected image.");
-        return;
-      }
       const diskNumber = Number(selectedDiskNumber);
       const disk = disks.find((item) => item.number === diskNumber);
       const savedDeepScan = disk?.cachedPartitions ?? [];
@@ -239,7 +201,7 @@ export function useRecoverySource(
       finishOperation(operationId);
       partitionScanInFlight.current = false;
     }
-  }, [selectedDiskNumber, rawImage, disks, clearCatalog, ensureAdministrator,
+  }, [selectedDiskNumber, disks, clearCatalog, ensureAdministrator,
     beginOperation, finishOperation, setBusy, setError, setProgress, setPartitionScanCanResume, setStatus]);
 
   const selectVolume = useCallback((volumeId: string) => {
@@ -251,7 +213,7 @@ export function useRecoverySource(
   const getGeneration = useCallback(() => sourceGeneration.current, []);
 
   return {
-    disks, rawImage, selectedDiskNumber, volumes, selectedVolumeId,
-    refreshDisks, selectDisk, selectRawImage, findPartitions, selectVolume, getGeneration,
+    disks, selectedDiskNumber, volumes, selectedVolumeId,
+    refreshDisks, selectDisk, findPartitions, selectVolume, getGeneration,
   };
 }

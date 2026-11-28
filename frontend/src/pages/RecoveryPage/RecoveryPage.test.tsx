@@ -11,12 +11,14 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     backendStatus: "ready",
     isAdministrator: true,
     busy: false,
+    catalogBuildActive: false,
+    catalogCancellationRequested: false,
+    cancelCatalogBuild: vi.fn(),
     error: "",
     status: "Catalog ready",
     progress: null,
     partitionScanCanResume: false,
     disks: [],
-    rawImage: null,
     selectedDiskNumber: "1",
     volumes: [],
     selectedVolumeId: "1:4096",
@@ -65,6 +67,35 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
         fileCountCap: 256,
         formatsAttempted: [".jpg", ".png", ".pdf"],
         validationScope: "contiguous_structure_and_signature",
+        stopReason: "range_collection_truncated",
+        rangePage: {
+          observedRangeCount: 3, retainedRangeCount: 1, pendingRangeCount: 2,
+          collectionScopeComplete: false, scanScopeComplete: true, byteLimitReached: false,
+        },
+        pngFragmentReconstruction: {
+          enabled: true,
+          strategy: "aligned_complete_idat_chunks",
+          signaturesSeen: 2,
+          signaturesExamined: 2,
+          signatureDiscoveryComplete: true,
+          candidatesFound: 1,
+          structuralHypotheses: 1,
+          signaturesRejected: 0,
+          combinationsEvaluated: 8,
+          bytesRead: 4096,
+          elapsedSeconds: 0.25,
+          retainedBytesEstimate: 1024,
+          retainedMemoryDefinition: "Synthetic retained estimate",
+          stopReason: "search_exhausted",
+          searchScope: "complete aligned IDAT chunks",
+          integrity: "unknown_without_independent_original_hash",
+          hypothesesByStatus: { unique_hypothesis_in_scope: 1 },
+          limits: {
+            combinationsPerPass: 64, passes: 4, combinations: 256,
+            bytesReadPerPass: 8388608, bytesRead: 33554432, candidateBytes: 2097152,
+            secondsPerPass: 2, seconds: 8, retainedBytes: 16777216,
+          },
+        },
       },
       lowConfidenceCarving: {
         bitmapUnobserved: {
@@ -146,7 +177,6 @@ const { recovery, treeRenderCount } = vi.hoisted(() => ({
     toggleSelection: vi.fn(),
     previewFile: vi.fn(),
     ensureAdministrator: vi.fn(),
-    selectRawImage: vi.fn(),
   },
   treeRenderCount: { value: 0 },
 }));
@@ -182,15 +212,15 @@ const goToCatalog = () => fireEvent.click(screen.getByRole("button", { name: "4 
 const goToScan = () => fireEvent.click(screen.getByRole("button", { name: "3 Varredura" }));
 
 describe("RecoveryPage audit details", () => {
-  it("offers raw image selection through the Electron file picker", () => {
+  it("offers cancellation while a catalog scan is running", () => {
+    recovery.catalogBuildActive = true;
+    recovery.catalogCancellationRequested = false;
+    recovery.cancelCatalogBuild = vi.fn();
     renderRecoveryPage();
-    fireEvent.click(screen.getByRole("button", { name: "Abrir imagem raw…" }));
-    expect(recovery.selectRawImage).toHaveBeenCalledOnce();
-  });
-
-  it("opens the image picker when reached from the raw-image homepage action", async () => {
-    renderRecoveryPage("/recovery?source=image");
-    await waitFor(() => expect(recovery.selectRawImage).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: /Continuar/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar varredura" }));
+    expect(recovery.cancelCatalogBuild).toHaveBeenCalledOnce();
+    recovery.catalogBuildActive = false;
   });
 
   it("connects the visible scan, catalog and recovery steps to backend operations", async () => {
@@ -444,8 +474,27 @@ describe("RecoveryPage audit details", () => {
 
     expect(recovery.buildCatalog).toHaveBeenCalledWith(true, {
       scanBudgetGiB: 64, maxFiles: 16384, maxRetainedMiB: 512,
-      maxCandidateReadMiBPerFormat: 1024,
+      maxCandidateReadMiBPerFormat: 1024, enablePngFragmentReconstruction: false,
     }, true);
+  });
+
+  it("sends the opt-in PNG reconstruction setting through the scan request", () => {
+    recovery.buildCatalog = vi.fn();
+    renderRecoveryPage();
+    goToScan();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Reconstruir PNGs/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Iniciar varredura" }));
+    expect(recovery.buildCatalog).toHaveBeenCalledWith(true, expect.objectContaining({
+      enablePngFragmentReconstruction: true,
+    }), true);
+  });
+
+  it("does not expose partial PNG recovery controls or results", () => {
+    renderRecoveryPage();
+    goToScan();
+    expect(screen.queryByRole("checkbox", { name: /recortes parciais.*PNG/i })).toBeNull();
+    goToCatalog();
+    expect(screen.queryByRole("heading", { name: /parcial.*PNG/i })).toBeNull();
   });
 
   it("keeps audit results out of Found Files until the report overlay is opened and restores trigger focus", async () => {
@@ -465,8 +514,13 @@ describe("RecoveryPage audit details", () => {
     expect(within(dialog).getByText(/A auditoria do disco inteiro é inconclusiva/)).toBeTruthy();
     expect(within(dialog).getByText(/Registros órfãos por status de alocação/)).toBeTruthy();
     expect(within(dialog).getByText(/O carving encontrou/)).toBeTruthy();
+    expect(within(dialog).getByText(/examinou 1 de 3 faixas elegíveis; 2 continuam pendentes/)).toBeTruthy();
+    expect(within(dialog).getByText(/escopo da busca está incompleto/)).toBeTruthy();
     expect(within(dialog).getByText(/\.jpg: 0 candidato\(s\) encontrado\(s\), 12 candidato\(s\) examinado\(s\)/)).toBeTruthy();
     expect(within(dialog).getByText(/Limites atingidos neste formato: leitura de candidatos/)).toBeTruthy();
+    expect(within(dialog).getByRole("heading", { name: "Resumo da reconstrução PNG" })).toBeTruthy();
+    expect(within(dialog).getByText(/Assinaturas examinadas: 2\/2/)).toBeTruthy();
+    expect(within(dialog).getByText(/validação estrutural não comprova/)).toBeTruthy();
     expect(within(dialog).getByText(/Candidatos encontrados por carving de baixa confiança/)).toBeTruthy();
     expect(within(dialog).getByRole("heading", { name: "Recuperação pela Lixeira do Windows" })).toBeTruthy();
     expect(within(dialog).getByText(/1 atalho\(s\) de recuperação adicionado/)).toBeTruthy();

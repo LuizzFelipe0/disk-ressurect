@@ -1,6 +1,8 @@
 export type {
   CarvingOptions,
   ContentCarvingSummary,
+  FragmentReconstructionEvidence,
+  PNGFragmentReconstructionSummary,
   BackendRuntimeStatus,
   CatalogInfo,
   CatalogNode,
@@ -10,7 +12,6 @@ export type {
   ProgressInfo,
   PrivilegeStatus,
   RecoveryResult,
-  RawImageSource,
   VolumeInfo,
 } from "../../electron/contracts";
 

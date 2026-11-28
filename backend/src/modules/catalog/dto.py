@@ -10,6 +10,7 @@ class CarvingOptionsDto:
     max_files: int = 16384
     max_retained_mib: int = 512
     max_candidate_read_mib_per_format: int = 1024
+    enable_png_fragment_reconstruction: bool = False
 
     SCAN_BUDGETS_GIB = (1, 4, 16, 64)
     FILE_COUNT_LIMITS = (256, 512, 1024, 2048, 4096, 8192, 16384)
@@ -41,12 +42,21 @@ class CarvingOptionsDto:
             raise ValueError(
                 "carvingOptions.maxCandidateReadMiBPerFormat must be one of 256, 512 or 1024"
             )
+        enable_png_fragment_reconstruction = payload.get(
+            "enablePngFragmentReconstruction", False,
+        )
+        if not isinstance(enable_png_fragment_reconstruction, bool):
+            raise ValueError("carvingOptions.enablePngFragmentReconstruction must be a boolean")
         unknown = set(payload) - {
-            "scanBudgetGiB", "maxFiles", "maxRetainedMiB", "maxCandidateReadMiBPerFormat",
+            "scanBudgetGiB", "maxFiles", "maxRetainedMiB",
+            "maxCandidateReadMiBPerFormat", "enablePngFragmentReconstruction",
         }
         if unknown:
             raise ValueError("carvingOptions contains unsupported fields")
-        return cls(scan_budget_gib, max_files, max_retained_mib, candidate_read_mib_per_format)
+        return cls(
+            scan_budget_gib, max_files, max_retained_mib,
+            candidate_read_mib_per_format, enable_png_fragment_reconstruction,
+        )
 
 
 @dataclass(frozen=True)
@@ -130,6 +140,7 @@ class CatalogNodeDto:
     data_extent_resolution: str | None = None
     data_extent_resolution_reason: str | None = None
     data_extent_count: int | None = None
+    fragment_reconstruction: dict | None = None
 
     def to_dict(self):
         result = {
@@ -164,6 +175,8 @@ class CatalogNodeDto:
             result["dataExtentResolutionReason"] = self.data_extent_resolution_reason
         if self.data_extent_count is not None:
             result["dataExtentCount"] = self.data_extent_count
+        if self.fragment_reconstruction is not None:
+            result["fragmentReconstruction"] = self.fragment_reconstruction
         if self.ancestor_ids is not None:
             result["ancestorIds"] = list(self.ancestor_ids)
         return result

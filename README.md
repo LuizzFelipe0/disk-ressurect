@@ -11,7 +11,7 @@ Unlike basic file carvers that recover files without names, this engine reconstr
 * Virtual File System (VFS): Reads the $MFT and mounts the original folder structure in memory before extraction.
 * Deleted and orphaned MFT entries: The catalog includes deleted records in the mapped MFT. An opt-in scan searches outside those mapped fragments for deleted records with complete, supported file data.
 * NTFS recovery evidence: MFT record numbers and parent sequences are checked, orphan data runs are compared with `$Bitmap`, and known file-header mismatches are excluded from the orphan list.
-* Bounded content carving: When the selected-volume `$Bitmap` is valid, the opt-in workflow searches trusted free ranges for contiguous JPEG, PNG, PDF, OOXML Office (`.docx`, `.docm`, `.xlsx`, `.xlsm`), MP4, RTF and legacy CFB Office (`.doc`, `.xls`) candidates. Separate low-confidence passes target orphan MFT data runs whose allocation bits were not observed or may describe reused data. Generated names and format checks do not prove that files are deleted or fully recoverable.
+* Bounded content carving: When the selected-volume `$Bitmap` is valid, the opt-in workflow searches trusted free ranges for contiguous JPEG, PNG, PDF, OOXML Office (`.docx`, `.docm`, `.xlsx`, `.xlsm`), MP4 and ftyp-branded QuickTime MOV, RTF and legacy CFB Office (`.doc`, `.xls`) candidates. Separate low-confidence passes target orphan MFT data runs whose allocation bits were not observed or may describe reused data. Generated names and format checks do not prove that files are deleted or fully recoverable.
 * Smart Header Validation: Reads physical file signatures (magic numbers) during extraction to skip corrupted or overwritten files.
 * Lost-partition discovery: Searches physical media for validated NTFS structures when the partition table is missing.
 * Full-disk validation evidence: A read-only backend audit records disk identity, byte-range coverage, partition-table checks, filesystem signatures, and NTFS boot-sector, MFT mirror, deleted-record, and `$Bitmap` findings.
@@ -76,7 +76,7 @@ The physical-disk cache remains version 2 and its key is unchanged. Raw-image so
 
 ### Frontend navigation and session lifecycle
 
-The Electron renderer uses React Router's `HashRouter`. The homepage offers physical storage and raw-image entry points. The recovery route keeps one in-memory controller for a horizontal, gated workflow: source and partitions, scan options, catalog and preview, then destination and extraction. Each stage uses the same backend operations as before; navigating between stages does not rebuild the catalog.
+The Electron renderer uses React Router's `HashRouter`. The homepage opens the physical-storage recovery workflow. The recovery route keeps one in-memory controller for a horizontal, gated workflow: source and partitions, scan options, catalog and preview, then destination and extraction. Each stage uses the same backend operations as before; navigating between stages does not rebuild the catalog.
 
 ```text
 frontend/src/
@@ -90,14 +90,14 @@ frontend/src/
 
 | Route | Page responsibility |
 | --- | --- |
-| `/` | Homepage with entry points for physical disks or raw images |
+| `/` | Homepage for the physical-disk recovery workflow |
 | `/recovery` | Source/partition selection, scan settings, catalog/preview and safe extraction as gated steps |
 
 There is no `AppLayout` or app context. `RecoveryPage` owns the controller for the active recovery workflow; focused hooks keep catalog browsing, hierarchical selection, and backend operation/progress subscriptions out of the page's rendering logic. Shared header, footer and step navigation components keep the visual shell consistent without creating a separate application layer. Electron IPC stays behind the typed `recoveryService` boundary.
 
-Session identity changes when the source disk, raw image, selected volume or backend process changes. Rebuilding the catalog clears candidate selections and prior results. Search, folder, preview, catalog-build, partition-scan, disk-refresh and extraction responses check their request/session generation before updating state; progress events are matched by operation ID. Candidate IDs are kept in memory for the active catalog and are not persisted across catalog reconstruction.
+Session identity changes when the source disk, selected volume or backend process changes. Rebuilding the catalog clears candidate selections and prior results. Search, folder, preview, catalog-build, partition-scan, disk-refresh and extraction responses check their request/session generation before updating state; progress events are matched by operation ID. Candidate IDs are kept in memory for the active catalog and are not persisted across catalog reconstruction.
 
-Raw images are selected through an Electron file dialog. The main process registers the selected file with the Python backend and returns an opaque source ID; renderer code does not receive filesystem access. The regular partition-discovery, audit, scan, catalog, preview and recovery commands operate on the selected source. Raw-image scans do not create persistent deep-scan checkpoints. Recovery from an image must target a different filesystem; the frontend explains this requirement and the backend remains authoritative. Physical source disks and image files stay read-only.
+The Electron interface opens physical disks through the recovery workflow. Raw-image readers remain available in backend storage for internal and synthetic consumers, but the interface no longer offers a raw-image picker. Physical source disks and any backend-provided image sources stay read-only.
 
 The UI keeps all user-visible text localized in the five supported locales. The audit report is separate from the file tree, describes bounded/inconclusive findings, restores keyboard focus when closed and does not claim that a disk is clean. Per-file recovery results are capped at 500 displayed rows and open in a separate overlay; the response indicates when more results were truncated.
 
@@ -175,7 +175,7 @@ The script builds the shared PyInstaller backend, runs backend and frontend test
 
 ## How to Use
 
-Start on the homepage, then open the recovery workspace for a physical disk or raw image. In that screen, select a source, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. Enable **Search for deleted files missing from the list** before building the catalog to search areas outside the normal file list; this can take a long time. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks. The raw-image action on the homepage opens the Electron file picker and uses the same recovery workspace.
+Start on the homepage, then open the recovery workspace for a physical disk. In that screen, select a source, discover its NTFS partitions, choose an output folder and supported file types, then select folders or individual files. Enable **Search for deleted files missing from the list** before building the catalog to search areas outside the normal file list; this can take a long time. MBR (including logical partitions) and GPT partition tables are supported. If no partition is listed, **Deep scan lost partitions** first searches up to 8 GiB from the disk start for a validated `$MFT` root record. When it can derive a consistent partition start and runlist from that record, it offers a candidate whose end is estimated at the physical disk end; the boot sector and partition-table entry may have been overwritten. If this quick path finds no usable anchor, the scanner falls back to a full read-only search for NTFS primary/backup boot sectors. That fallback may take hours on large or slow disks.
 
 Validated candidates found during deep scans are checkpointed to `deep_scan_cache.json` under Electron's per-user `userData` directory. Cache entries are keyed by disk model, capacity and serial number (or disk number when no serial is available), so candidates are restored only for the matching source disk. A scan interruption keeps already discovered candidates; completed scans replace the old candidate set. Selecting the same disk after reopening the app restores those candidates without rerunning the scan.
 
@@ -186,6 +186,7 @@ Keep the output destination on a different physical disk from the source. A lost
 Run the Python unit suite without accessing a physical disk (discovery uses synthetic media) and the React tests:
 
 ```powershell
+python -m pip install -r backend\requirements-test.txt
 .\venv\Scripts\python.exe -m unittest discover -s backend\src\tests -v
 Push-Location frontend
 npm test

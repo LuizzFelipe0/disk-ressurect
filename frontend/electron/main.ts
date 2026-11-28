@@ -137,6 +137,7 @@ class PythonBackend {
         });
       });
     };
+    if (operation === "cancel_operation") return execute();
     const result = this.operationQueue.then(execute, execute);
     this.operationQueue = result.then(() => undefined, () => undefined);
     return result;
@@ -346,19 +347,10 @@ app.whenReady().then(async () => {
     return { relaunched, cancelled: !relaunched };
   });
   ipcMain.handle("recovery:list-disks", () => backend.request("list_disks", {}));
-  ipcMain.handle("recovery:select-raw-image", async () => {
-    const result = await dialog.showOpenDialog(mainWindow!, {
-      title: "Select a raw disk image",
-      properties: ["openFile"],
-      filters: [{ name: "Raw disk images", extensions: ["img", "raw", "dd", "bin"] }],
-    });
-    if (result.canceled || !result.filePaths[0]) return null;
-    return backend.request("register_raw_image", { path: result.filePaths[0] });
-  });
-  ipcMain.handle("recovery:list-source-partitions", (_event, payload) =>
-    backend.request("list_source_partitions", payload));
   ipcMain.handle("recovery:list-partitions", (_event, payload) => backend.request("list_partitions", payload));
   ipcMain.handle("recovery:scan-catalog", (_event, payload) => backend.request("scan_catalog", payload));
+  ipcMain.handle("recovery:cancel-operation", (_event, payload) =>
+    backend.request("cancel_operation", payload));
   ipcMain.handle("recovery:search-catalog", (_event, payload) => backend.request("search_catalog", payload));
   ipcMain.handle("recovery:list-file-types", () => backend.request("list_file_types", {}));
   ipcMain.handle("recovery:catalog-children", (_event, payload) => backend.request("catalog_children", payload));

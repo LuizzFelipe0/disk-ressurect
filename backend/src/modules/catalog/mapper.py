@@ -80,6 +80,7 @@ class CatalogMapper:
                 if extent_resolution == "resolved"
                 else None
             ),
+            fragment_reconstruction=properties.get("fragmentReconstruction"),
         )
 
     @staticmethod

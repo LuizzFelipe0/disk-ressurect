@@ -101,6 +101,20 @@ class CatalogServiceTests(unittest.TestCase):
         self.assertEqual(result.status, "signature_mismatch")
         self.assertEqual(disk.reads, [(4096, 8)])
 
+    def test_orphan_header_validation_reports_unsupported_data_flags_without_reading(self):
+        disk = FakeDisk(3)
+        record = SimpleNamespace(
+            name="photo.jpg", file_size=4096,
+            resident_data=None, data_runs=((1, 1),), data_is_complete=True,
+            data_unsupported_reason="encrypted_data_is_unsupported",
+        )
+
+        result = CatalogContentValidator(disk, 0, disk.size, 4096).validate(record)
+
+        self.assertEqual(result.status, "unsupported_data_attribute")
+        self.assertEqual(result.reason, "encrypted_data_is_unsupported")
+        self.assertEqual(disk.reads, [])
+
     def test_catalog_filters_only_known_signature_mismatches(self):
         bad = SimpleNamespace()
         uncertain = SimpleNamespace()

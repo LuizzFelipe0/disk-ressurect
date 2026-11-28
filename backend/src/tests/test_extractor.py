@@ -53,6 +53,14 @@ def make_ooxml(member):
     return payload.getvalue()
 
 
+def make_mov():
+    def box(kind, payload):
+        return (len(payload) + 8).to_bytes(4, "big") + kind + payload
+
+    return (box(b"ftyp", b"qt  \x00\x00\x00\x00qt  ")
+            + box(b"mdat", b"media") + box(b"moov", b"metadata"))
+
+
 class ExtractorOfficeFormatTests(unittest.TestCase):
     def make_extractor(self, nodes, contents):
         source = StorageSource("test-source", "raw_image", "test image", 4096, 512, "unused")
@@ -64,7 +72,7 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
             source, nodes, content_reader=reader,
         )
         extractor.set_filters(
-            exts=[".pdf", ".doc", ".docx", ".docm", ".rtf", ".xls", ".xlsx", ".xlsm"],
+            exts=[".pdf", ".doc", ".docx", ".docm", ".rtf", ".xls", ".xlsx", ".xlsm", ".mov"],
             min_kb=0,
         )
         return extractor
@@ -106,6 +114,7 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
             "legacy.xls": bytes.fromhex("D0CF11E0A1B11AE1"),
             "sheet.xlsx": make_ooxml("xl/workbook.xml"),
             "macro.xlsm": make_ooxml("xl/workbook.xml"),
+            "quicktime.mov": make_mov(),
             "broken.xlsx": b"not-a-zip",
         }
         nodes = {name: make_node(name, content) for name, content in contents.items()}
@@ -114,7 +123,7 @@ class ExtractorOfficeFormatTests(unittest.TestCase):
         repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
         with tempfile.TemporaryDirectory(dir=repo_root) as output_dir:
             recovered = extractor.extract(output_dir)
-            self.assertEqual(recovered, 8)
+            self.assertEqual(recovered, 9)
             self.assertIn("available signature/container checks", extractor.results[0].reason)
             for name in list(contents)[:-1]:
                 with open(os.path.join(output_dir, name), "rb") as recovered_file:

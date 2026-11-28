@@ -3,6 +3,25 @@ from dataclasses import dataclass, replace
 
 from infrastructure.filesystems.ntfs.attributes.attributes import AttributeParser
 
+NTFS_DATA_FLAG_COMPRESSED = 0x0001
+NTFS_DATA_FLAG_ENCRYPTED = 0x4000
+NTFS_DATA_FLAG_SPARSE = 0x8000
+NTFS_DATA_KNOWN_FLAGS = (
+    NTFS_DATA_FLAG_COMPRESSED | NTFS_DATA_FLAG_ENCRYPTED | NTFS_DATA_FLAG_SPARSE
+)
+
+
+def unsupported_data_attribute_reason(flags):
+    flags = int(flags)
+    if flags & NTFS_DATA_FLAG_COMPRESSED:
+        return "compressed_data_is_unsupported"
+    if flags & NTFS_DATA_FLAG_ENCRYPTED:
+        return "encrypted_data_is_unsupported"
+    unknown_flags = flags & ~NTFS_DATA_KNOWN_FLAGS
+    if unknown_flags:
+        return f"unknown_data_attribute_flags:0x{unknown_flags:04x}"
+    return None
+
 
 @dataclass(frozen=True)
 class NTFSDataStream:
@@ -16,6 +35,8 @@ class NTFSDataStream:
     is_resident: bool
     is_complete: bool
     incomplete_reasons: tuple[str, ...] = ()
+    flags: int = 0
+    unsupported_reason: str | None = None
 
 
 class MFTRecord:
@@ -47,6 +68,8 @@ class MFTRecord:
         self.allocated_size = 0
         self.resident_data = None
         self.data_is_complete = True
+        self.data_attribute_flags = 0
+        self.data_unsupported_reason = None
         self.data_extent_resolution = "not_checked"
         self.data_extent_resolution_reason = None
         self.data_extent_count = 0
@@ -196,6 +219,8 @@ class MFTRecord:
             return
 
         non_resident = self.raw_data[curr + 8]
+        flags = struct.unpack_from("<H", self.raw_data, curr + 12)[0]
+        unsupported_reason = unsupported_data_attribute_reason(flags)
         if non_resident not in (0, 1):
             raise ValueError("Invalid named $DATA residency flag")
         if non_resident:
@@ -226,6 +251,8 @@ class MFTRecord:
                 is_resident=False,
                 is_complete=not reasons,
                 incomplete_reasons=tuple(reasons),
+                flags=flags,
+                unsupported_reason=unsupported_reason,
             )
             return
 
@@ -245,6 +272,8 @@ class MFTRecord:
             data_runs=(),
             is_resident=True,
             is_complete=True,
+            flags=flags,
+            unsupported_reason=unsupported_reason,
         )
 
     def _finalize_named_data_streams(self):
@@ -295,6 +324,10 @@ class MFTRecord:
 
     def _parse_data(self, curr, attr_len):
         non_resident = self.raw_data[curr+8]
+        self.data_attribute_flags = struct.unpack_from("<H", self.raw_data, curr + 12)[0]
+        self.data_unsupported_reason = unsupported_data_attribute_reason(
+            self.data_attribute_flags,
+        )
         if non_resident not in (0, 1):
             raise ValueError("Invalid $DATA residency flag")
         if non_resident:

@@ -1,5 +1,5 @@
 import React from "react";
-import { Button, Card, EmptyState, FormField, InfoButton, Select } from "belagio-styles-lib";
+import { Button, Card, EmptyState, FormField, Select } from "belagio-styles-lib";
 import type { RecoveryStepProps } from "./types";
 import {
   ActionRow, DeviceDetails, DeviceIcon, DeviceOption, FormControl, FormControlCaption,
@@ -20,13 +20,8 @@ export const StorageStep: React.FC<StorageStepProps> = ({ recovery, t, onContinu
       <p>{t("selectSourceDescription")}</p></PageIntro>
     <Card size="sm" variant="flat"><FormGrid>
       <FormControl>
-        <FormControlCaption>{t("sourceDisk")} {recovery.rawImage &&
-          <InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} />}</FormControlCaption>
-        {recovery.rawImage ? <DeviceOption type="button" $selected disabled>
-          <DeviceIcon aria-hidden="true">▤</DeviceIcon>
-          <DeviceDetails><strong>{sanitizeDisplayText(recovery.rawImage.displayName)}</strong></DeviceDetails>
-          <SourceSelectedTag>{t("selectedLabel")}</SourceSelectedTag>
-        </DeviceOption> : recovery.disks.length ? <SourceList>
+        <FormControlCaption>{t("sourceDisk")}</FormControlCaption>
+        {recovery.disks.length ? <SourceList>
           {recovery.disks.map((disk) => {
             const selected = String(disk.number) === recovery.selectedDiskNumber;
             return <DeviceOption key={`${disk.number}:${disk.displayName}`} type="button" $selected={selected}
@@ -41,19 +36,16 @@ export const StorageStep: React.FC<StorageStepProps> = ({ recovery, t, onContinu
       </FormControl>
       <ActionRow>
         <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
-          onClick={() => void recovery.selectRawImage()}>{t("selectRawImage")}</Button>
-        <Button className="brand-button--ghost" variant="ghost" size="md" disabled={recovery.busy}
           onClick={() => void recovery.refreshDisks()}>{t("refresh")}</Button>
         <Button className="brand-button--ghost" variant="ghost" size="md"
-          disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
+          disabled={recovery.busy || !recovery.selectedDiskNumber}
           onClick={() => void recovery.findPartitions(false)}>{t("findPartitions")}</Button>
         <Button className="brand-button--ghost" variant="ghost" size="md"
-          disabled={recovery.busy || (!recovery.selectedDiskNumber && !recovery.rawImage)}
+          disabled={recovery.busy || !recovery.selectedDiskNumber}
           onClick={() => void recovery.findPartitions(true)}>
-          {selectedDiskHasCachedScan && !recovery.rawImage ? t("deepScanAgain") : t("deepScan")}
+          {selectedDiskHasCachedScan ? t("deepScanAgain") : t("deepScan")}
         </Button>
       </ActionRow>
-      {recovery.rawImage && <p role="status">{t("rawImageSelected", { name: sanitizeDisplayText(recovery.rawImage.displayName) })}</p>}
       <FormField label={t("partitionLabel")}><Select aria-label={t("partitionLabel")} value={recovery.selectedVolumeId}
         disabled={recovery.busy || !recovery.volumes.length} onChange={recovery.selectVolume} options={[
           { value: "", label: recovery.volumes.length ? t("selectPartition") : t("searchPartitions") },

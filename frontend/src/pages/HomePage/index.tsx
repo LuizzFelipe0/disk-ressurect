@@ -5,7 +5,7 @@ import { WorkflowSteps } from "../../components/WorkflowSteps";
 import { useLanguagePreference } from "../../hooks/useLanguagePreference";
 import { translate } from "../../i18n/translations";
 import {
-  HomeContent, HomeEyebrow, HomeLayout, SourceCard, SourceGrid, SourceIcon,
+  HomeContent, HomeLayout, SourceCard, SourceGrid, SourceIcon,
   SourceOption, SourceInfo, SourceTitle, WelcomeBody, WelcomeTitle, ReadOnlyNotice,
 } from "./style";
 
@@ -20,25 +20,16 @@ export const HomePage: React.FC = () => {
         labels={[t("home"), t("storageStep"), t("scanStep"), t("catalogStep"), t("recoveryStep")]}
         ariaLabel={t("stepsNavigation")} onStepChange={() => undefined} />
       <Card size="sm" variant="flat">
-        <HomeEyebrow>DISK-RESSURECT</HomeEyebrow>
         <WelcomeTitle>{t("welcomeTitle")}</WelcomeTitle>
         <WelcomeBody>{t("welcomeBody")}</WelcomeBody>
         <SourceGrid>
           <SourceOption>
-            <SourceCard to="/recovery?source=physical" aria-label={t("startPhysical")}>
+            <SourceCard to="/recovery" aria-label={t("startPhysical")}>
               <SourceIcon aria-hidden="true">▣</SourceIcon>
               <SourceTitle>{t("startPhysical")}</SourceTitle>
               <span>{t("continue")} →</span>
             </SourceCard>
             <SourceInfo><InfoButton description={t("physicalSourceDescription")} label={t("moreInfo")} /></SourceInfo>
-          </SourceOption>
-          <SourceOption>
-            <SourceCard to="/recovery?source=image" aria-label={t("startImage")}>
-              <SourceIcon aria-hidden="true">▤</SourceIcon>
-              <SourceTitle>{t("startImage")}</SourceTitle>
-              <span>{t("continue")} →</span>
-            </SourceCard>
-            <SourceInfo><InfoButton description={t("imageSourceDescription")} label={t("moreInfo")} /></SourceInfo>
           </SourceOption>
         </SourceGrid>
         <ReadOnlyNotice role="note"><span aria-hidden="true">♧</span> {t("sourceReadOnlyNotice")}</ReadOnlyNotice>

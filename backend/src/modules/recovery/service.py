@@ -104,7 +104,8 @@ class RecoveryWorkflow:
             progress_callback=result_callback,
             excluded_nodes=excluded_nodes,
         )
-        return ExtractionSummary(recovered_count, tuple(extractor.results))
+        results = list(extractor.results)
+        return ExtractionSummary(recovered_count, tuple(results))
 
     @staticmethod
     def _snapshot_source(snapshot):

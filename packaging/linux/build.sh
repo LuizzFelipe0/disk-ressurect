@@ -15,6 +15,7 @@ if [[ ! -x "$repo_root/venv/bin/python" ]]; then
 fi
 python_exec="$repo_root/venv/bin/python"
 "$python_exec" -m pip install -r packaging/backend/requirements.txt
+"$python_exec" -m pip install -r backend/requirements-test.txt
 
 if [[ -f "$belagio_dir/package-lock.json" ]]; then
   npm ci --prefix "$belagio_dir"

@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from dataclasses import replace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from modules.catalog.entities import CatalogNode, RecoveryCatalog
@@ -53,6 +54,16 @@ class RecoveryCatalogTests(unittest.TestCase):
 
     def test_explicitly_empty_extension_selection_recovers_no_files(self):
         self.assertEqual(self.catalog.eligible_files({".jpg", ".pdf"}, extensions=set()), [])
+
+    def test_unavailable_candidate_is_not_eligible_for_recovery(self):
+        unavailable = make_node(24, "encrypted.jpg", 4096)
+        unavailable.candidate = replace(
+            unavailable.candidate, recoverability="unavailable",
+        )
+        catalog = RecoveryCatalog([unavailable])
+
+        self.assertEqual([], catalog.eligible_files({".jpg"}))
+        self.assertFalse(RecoveryCatalog.is_eligible(unavailable, {".jpg"}))
 
     def test_catalog_plan_expands_deep_folder_trees_iteratively(self):
         root = make_node(100, "root", 0, is_dir=True)

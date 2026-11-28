@@ -22,13 +22,6 @@ export const HomeContent = styled.section`
   @media (max-width: 720px) { padding: 20px 16px; }
 `;
 
-export const HomeEyebrow = styled.p`
-  margin: 0 0 10px;
-  color: ${brandColors.revive};
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: .14em;
-`;
 
 export const WelcomeTitle = styled.h1`
   margin: 0 0 8px;
@@ -47,9 +40,8 @@ export const WelcomeBody = styled.p`
 
 export const SourceGrid = styled.div`
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
-  @media (max-width: 680px) { grid-template-columns: 1fr; }
 `;
 
 export const SourceOption = styled.div`

@@ -12,7 +12,10 @@ from pathlib import Path
 
 from modules.disk.entities import CachedDeepScan
 from modules.disk.entities import NTFSVolume
-from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
+from modules.deep_scan.entities import (
+    CarvedCandidateReference,
+    CarvingCheckpoint,
+)
 from modules.storage.entities import ScanCheckpoint
 from infrastructure.filesystems.user_ownership import (
     ensure_pkexec_user_owned_directory,
@@ -109,6 +112,10 @@ class JsonDeepScanRepository:
         """Persist compact carving state separately from lost-partition scans."""
         if checkpoint is not None and not isinstance(checkpoint, CarvingCheckpoint):
             raise TypeError("checkpoint must be a CarvingCheckpoint or None")
+        serialized_checkpoint = (
+            self._serialize_carving_checkpoint(checkpoint)
+            if checkpoint is not None else None
+        )
         disk_key = self.disk_key(disk)
         volume_key = self._carving_volume_key(volume)
         if self.path is None or not self._can_persist_for(disk):
@@ -128,7 +135,7 @@ class JsonDeepScanRepository:
             if not disk_entries:
                 carving.pop(disk_key, None)
         else:
-            disk_entries[volume_key] = self._serialize_carving_checkpoint(checkpoint)
+            disk_entries[volume_key] = serialized_checkpoint
         self._write_document(document)
         return checkpoint
 
@@ -222,6 +229,8 @@ class JsonDeepScanRepository:
             "scanProfile": checkpoint.scan_profile,
             "bytesScanned": checkpoint.bytes_scanned,
             "signatureCarryHex": checkpoint.signature_carry.hex(),
+            "pngSignatureOffsets": list(checkpoint.png_signature_offsets),
+            "pngSignatureSetTruncated": checkpoint.png_signature_set_truncated,
             "candidates": [
                 {
                     "offset": item.offset,
@@ -236,6 +245,9 @@ class JsonDeepScanRepository:
     @staticmethod
     def _deserialize_carving_checkpoint(data):
         if not isinstance(data, dict):
+            return None
+        png_signature_set_truncated = data.get("pngSignatureSetTruncated", False)
+        if not isinstance(png_signature_set_truncated, bool):
             return None
         raw_candidates = data.get("candidates", [])
         if not isinstance(raw_candidates, list) or len(raw_candidates) > 10000:
@@ -260,6 +272,10 @@ class JsonDeepScanRepository:
                 candidates=candidates,
                 bytes_scanned=int(data.get("bytesScanned", 0)),
                 signature_carry=bytes.fromhex(str(data.get("signatureCarryHex", ""))),
+                png_signature_offsets=tuple(int(item) for item in data.get(
+                    "pngSignatureOffsets", (),
+                )),
+                png_signature_set_truncated=png_signature_set_truncated,
             )
         except (KeyError, TypeError, ValueError):
             return None

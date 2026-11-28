@@ -20,6 +20,20 @@ class MFTParserTests(unittest.TestCase):
         self.assertEqual(record.allocated_size, 4)
         self.assertTrue(record.data_is_complete)
 
+    def test_preserves_compressed_flag_and_marks_resident_data_unsupported(self):
+        record = MFTRecord(make_record(payload=b"data", data_flags=0x0001), 42)
+
+        self.assertTrue(record.is_valid)
+        self.assertEqual(0x0001, record.data_attribute_flags)
+        self.assertEqual("compressed_data_is_unsupported", record.data_unsupported_reason)
+        self.assertTrue(record.data_is_complete)
+
+    def test_unknown_data_attribute_flags_fail_closed(self):
+        record = MFTRecord(make_record(payload=b"data", data_flags=0x0002), 42)
+
+        self.assertTrue(record.is_valid)
+        self.assertEqual("unknown_data_attribute_flags:0x0002", record.data_unsupported_reason)
+
     def test_rejects_record_with_mismatched_update_sequence(self):
         raw = bytearray(make_record())
         raw[510:512] = b"\x00\x00"

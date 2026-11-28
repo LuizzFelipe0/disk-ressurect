@@ -154,6 +154,8 @@ class DiskReadCoverageTests(unittest.TestCase):
         self.assertEqual(result["ranges"], ((4096, 8192), (8704, 16384)))
         self.assertEqual(result["retainedBytes"], 11776)
         self.assertFalse(result["truncated"])
+        self.assertEqual(result["observedRangeCount"], 2)
+        self.assertIsNone(result["nextRangeIndex"])
 
         limited = FreeClusterRangeCollector(
             volume_start=0, cluster_size=512, cluster_count=32, max_bytes=1024,
@@ -162,6 +164,55 @@ class DiskReadCoverageTests(unittest.TestCase):
         limited_result = limited.finish()
         self.assertEqual(limited_result["ranges"], ((0, 1024),))
         self.assertTrue(limited_result["truncated"])
+        self.assertTrue(limited_result["byteLimitReached"])
+        self.assertEqual(limited_result["pendingRangeCount"], 1)
+        self.assertIsNone(limited_result["nextRangeIndex"])
+
+    def test_free_cluster_ranges_can_continue_across_bounded_windows(self):
+        bitmap = b"\x15"  # Free clusters 0, 2 and 4; intervening clusters are allocated.
+        first = FreeClusterRangeCollector(
+            4096, 512, 8, max_bytes=4096, max_ranges=1, start_range_index=0,
+        )
+        first.consume(bitmap, 0)
+        first_result = first.finish()
+
+        second = FreeClusterRangeCollector(
+            4096, 512, 8, max_bytes=4096, max_ranges=1,
+            start_range_index=first_result["nextRangeIndex"],
+        )
+        second.consume(bitmap, 0)
+        second_result = second.finish()
+
+        third = FreeClusterRangeCollector(
+            4096, 512, 8, max_bytes=4096, max_ranges=1,
+            start_range_index=second_result["nextRangeIndex"],
+        )
+        third.consume(bitmap, 0)
+        third_result = third.finish()
+
+        self.assertEqual(first_result["ranges"], ((4608, 5120),))
+        self.assertEqual(second_result["ranges"], ((5632, 6144),))
+        self.assertEqual(third_result["ranges"], ((6656, 8192),))
+        self.assertEqual(first_result["pendingRangeCount"], 2)
+        self.assertEqual(second_result["pendingRangeCount"], 1)
+        self.assertEqual(third_result["pendingRangeCount"], 0)
+        self.assertEqual(third_result["allocationEvidenceExcludedRangeCount"], 3)
+        self.assertEqual(third_result["allocationEvidenceExcludedClusterCount"], 3)
+        self.assertFalse(first_result["byteLimitReached"])
+        self.assertFalse(third_result["truncated"])
+
+    def test_free_cluster_range_window_does_not_report_truncated_without_later_range(self):
+        collector = FreeClusterRangeCollector(
+            4096, 512, 8, max_bytes=4096, max_ranges=1,
+        )
+        collector.consume(b"\x01", 0)
+
+        result = collector.finish()
+
+        self.assertEqual(result["ranges"], ((4608, 8192),))
+        self.assertEqual(result["observedRangeCount"], 1)
+        self.assertIsNone(result["nextRangeIndex"])
+        self.assertFalse(result["truncated"])
 
     def test_finds_ntfs_and_fat_boot_signatures_across_the_entire_disk(self):
         data = bytearray(4096)

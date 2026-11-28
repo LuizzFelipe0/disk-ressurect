@@ -1,6 +1,6 @@
 import React from "react";
 import { Dialog } from "belagio-styles-lib";
-import { auditDialogStyles } from "./style";
+import { AuditDialogShell } from "./style";
 
 interface DiskAuditOverlayProps {
   id: string;
@@ -17,16 +17,15 @@ export const DiskAuditOverlay: React.FC<DiskAuditOverlayProps> = ({
   onClose,
   children,
 }) => (
-  <Dialog
-    open
+  <AuditDialogShell
     id={id}
-    title={title}
-    closeLabel={closeLabel}
-    closeButtonColor="#1B1B18"
-    closeOnBackdropClick
-    onClose={onClose}
-    styles={auditDialogStyles}
+    onMouseDown={(event) => {
+      const dialog = event.currentTarget.querySelector('[role="dialog"]');
+      if (event.target === dialog?.parentElement) onClose();
+    }}
   >
-    {children}
-  </Dialog>
+    <Dialog open title={title} closeLabel={closeLabel} closeButtonColor="#1B1B18" className="disk-audit-dialog" onClose={onClose}>
+      {children}
+    </Dialog>
+  </AuditDialogShell>
 );

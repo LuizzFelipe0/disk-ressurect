@@ -3,14 +3,18 @@ import copy
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from infrastructure.disk.factory import disk_reader_factory
-from modules.catalog.entities import RecoveryCatalog
-from modules.catalog.entities import RecoveryCatalogSnapshot
+from modules.catalog.entities import (
+    PngRecoveryProgress,
+    PngSignatureOutcome,
+    RecoveryCatalog,
+    RecoveryCatalogSnapshot,
+)
 from modules.disk.service import DiskReaderFactory
 from infrastructure.filesystems.ntfs.discovery.orphan_mft_carver import GhostMFTCarver
-from infrastructure.carving.content_carver import RawContentCarver
+from infrastructure.carving.content_carver import CarvedContent, RawContentCarver
 from modules.deep_scan.entities import CarvedCandidateReference
 
 
@@ -55,6 +59,7 @@ class CarvedContentRecord:
     catalog_content_validation_reason: str = (
         "Contiguous file structure and format markers passed validation"
     )
+    fragment_reconstruction_evidence: dict | None = None
 
     def __post_init__(self):
         content = bytes(self.resident_data)
@@ -145,6 +150,14 @@ class CatalogBuilder:
               raw_session_retained_byte_limit=None,
               raw_candidate_data=None,
               raw_candidate_locations=None,
+              png_recovery_progress=None,
+              previous_raw_catalog_snapshot=None,
+              png_scope_identity=None,
+              raw_range_progress=None,
+              range_page_progress=None,
+              range_scope_key=None,
+              range_start_index=0,
+              candidate_restore_budget_bytes=None,
               defer_content_reference_commit=False):
         source = None
         if getattr(volume, "source_id", None) and self.source_factory is not None:
@@ -182,6 +195,7 @@ class CatalogBuilder:
             recycle_bin_summary = None
             usn_journal_summary = None
             ntfs_log_file_summary = None
+            updated_png_recovery_progress = None
             if include_orphaned:
                 from infrastructure.recovery.extractor import Extractor
 
@@ -235,7 +249,8 @@ class CatalogBuilder:
                     Extractor.supported_extensions(),
                 ))
                 if precomputed_carving_ranges is not None:
-                    (content_carving_summary, low_confidence_carving_summary) = (
+                    (content_carving_summary, low_confidence_carving_summary,
+                     updated_png_recovery_progress) = (
                         self._scan_content_carving(
                             disk,
                             builder,
@@ -252,6 +267,19 @@ class CatalogBuilder:
                             raw_session_retained_byte_limit,
                             raw_candidate_data,
                             raw_candidate_locations,
+                            volume.partition_offset,
+                            volume.partition_offset + volume.partition_size,
+                            volume.cluster_size,
+                             source_id,
+                             volume_id,
+                            png_recovery_progress,
+                            previous_raw_catalog_snapshot,
+                            png_scope_identity,
+                            raw_range_progress,
+                            range_page_progress,
+                            range_scope_key,
+                            range_start_index,
+                            candidate_restore_budget_bytes,
                         )
                     )
                 nodes = builder.nodes
@@ -271,6 +299,7 @@ class CatalogBuilder:
                 recycle_bin_summary=recycle_bin_summary,
                 usn_journal_summary=usn_journal_summary,
                 ntfs_log_file_summary=ntfs_log_file_summary,
+                png_recovery_progress=updated_png_recovery_progress,
             )
             builder.release_source_tree()
             if not defer_content_reference_commit:
@@ -323,6 +352,9 @@ class CatalogBuilder:
                     candidate_id = uuid.uuid4().hex
                 used_node_ids.add(candidate_id)
                 allocation = self._allocation_state(record)
+                fragment_reconstruction = bool(
+                    getattr(source_node, "is_fragment_reconstructed", False)
+                )
                 complete = bool(getattr(record, "data_is_complete", False))
                 valid = bool(getattr(record, "is_valid", True))
                 consistent = getattr(record, "is_metadata_consistent", True)
@@ -335,6 +367,29 @@ class CatalogBuilder:
                 self.content_reference_store.register(
                     candidate_id, source, volume, source_node,
                 )
+                provenance = getattr(record, "fragment_reconstruction_evidence", None)
+                if fragment_reconstruction and isinstance(provenance, dict):
+                    evidence = RecoveryEvidence(
+                        "fragment_reconstruction",
+                        str(provenance.get("strategy", "png_idat")),
+                        tuple(sorted((
+                            ("signatureOffset", provenance.get("signatureOffset")),
+                            ("sourceOffsets", ",".join(map(
+                                str, provenance.get("sourceRanges", ()),
+                            ))),
+                            ("validation", provenance.get("validation")),
+                        ))),
+                    )
+                else:
+                    evidence = RecoveryEvidence(
+                        "filesystem_metadata",
+                        str(getattr(record, "recovery_source", None) or "ntfs"),
+                        tuple(sorted((
+                            ("recordNumber", getattr(record, "index", None)),
+                            ("sequenceNumber", getattr(record, "sequence_number", None)),
+                            ("physicalOffset", getattr(record, "mft_offset", None)),
+                        ))),
+                    )
                 candidate = RecoveryCandidate(
                     candidate_id=candidate_id,
                     source_id=source_id,
@@ -344,19 +399,20 @@ class CatalogBuilder:
                     size_bytes=int(record.file_size),
                     filesystem_id="ntfs",
                     discovery_methods=(self._discovery_method(source_node),),
-                    evidence=(RecoveryEvidence(
-                        "filesystem_metadata",
-                        str(getattr(record, "recovery_source", None) or "ntfs"),
-                        tuple(sorted((
-                            ("recordNumber", getattr(record, "index", None)),
-                            ("sequenceNumber", getattr(record, "sequence_number", None)),
-                            ("physicalOffset", getattr(record, "mft_offset", None)),
-                        ))),
-                    ),),
-                    deletion_state="deleted" if not getattr(record, "is_allocated", True) else "not_deleted",
+                    evidence=(evidence,),
+                    deletion_state=(
+                        "unknown" if fragment_reconstruction else
+                        "deleted" if not getattr(record, "is_allocated", True) else "not_deleted"
+                    ),
                     allocation_state=allocation,
-                    integrity_state=("validated" if valid and consistent is not False else "partial"),
-                    recoverability=("recoverable" if complete else "partial"),
+                    integrity_state=(
+                        "unknown" if fragment_reconstruction else
+                        "validated" if valid and consistent is not False else "partial"
+                    ),
+                    recoverability=(
+                        "unavailable" if getattr(record, "data_unsupported_reason", None)
+                        else "recoverable" if complete else "partial"
+                    ),
                     content_reference=reference,
                 )
                 node_id = candidate_id
@@ -401,6 +457,8 @@ class CatalogBuilder:
 
     @staticmethod
     def _discovery_method(node):
+        if getattr(node, "is_fragment_reconstructed", False):
+            return "fragment_reconstruction"
         if getattr(node, "is_content_carved", False):
             return "content_carving"
         if getattr(node, "is_orphaned", False):
@@ -439,6 +497,7 @@ class CatalogBuilder:
             "dataExtentResolution": extent_resolution,
             "dataExtentResolutionReason": getattr(record, "data_extent_resolution_reason", None),
             "dataExtentCount": getattr(record, "data_extent_count", None),
+            "fragmentReconstruction": getattr(record, "fragment_reconstruction_evidence", None),
         }
 
     def _scan_content_carving(
@@ -446,7 +505,13 @@ class CatalogBuilder:
         checkpoint_callback, uncertain_ranges, uncertain_ranges_truncated,
         phase_callback, raw_candidate_references=None, raw_session_candidate_limit=None,
         raw_session_retained_byte_limit=None, raw_candidate_data=None,
-        raw_candidate_locations=None,
+        raw_candidate_locations=None, volume_start=0, volume_end=None, cluster_size=4096,
+        source_id="", volume_id="", png_recovery_progress=None,
+        previous_raw_catalog_snapshot=None,
+        png_scope_identity=None,
+        raw_range_progress=None, range_page_progress=None,
+        range_scope_key=None, range_start_index=0,
+        candidate_restore_budget_bytes=None,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -456,7 +521,11 @@ class CatalogBuilder:
                 * 1024**2
             )
             carver_options = {
-                "max_scan_bytes": int(options.scan_budget_gib) * 1024**3,
+                "max_scan_bytes": max(
+                    0,
+                    int(options.scan_budget_gib) * 1024**3
+                    - int((raw_range_progress or {}).get("totalScanBytes", 0)),
+                ),
                 "max_files": min(
                     int(options.max_files), int(raw_session_candidate_limit),
                 ) if raw_session_candidate_limit is not None else int(options.max_files),
@@ -471,6 +540,35 @@ class CatalogBuilder:
                 carver_options.get("max_total_file_bytes", 128 * 1024**2),
                 int(raw_session_retained_byte_limit),
             )
+        if candidate_restore_budget_bytes is not None:
+            carver_options["max_candidate_restore_bytes"] = max(
+                0, int(candidate_restore_budget_bytes),
+            )
+        reconstruction_enabled = bool(getattr(
+            options, "enable_png_fragment_reconstruction", False,
+        ))
+        session_scoped_continuation = bool(png_scope_identity)
+        retained_png_fragment_candidates = ()
+        reconstruction_revalidation_bytes = 0
+        reconstruction_source_changed = False
+        if reconstruction_enabled and previous_raw_catalog_snapshot is not None:
+            retained_png_fragment_candidates, reconstruction_revalidation_bytes, reconstruction_source_changed = (
+                self._revalidate_png_fragment_candidates(
+                    disk,
+                    previous_raw_catalog_snapshot,
+                    ((int(volume_start), int(volume_end)),),
+                    volume_start=volume_start,
+                    volume_end=volume_end,
+                )
+            )
+        if reconstruction_source_changed:
+            checkpoint = None
+            png_recovery_progress = None
+        if reconstruction_enabled:
+            from infrastructure.carving.png_idat_fragment_reconstructor import (
+                PNGIDATFragmentReconstructor,
+            )
+
         carving = RawContentCarver(disk, **carver_options).scan(
             ranges,
             progress_callback=self._phase_progress(phase_callback, "content_carving"),
@@ -478,15 +576,17 @@ class CatalogBuilder:
             retained_candidates=raw_candidate_references,
             retained_candidate_data=raw_candidate_data,
             candidate_restore_ranges=(
-                tuple(ranges) + tuple(
-                    interval
-                    for intervals in (uncertain_ranges or {}).values()
-                    for interval in intervals
-                ) if raw_candidate_references is not None else None
+                ((int(volume_start), int(volume_end)),)
+                if raw_candidate_references is not None else None
             ),
             require_all_retained_candidates=raw_candidate_references is not None,
             checkpoint_callback=checkpoint_callback,
             ranges_truncated=bool(ranges_truncated),
+            collect_png_signatures=reconstruction_enabled,
+            defer_png_signature_scan=bool(
+                png_recovery_progress is not None
+                and png_recovery_progress.window_signature_count
+            ),
         )
         candidate_catalog = CarvedCandidateCatalog(
             builder,
@@ -497,6 +597,239 @@ class CatalogBuilder:
             retained_candidate_locations=raw_candidate_locations,
         )
         candidate_catalog.add(carving.files, ("Lost_Files_DeepScan", "ContentCarving"))
+        candidate_catalog.add(
+            retained_png_fragment_candidates,
+            ("Lost_Files_DeepScan", "PNGFragmentHypotheses"),
+            allocation_status="free",
+        )
+        signature_offsets = carving.png_signature_offsets
+        window_identity = hashlib.sha256(
+            json.dumps(signature_offsets, separators=(",", ":")).encode("ascii"),
+        ).hexdigest()
+        if png_scope_identity is None:
+            png_scope_identity = hashlib.sha256(json.dumps({
+                "source": source_id,
+                "volume": volume_id,
+                "ranges": ranges,
+                "reconstruction": reconstruction_enabled,
+            }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        if (png_recovery_progress is None
+                or png_recovery_progress.scope_identity != png_scope_identity):
+            png_recovery_progress = PngRecoveryProgress(
+                scope_identity=png_scope_identity,
+                signature_window_identity=window_identity,
+                window_signature_count=len(signature_offsets),
+                discovered_signatures=len(signature_offsets),
+            )
+        elif png_recovery_progress.signature_window_identity != window_identity:
+            previous_window_count = png_recovery_progress.window_signature_count
+            png_recovery_progress = replace(
+                png_recovery_progress,
+                signature_window_identity=window_identity,
+                window_signature_count=len(signature_offsets),
+                discovered_signatures=(
+                    png_recovery_progress.discovered_signatures + len(signature_offsets)
+                ),
+                completed_windows=(
+                    png_recovery_progress.completed_windows
+                    + (1 if previous_window_count else 0)
+                ),
+                reconstruction_next_index=0,
+                reconstruction_outcomes=(),
+                reconstruction_stop_reason="pending",
+            )
+        if reconstruction_revalidation_bytes:
+            png_recovery_progress = replace(
+                png_recovery_progress,
+                reconstruction_bytes_read=(
+                    png_recovery_progress.reconstruction_bytes_read
+                    + reconstruction_revalidation_bytes
+                ),
+                reconstruction_retained_bytes=sum(
+                    len(item.data) for item in retained_png_fragment_candidates
+                ),
+            )
+        if not reconstruction_enabled:
+            png_recovery_progress = None
+        updated_png_recovery_progress = png_recovery_progress
+        if updated_png_recovery_progress is not None:
+            updated_png_recovery_progress = replace(
+                updated_png_recovery_progress,
+                discovery_bytes_read=max(
+                    updated_png_recovery_progress.discovery_bytes_read,
+                    carving.cumulative_bytes_scanned,
+                ),
+            )
+        reconstruction_summary = None
+        if reconstruction_enabled:
+            reconstruction_index = png_recovery_progress.reconstruction_next_index
+            reconstruction_batch = tuple(signature_offsets[
+                reconstruction_index:
+                reconstruction_index + PNGIDATFragmentReconstructor.MAX_SIGNATURES
+            ])
+            signatures = tuple(
+                offset for offset in reconstruction_batch
+                if not any(item.offset == offset and item.extension == ".png" for item in carving.files)
+            )
+            reconstructor = PNGIDATFragmentReconstructor(
+                disk, volume_start=volume_start, volume_end=volume_end,
+                cluster_size=cluster_size,
+            )
+            if signatures:
+                reconstruction = reconstructor.reconstruct(
+                    signatures,
+                    ranges,
+                    prior_combinations=png_recovery_progress.reconstruction_combinations,
+                    prior_bytes_read=png_recovery_progress.reconstruction_bytes_read,
+                    prior_elapsed_seconds=(
+                        png_recovery_progress.reconstruction_elapsed_seconds
+                    ),
+                    prior_retained_bytes=(
+                        png_recovery_progress.reconstruction_retained_bytes
+                    ),
+                )
+            else:
+                from infrastructure.carving.png_idat_fragment_reconstructor import (
+                    PNGReconstructionResult,
+                )
+                reconstruction = PNGReconstructionResult((), 0, 0, 0, 0, 0.0, 0, "search_exhausted")
+            candidate_catalog.add(
+                reconstruction.candidates,
+                ("Lost_Files_DeepScan", "PNGFragmentHypotheses"),
+                allocation_status="free",
+            )
+            if reconstruction.stop_reason == "search_exhausted":
+                reconstruction_outcomes = tuple(
+                    PngSignatureOutcome(
+                        offset,
+                        "ambiguous" if sum(
+                            (item.evidence or {}).get("signatureOffset") == offset
+                            for item in reconstruction.candidates
+                        ) > 1 else "hypothesis" if any(
+                            (item.evidence or {}).get("signatureOffset") == offset
+                            for item in reconstruction.candidates
+                        ) else "completed",
+                        "search_exhausted",
+                    )
+                    for offset in reconstruction_batch
+                )
+                next_reconstruction_index = reconstruction_index + len(reconstruction_batch)
+                reconstruction_stop_reason = "pending"
+            else:
+                reconstruction_outcomes = tuple(
+                    PngSignatureOutcome(offset, "resource_limited", reconstruction.stop_reason)
+                    for offset in reconstruction_batch
+                )
+                next_reconstruction_index = reconstruction_index
+                reconstruction_stop_reason = reconstruction.stop_reason
+            updated_png_recovery_progress = replace(
+                updated_png_recovery_progress,
+                reconstruction_next_index=next_reconstruction_index,
+                reconstruction_outcomes=(
+                    updated_png_recovery_progress.reconstruction_outcomes
+                    + reconstruction_outcomes
+                ),
+                reconstruction_bytes_read=(
+                    updated_png_recovery_progress.reconstruction_bytes_read
+                    + reconstruction.bytes_read
+                ),
+                reconstruction_combinations=(
+                    updated_png_recovery_progress.reconstruction_combinations
+                    + reconstruction.combinations
+                ),
+                reconstruction_elapsed_seconds=(
+                    updated_png_recovery_progress.reconstruction_elapsed_seconds
+                    + reconstruction.elapsed_seconds
+                ),
+                reconstruction_retained_bytes=(
+                    updated_png_recovery_progress.reconstruction_retained_bytes
+                    + sum(len(item.data) for item in reconstruction.candidates)
+                ),
+                reconstruction_signatures_considered=(
+                    updated_png_recovery_progress.reconstruction_signatures_considered
+                    + (len(reconstruction_batch)
+                       if reconstruction.stop_reason == "search_exhausted" else 0)
+                ),
+                reconstruction_stop_reason=(
+                    reconstruction_stop_reason
+                    if reconstruction_stop_reason in {
+                        "combination_limit", "cumulative_combination_limit",
+                        "read_limit", "cumulative_read_limit", "time_limit",
+                        "cumulative_time_limit", "memory_limit", "cumulative_memory_limit",
+                    } else "pending"
+                ),
+            )
+            reconstruction_summary = {
+                "enabled": True,
+                "strategy": "aligned_complete_idat_chunks",
+                "signaturesSeen": updated_png_recovery_progress.discovered_signatures,
+                "signaturesExamined": updated_png_recovery_progress.reconstruction_signatures_considered,
+                "signatureDiscoveryComplete": (
+                    not carving.scan_limit_reached
+                    and not carving.png_signature_set_truncated
+                    and not ranges_truncated
+                    and (carving.checkpoint is None
+                         or carving.checkpoint.range_index >= len(ranges))
+                ),
+                "discoveryBytesRead": updated_png_recovery_progress.discovery_bytes_read,
+                "candidatesFound": (
+                    len(retained_png_fragment_candidates) + len(reconstruction.candidates)
+                ),
+                "structuralHypotheses": (
+                    len(retained_png_fragment_candidates) + len(reconstruction.candidates)
+                ),
+                "signaturesRejected": (
+                    sum(item.status == "completed"
+                        for item in updated_png_recovery_progress.reconstruction_outcomes)
+                ),
+                "combinationsEvaluated": updated_png_recovery_progress.reconstruction_combinations,
+                "bytesRead": updated_png_recovery_progress.reconstruction_bytes_read,
+                "elapsedSeconds": updated_png_recovery_progress.reconstruction_elapsed_seconds,
+                "retainedBytesEstimate": reconstruction.retained_bytes_estimate,
+                "retainedMemoryDefinition": (
+                    "Estimated search frontier, compressed payloads, hypotheses and "
+                    "metadata plus an 8 MiB transient validation buffer allowance; not RSS"
+                ),
+                "stopReason": (
+                    "resource_limited_search"
+                    if updated_png_recovery_progress.reconstruction_stop_reason != "pending"
+                    else "search_exhausted"
+                    if updated_png_recovery_progress.reconstruction_next_index
+                    >= len(signature_offsets)
+                    and not carving.png_signature_set_truncated
+                    and not carving.scan_limit_reached
+                    and not ranges_truncated
+                    else "signature_limit"
+                    if updated_png_recovery_progress.reconstruction_next_index
+                    < len(signature_offsets)
+                    else "signature_page_pending"
+                ),
+                "nextSignatureIndex": updated_png_recovery_progress.reconstruction_next_index,
+                "searchScope": (
+                    "Up to four observed PNG signatures; complete IDAT chunks at cluster-aligned "
+                    "starts within the trusted free ranges; up to four IDAT chunks plus IEND"
+                ),
+                "integrity": "unknown_without_independent_original_hash",
+                "limits": {
+                    "combinationsPerPass": PNGIDATFragmentReconstructor.PAIRS_PER_PASS,
+                    "passes": PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "combinations": PNGIDATFragmentReconstructor.PAIRS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "bytesReadPerPass": PNGIDATFragmentReconstructor.READS_PER_PASS,
+                    "bytesRead": PNGIDATFragmentReconstructor.READS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "candidateBytes": PNGIDATFragmentReconstructor.MAX_CANDIDATE_BYTES,
+                    "secondsPerPass": PNGIDATFragmentReconstructor.SECONDS_PER_PASS,
+                    "seconds": PNGIDATFragmentReconstructor.SECONDS_PER_PASS
+                    * PNGIDATFragmentReconstructor.MAX_PASSES,
+                    "retainedBytes": PNGIDATFragmentReconstructor.RETAINED_BYTES,
+                },
+            }
+            status_counts = {}
+            for candidate in (*retained_png_fragment_candidates, *reconstruction.candidates):
+                status = (candidate.evidence or {}).get("hypothesisStatus", "unknown")
+                status_counts[status] = status_counts.get(status, 0) + 1
+            reconstruction_summary["hypothesesByStatus"] = status_counts
         budget_gib = options.scan_budget_gib if options is not None else 1
         retained_budget_mib = (
             getattr(options, "max_retained_mib", 128) if options is not None else 128
@@ -526,6 +859,58 @@ class CatalogBuilder:
             "retainedBytesLimitReached": carving.retained_bytes_limit_reached,
             "rangeCount": len(ranges),
             "rangeCollectionTruncated": bool(ranges_truncated),
+            "rangePage": {
+                "startIndex": int((range_page_progress or {}).get(
+                    "rangeWindowStartIndex", range_start_index,
+                )),
+                "endIndex": int((range_page_progress or {}).get(
+                    "rangeWindowEndIndex", range_start_index + len(ranges),
+                )),
+                "observedRangeCount": int((range_page_progress or {}).get(
+                    "observedRangeCount", len(ranges),
+                )),
+                "retainedRangeCount": len(ranges),
+                "eligibleBytes": sum(end - start for start, end in ranges),
+                "previouslyExaminedRangeCount": int(range_start_index),
+                "pendingRangeCount": int((range_page_progress or {}).get(
+                    "pendingRangeCount", 0,
+                )),
+                "omittedRangeCount": int((range_page_progress or {}).get(
+                    "pendingRangeCount", 0,
+                )),
+                "unreadableRangeCount": None,
+                "allocationEvidenceExcludedRangeCount": (
+                    int(range_page_progress["allocationEvidenceExcludedRangeCount"])
+                    if "allocationEvidenceExcludedRangeCount" in (range_page_progress or {})
+                    else None
+                ),
+                "allocationEvidenceExcludedClusterCount": (
+                    int(range_page_progress["allocationEvidenceExcludedClusterCount"])
+                    if "allocationEvidenceExcludedClusterCount" in (range_page_progress or {})
+                    else None
+                ),
+                "collectionScopeComplete": not bool(ranges_truncated),
+                "scanScopeComplete": (
+                    carving.bytes_scanned >= sum(end - start for start, end in ranges)
+                    and not carving.scan_limit_reached
+                    and not carving.candidate_limit_reached
+                    and not carving.file_count_limit_reached
+                    and not carving.retained_bytes_limit_reached
+                ),
+                "byteLimitReached": bool((range_page_progress or {}).get(
+                    "byteLimitReached", False,
+                )),
+                "truncated": bool(ranges_truncated),
+                "scopeKey": range_scope_key,
+                "allocationBitmapSha256": (
+                    (range_page_progress or {}).get("bitmapSha256")
+                    or (raw_range_progress or {}).get("bitmapSha256")
+                ),
+                "cumulativeBytesScanned": (
+                    int((raw_range_progress or {}).get("totalScanBytes", 0))
+                    + int(carving.bytes_scanned)
+                ),
+            },
             "confidence": "trusted_free_space",
             "stopReason": self._carving_stop_reason(
                 carving, ranges_truncated,
@@ -538,6 +923,86 @@ class CatalogBuilder:
                         and carving.max_total_file_bytes == int(raw_session_retained_byte_limit))),
             ),
         }
+        if reconstruction_summary is not None:
+            trusted_summary["pngFragmentReconstruction"] = reconstruction_summary
+            if carving.png_signature_set_truncated:
+                trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = True
+        raw_scan_complete = (
+            not carving.scan_limit_reached
+            and not carving.png_signature_set_truncated
+            and not ranges_truncated
+            and (carving.checkpoint is None
+                 or carving.checkpoint.range_index >= len(ranges))
+        )
+        png_progress_active = updated_png_recovery_progress is not None
+        reconstruction_page_complete = (
+            not png_progress_active
+            or
+            not reconstruction_enabled
+            or updated_png_recovery_progress.reconstruction_next_index
+            >= len(signature_offsets)
+            or updated_png_recovery_progress.reconstruction_stop_reason != "pending"
+        )
+        page_complete = reconstruction_page_complete
+        terminal_resource_limit = png_progress_active and (
+            updated_png_recovery_progress.reconstruction_stop_reason in {
+                "combination_limit", "cumulative_combination_limit", "read_limit",
+                "cumulative_read_limit", "time_limit", "cumulative_time_limit",
+                "memory_limit", "cumulative_memory_limit",
+            }
+        )
+        if (session_scoped_continuation and page_complete and not terminal_resource_limit
+                and signature_offsets and carving.checkpoint is not None):
+            if raw_scan_complete:
+                updated_checkpoint = None
+            else:
+                updated_checkpoint = replace(
+                    carving.checkpoint,
+                    png_signature_offsets=(),
+                    png_signature_set_truncated=False,
+                )
+                updated_png_recovery_progress = replace(
+                    updated_png_recovery_progress,
+                    signature_window_identity=hashlib.sha256(b"[]").hexdigest(),
+                    window_signature_count=0,
+                    completed_windows=updated_png_recovery_progress.completed_windows + 1,
+                    reconstruction_next_index=0,
+                    reconstruction_outcomes=(),
+                    reconstruction_stop_reason="pending",
+                )
+            carving = replace(
+                carving,
+                checkpoint=updated_checkpoint,
+                png_signature_offsets=(
+                    () if updated_checkpoint is not None
+                    and not updated_checkpoint.png_signature_offsets
+                    else carving.png_signature_offsets
+                ),
+                png_signature_set_truncated=(
+                    updated_checkpoint.png_signature_set_truncated
+                    if updated_checkpoint is not None else False
+                ),
+            )
+            if checkpoint_callback is not None:
+                checkpoint_callback(updated_checkpoint)
+            trusted_summary["resumeAvailable"] = updated_checkpoint is not None
+        png_work_pending = png_progress_active and (
+            reconstruction_enabled
+            and updated_png_recovery_progress.reconstruction_next_index
+            < updated_png_recovery_progress.window_signature_count
+            or not raw_scan_complete
+        )
+        if terminal_resource_limit:
+            trusted_summary["stopReason"] = "resource_limit"
+        elif session_scoped_continuation and png_work_pending:
+            trusted_summary["stopReason"] = "advanced_recovery_pending"
+        if reconstruction_summary is not None:
+            trusted_summary["pngFragmentReconstruction"]["signatureDiscoveryComplete"] = (
+                raw_scan_complete
+            )
+            trusted_summary["pngFragmentReconstruction"]["signatureSetTruncated"] = (
+                carving.png_signature_set_truncated
+            )
         low_confidence_summary = None
         if uncertain_ranges is not None:
             low_confidence_summary = self._scan_low_confidence_ranges(
@@ -550,7 +1015,127 @@ class CatalogBuilder:
             if candidate_catalog.session_limit_reached:
                 trusted_summary["stopReason"] = "session_limit"
                 trusted_summary["sessionLimitReached"] = True
-        return trusted_summary, low_confidence_summary
+        return trusted_summary, low_confidence_summary, updated_png_recovery_progress
+
+    def raw_png_recovery_results_are_current(self, source, snapshot, eligible_ranges,
+                                             *, volume_start, volume_end):
+        """Revalidate cached PNG evidence before reusing a completed session catalog."""
+        progress = snapshot.png_recovery_progress
+        has_fragment_candidates = any(
+            node.candidate is not None
+            and "fragment_reconstruction" in node.candidate.discovery_methods
+            for node in snapshot.catalog.nodes.values()
+        )
+        if not has_fragment_candidates:
+            return True, 0
+        if self.source_factory is None:
+            raise RuntimeError("PNG recovery cache cannot be revalidated without a source reader")
+
+        disk = self.source_factory.open_reader(source)
+        fragment_bytes_read = 0
+        try:
+            if has_fragment_candidates:
+                from infrastructure.carving.png_idat_fragment_reconstructor import (
+                    PNGIDATFragmentReconstructor,
+                )
+
+                valid_candidates, fragment_bytes_read, fragment_changed = self._revalidate_png_fragment_candidates(
+                    disk,
+                    snapshot,
+                    eligible_ranges,
+                    volume_start=volume_start,
+                    volume_end=volume_end,
+                    remaining_bytes=max(
+                        0,
+                        PNGIDATFragmentReconstructor.READS_PER_PASS
+                        * PNGIDATFragmentReconstructor.MAX_PASSES
+                        - (progress.reconstruction_bytes_read if progress is not None else 0),
+                    ),
+                )
+                if fragment_changed or not valid_candidates:
+                    return False, fragment_bytes_read
+            return True, fragment_bytes_read
+        finally:
+            disk.close()
+
+    def _revalidate_png_fragment_candidates(
+        self, disk, snapshot, eligible_ranges, *, volume_start, volume_end,
+        remaining_bytes=None,
+    ):
+        from infrastructure.carving.png_idat_fragment_reconstructor import (
+            PNGIDATFragmentReconstructor,
+        )
+
+        ranges = tuple(sorted((int(start), int(end)) for start, end in eligible_ranges))
+        candidates = []
+        bytes_read = 0
+        source_changed = False
+        for node in snapshot.catalog.nodes.values():
+            candidate = node.candidate
+            if (candidate is None
+                    or "fragment_reconstruction" not in candidate.discovery_methods):
+                continue
+            evidence = node.properties.get("fragmentReconstruction") or {}
+            if evidence.get("strategy") != "aligned_complete_idat_chunks":
+                source_changed = True
+                continue
+            try:
+                reference = candidate.content_reference
+                if reference is None or reference.sha256 is None:
+                    raise ValueError("Missing fragment candidate reference")
+                _, _, retained_node = self.content_reference_store.resolve(
+                    reference.reference_id,
+                )
+                retained_data = bytes(retained_node.record.resident_data)
+                source_ranges = tuple(
+                    (int(start), int(end)) for start, end in evidence["sourceRanges"]
+                )
+                signature_offset = int(evidence["signatureOffset"])
+            except (KeyError, TypeError, ValueError):
+                source_changed = True
+                continue
+            total = sum(end - start for start, end in source_ranges)
+            if (not source_ranges or total <= 0
+                    or total > PNGIDATFragmentReconstructor.MAX_CANDIDATE_BYTES
+                    or any(start < volume_start or end > volume_end or end <= start
+                           for start, end in source_ranges)
+                    or tuple(sorted(source_ranges)) != source_ranges
+                    or any(left[1] > right[0]
+                           for left, right in zip(source_ranges, source_ranges[1:]))
+                    or any(not any(low <= start and end <= high for low, high in ranges)
+                           for start, end in source_ranges)):
+                source_changed = True
+                continue
+            byte_limit = (
+                PNGIDATFragmentReconstructor.READS_PER_PASS
+                * PNGIDATFragmentReconstructor.MAX_PASSES
+                if remaining_bytes is None else max(0, int(remaining_bytes))
+            )
+            if bytes_read + total > byte_limit:
+                raise RuntimeError(
+                    "PNG fragment result revalidation reached the cumulative session read limit; "
+                    "the previous catalog generation was preserved."
+                )
+            data_parts = []
+            for start, end in source_ranges:
+                part = bytes(disk.read_at(start, end - start))
+                bytes_read += len(part)
+                if len(part) != end - start:
+                    raise OSError(f"Short PNG fragment source revalidation read at {start:#x}")
+                data_parts.append(part)
+            data = b"".join(data_parts)
+            if (len(data) != reference.size_bytes or data != retained_data
+                    or hashlib.sha256(data).hexdigest() != reference.sha256):
+                source_changed = True
+                continue
+            candidates.append(CarvedContent(
+                offset=signature_offset,
+                extension=".png",
+                data=data,
+                strategy="png_fragment_reconstruction",
+                evidence=dict(evidence),
+            ))
+        return tuple(candidates), bytes_read, source_changed
 
     def _scan_low_confidence_ranges(
         self, disk, candidate_catalog, uncertain_ranges, truncation, phase_callback,
@@ -598,6 +1183,11 @@ class CatalogBuilder:
             summary[key]["rangeCollectionCapBytes"] = (
                 ClusterAllocationEvidence.DEFAULT_UNCERTAIN_RANGE_BYTES
             )
+            scope_complete = summary[key]["stopReason"] == "scope_complete"
+            summary[key]["pendingRangeCount"] = 0 if scope_complete else None
+            summary[key]["omittedRangeCount"] = 0 if scope_complete else None
+            summary[key]["scopeComplete"] = scope_complete
+            summary[key]["continuationSupported"] = False
             if candidate_catalog.session_limit_reached:
                 summary[key]["stopReason"] = "session_limit"
                 summary[key]["sessionLimitReached"] = True
@@ -888,13 +1478,17 @@ class CarvedCandidateCatalog:
         self.added_count = 0
         self.retained_bytes = 0
         self.session_limit_reached = False
+        self.reconstruction_offsets = {}
 
     def add(self, candidates, path_parts, allocation_status=None):
         added = 0
         for candidate in candidates:
             digest = hashlib.sha256(candidate.data).digest()
             offset = int(candidate.offset)
-            if digest in self.content_digests or offset in self.physical_offsets:
+            is_reconstructed = candidate.strategy == "png_fragment_reconstruction"
+            if digest in self.content_digests or (
+                not is_reconstructed and offset in self.physical_offsets
+            ):
                 continue
             content = self.retained_candidate_data.get((offset, digest.hex()), candidate.data)
             if (self.max_files is not None and self.added_count >= self.max_files
@@ -916,20 +1510,37 @@ class CarvedCandidateCatalog:
             synthetic_id = -(self.disk_size + offset + 1)
             while synthetic_id in self.builder.nodes:
                 synthetic_id -= 1
+            if is_reconstructed:
+                alternative = self.reconstruction_offsets.get(offset, 0) + 1
+                self.reconstruction_offsets[offset] = alternative
+                name = f"Carved_{offset:016X}_Hypothesis_{alternative}{candidate.extension}"
+            else:
+                name = f"Carved_{offset:016X}{candidate.extension}"
             record = CarvedContentRecord(
                 index=synthetic_id,
                 offset=offset,
-                name=f"Carved_{offset:016X}{candidate.extension}",
+                name=name,
                 resident_data=content,
                 cluster_allocation_status=candidate_allocation_status or "free",
+                catalog_content_validation=(
+                    "fragment_structure_hypothesis" if is_reconstructed
+                    else "format_structure_match"
+                ),
                 catalog_content_validation_reason=(
+                    "PNG structure checks passed for a fragment reconstruction hypothesis; "
+                    "the original file integrity is unknown"
+                    if is_reconstructed else
                     "Contiguous format structure passed validation; allocation "
                     "is unknown or may describe current/reused data"
                     if allocation_status is not None else
                     "Contiguous file structure and format markers passed validation"
                 ),
+                fragment_reconstruction_evidence=(
+                    dict(candidate.evidence or {}) if is_reconstructed else None
+                ),
             )
             node = FileNode(record, is_orphaned=True, is_content_carved=True)
+            node.is_fragment_reconstructed = is_reconstructed
             node.full_path = os.path.join(*candidate_path_parts, record.name)
             self.builder.nodes[synthetic_id] = node
             self.builder.root_nodes.append(node)
@@ -962,6 +1573,9 @@ class CatalogContentValidator:
             return CandidateContentValidation("unsupported", "No signature rule is available")
         if not getattr(record, "data_is_complete", True):
             return CandidateContentValidation("incomplete_metadata", "MFT data attributes are incomplete")
+        unsupported_reason = getattr(record, "data_unsupported_reason", None)
+        if unsupported_reason:
+            return CandidateContentValidation("unsupported_data_attribute", unsupported_reason)
 
         size = int(record.file_size)
         if size <= 0:

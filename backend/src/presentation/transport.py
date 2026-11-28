@@ -85,11 +85,18 @@ def serve(handler):
         except json.JSONDecodeError as exc:
             emit({"id": None, "type": "error", "error": f"Invalid request: {exc}", "errorType": "ValueError"})
             continue
+        if isinstance(request, dict) and request.get("operation") == "cancel_operation":
+            handler.handle(request, emit)
+            continue
         if not operation_lock.acquire(blocking=False):
             request_id = request.get("id") if isinstance(request, dict) else None
             emit({"id": request_id, "type": "error", "error": "Another disk operation is already running",
                 "errorType": "BusyError"})
             continue
+        if isinstance(request, dict) and request.get("operation") == "scan_catalog":
+            prepare_cancellation = getattr(handler, "prepare_cancellation", None)
+            if callable(prepare_cancellation):
+                prepare_cancellation(request)
 
         def run(current_request=request):
             try:

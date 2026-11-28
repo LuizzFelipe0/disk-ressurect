@@ -29,7 +29,10 @@ class RecoveryRequestDto:
             raise ValueError("minimumSizeKb must be a non-negative integer") from exc
         if minimum_size < 0:
             raise ValueError("minimumSizeKb must be a non-negative integer")
-        return cls(tuple(selected), tuple(excluded), output_directory, tuple(extensions), minimum_size)
+        return cls(
+            tuple(selected), tuple(excluded), output_directory, tuple(extensions),
+            minimum_size,
+        )
 
 
 @dataclass(frozen=True)
@@ -46,7 +49,9 @@ class RecoveryResultDto:
             "recoveredCount": self.recovered_count,
             "candidateCount": self.candidate_count,
             "selectedCount": self.selected_count,
-            "rejectedCount": max(0, self.candidate_count - self.recovered_count),
+            "rejectedCount": max(
+                0, self.candidate_count - self.recovered_count,
+            ),
             "statusCounts": dict(self.status_counts or {}),
             "results": list(self.results),
             "resultsTruncated": self.results_truncated,
