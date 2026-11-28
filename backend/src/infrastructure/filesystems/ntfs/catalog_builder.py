@@ -157,6 +157,7 @@ class CatalogBuilder:
               range_page_progress=None,
               range_scope_key=None,
               range_start_index=0,
+              candidate_restore_budget_bytes=None,
               defer_content_reference_commit=False):
         source = None
         if getattr(volume, "source_id", None) and self.source_factory is not None:
@@ -278,6 +279,7 @@ class CatalogBuilder:
                             range_page_progress,
                             range_scope_key,
                             range_start_index,
+                            candidate_restore_budget_bytes,
                         )
                     )
                 nodes = builder.nodes
@@ -509,6 +511,7 @@ class CatalogBuilder:
         png_scope_identity=None,
         raw_range_progress=None, range_page_progress=None,
         range_scope_key=None, range_start_index=0,
+        candidate_restore_budget_bytes=None,
     ):
         """Run trusted and bounded low-confidence carving passes for one volume."""
         carver_options = {}
@@ -536,6 +539,10 @@ class CatalogBuilder:
             carver_options["max_total_file_bytes"] = min(
                 carver_options.get("max_total_file_bytes", 128 * 1024**2),
                 int(raw_session_retained_byte_limit),
+            )
+        if candidate_restore_budget_bytes is not None:
+            carver_options["max_candidate_restore_bytes"] = max(
+                0, int(candidate_restore_budget_bytes),
             )
         reconstruction_enabled = bool(getattr(
             options, "enable_png_fragment_reconstruction", False,

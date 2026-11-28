@@ -278,6 +278,80 @@ class RawCatalogHarness:
 
 
 class RawCarvingSessionResumeTests(unittest.TestCase):
+    def test_registered_raw_command_automatically_continues_multiple_range_pages(self):
+        data, expected = make_image(((128, b"first"), (4224, b"second")), size=8192)
+        harness = RawCatalogHarness(data)
+        ranges = ((0, 2048), (4096, 6144))
+        bitmap = hashlib.sha256(b"registered raw paging bitmap").hexdigest()
+
+        class PagedValidation:
+            def __init__(self):
+                self.starts = []
+
+            def validate_source(self, _source, *_args, retain_orphans_for_offset,
+                                content_carving_range_start_index=0, **_kwargs):
+                start = content_carving_range_start_index
+                self.starts.append(start)
+                selected = ranges[start:start + 1]
+                pending = max(0, len(ranges) - start - len(selected))
+                return {
+                    "ntfs_checks": ({
+                        "partitionOffset": retain_orphans_for_offset,
+                        "bitmapAllocation": {"bitmapSha256": bitmap},
+                        "contentCarvingRangeProgress": {
+                            "rangeWindowStartIndex": start,
+                            "rangeWindowEndIndex": start + len(selected),
+                            "observedRangeCount": len(ranges),
+                            "pendingRangeCount": pending,
+                            "nextRangeIndex": start + 1 if pending else None,
+                            "byteLimitReached": False,
+                            "truncated": bool(pending),
+                            "retainedBytes": sum(end - begin for begin, end in selected),
+                        },
+                    },),
+                    "orphan_records_by_partition": {retain_orphans_for_offset: {}},
+                    "content_carving_ranges_by_partition": {
+                        retain_orphans_for_offset: selected,
+                    },
+                    "content_carving_ranges_truncated_by_partition": {
+                        retain_orphans_for_offset: bool(pending),
+                    },
+                }
+
+            @staticmethod
+            def summary(_report):
+                return {"coverageStatus": "complete"}
+
+        validation = PagedValidation()
+        harness.workflow.validation_service = validation
+        with patch(
+            "infrastructure.filesystems.ntfs.catalog_builder.TreeBuilder", EmptyTreeBuilder,
+        ), patch(
+            "infrastructure.filesystems.ntfs.catalog_builder.RawContentCarver",
+            SessionCappedCarver,
+        ):
+            result = harness.workflow.run(
+                harness.volume,
+                include_orphaned=True,
+                force_fresh_validation=True,
+                carving_options=harness.options,
+                progress_callback=lambda *_args: None,
+                validation_progress_callback=lambda *_args: None,
+                phase_callback=lambda *_args: None,
+                session_source_id=harness.volume.source_id,
+                source_identity_validator=lambda: True,
+            )
+
+        self.assertEqual([0, 1], validation.starts)
+        self.assertEqual(2, result.snapshot.content_carving_summary["continuation"]["passes"])
+        self.assertEqual("scope_complete", result.snapshot.content_carving_summary
+                         ["continuation"]["stopReason"])
+        self.assertIs(result.snapshot, harness.session.snapshot)
+        carved = harness.carved_candidates(result.snapshot)
+        self.assertEqual({128, 4224}, set(carved))
+        self.assertEqual(carved[128][1], expected[128])
+        self.assertEqual(carved[4224][1], expected[4224])
+
     def setUp(self):
         SessionCappedCarver.scan_budget_bytes = SCAN_BUDGET_BYTES
         SessionCappedCarver.candidate_count_cap = None
@@ -908,6 +982,50 @@ class RawCarvingSessionResumeTests(unittest.TestCase):
         self.assertEqual(
             [reader.closed for reader in harness.source_factory.readers], [True, True],
         )
+
+    def test_byte_capped_free_run_is_classified_as_non_progressing(self):
+        snapshot = SimpleNamespace(content_carving_summary={
+            "stopReason": "range_collection_truncated",
+            "rangePage": {"byteLimitReached": True, "pendingRangeCount": 1},
+        })
+
+        self.assertTrue(CatalogScanWorkflow._range_collection_byte_cap_stalled(snapshot))
+
+        snapshot.content_carving_summary["rangePage"]["byteLimitReached"] = False
+        self.assertFalse(CatalogScanWorkflow._range_collection_byte_cap_stalled(snapshot))
+
+    def test_increased_scan_budget_invalidates_limited_catalog_and_retries_scope(self):
+        data, _expected = make_image(((128, b"budget-resume"),))
+        harness = RawCatalogHarness(data)
+        harness.options = replace(harness.options, scan_budget_gib=0)
+        limited = harness.build()
+        self.assertFalse(harness.carved_candidates(limited.snapshot))
+        limited_identity = harness.workflow._raw_checkpoint_identity(
+            harness.source_factory.source, harness.volume, harness.validation.ranges,
+            harness.validation.ranges_truncated, harness.options,
+            harness.builder.carving_checkpoint_profile(),
+        )
+
+        harness.options = replace(harness.options, scan_budget_gib=1)
+        expanded = harness.build()
+        expanded_identity = harness.workflow._raw_checkpoint_identity(
+            harness.source_factory.source, harness.volume, harness.validation.ranges,
+            harness.validation.ranges_truncated, harness.options,
+            harness.builder.carving_checkpoint_profile(),
+        )
+
+        self.assertNotEqual(limited_identity, expanded_identity)
+        self.assertEqual({128}, set(harness.carved_candidates(expanded.snapshot)))
+
+        harness.options = replace(harness.options, scan_budget_gib=0)
+        reduced = harness.build()
+        reduced_identity = harness.workflow._raw_checkpoint_identity(
+            harness.source_factory.source, harness.volume, harness.validation.ranges,
+            harness.validation.ranges_truncated, harness.options,
+            harness.builder.carving_checkpoint_profile(),
+        )
+        self.assertNotEqual(expanded_identity, reduced_identity)
+        self.assertFalse(harness.carved_candidates(reduced.snapshot))
 
     def test_trusted_free_range_pages_reach_later_candidates_and_keep_prior_candidates(self):
         data, expected = make_image(((128, b"first"), (4224, b"second")), size=8192)

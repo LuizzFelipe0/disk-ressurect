@@ -154,6 +154,7 @@ class RawContentCarver:
         max_total_file_bytes=DEFAULT_MAX_TOTAL_FILE_BYTES,
         max_candidate_read_bytes=DEFAULT_MAX_CANDIDATE_READ_BYTES,
         max_candidate_read_bytes_per_format=DEFAULT_MAX_CANDIDATE_READ_BYTES_PER_FORMAT,
+        max_candidate_restore_bytes=None,
         max_decoded_png_bytes=DEFAULT_MAX_DECODED_PNG_BYTES,
         max_files=DEFAULT_MAX_FILES,
     ):
@@ -165,6 +166,10 @@ class RawContentCarver:
         self.max_candidate_read_bytes = max(0, int(max_candidate_read_bytes))
         self.max_candidate_read_bytes_per_format = max(
             0, int(max_candidate_read_bytes_per_format),
+        )
+        self.max_candidate_restore_bytes = (
+            None if max_candidate_restore_bytes is None
+            else max(0, int(max_candidate_restore_bytes))
         )
         self.max_files = max(0, int(max_files))
         self.max_decoded_png_bytes = max(0, int(max_decoded_png_bytes))
@@ -254,6 +259,7 @@ class RawContentCarver:
                 self._merge_ranges(candidate_restore_ranges, disk_size)
                 if candidate_restore_ranges is not None else merged_ranges,
                 retained_candidate_data,
+                max_bytes=self.max_candidate_restore_bytes,
             )
             if require_all_retained_candidates and len(files) != len(candidate_references):
                 raise OSError(
@@ -531,7 +537,8 @@ class RawContentCarver:
             png_signature_set_truncated,
         )
 
-    def _restore_candidates(self, references, ranges, retained_candidate_data=None):
+    def _restore_candidates(self, references, ranges, retained_candidate_data=None,
+                            *, max_bytes=None):
         restored = []
         bytes_read_total = 0
         for reference in references:
@@ -539,6 +546,14 @@ class RawContentCarver:
                               if start <= reference.offset < end), None)
             if range_end is None or reference.extension not in self.SIGNATURES_BY_EXTENSION:
                 continue
+            remaining_budget = None
+            if max_bytes is not None:
+                remaining_budget = int(max_bytes) - bytes_read_total
+                if remaining_budget <= 0:
+                    raise OSError(
+                        "Candidate restoration read budget exhausted; "
+                        "the previous catalog generation was preserved."
+                    )
             original_max_file_bytes = self.max_file_bytes
             self.max_file_bytes = max(self.max_file_bytes, reference.size_bytes + self.chunk_size)
             try:
@@ -546,11 +561,24 @@ class RawContentCarver:
                     reference.extension,
                     reference.offset,
                     range_end,
-                    max(reference.size_bytes + self.chunk_size, self.max_candidate_read_bytes),
+                    min(
+                        max(reference.size_bytes + self.chunk_size,
+                            self.max_candidate_read_bytes),
+                        remaining_budget,
+                    ) if remaining_budget is not None else max(
+                        reference.size_bytes + self.chunk_size,
+                        self.max_candidate_read_bytes,
+                    ),
                 )
             finally:
                 self.max_file_bytes = original_max_file_bytes
             bytes_read_total += bytes_read
+            if (max_bytes is not None and bytes_read_total >= int(max_bytes)
+                    and candidate is None):
+                raise OSError(
+                    "Candidate restoration read budget exhausted; "
+                    "the previous catalog generation was preserved."
+                )
             if (candidate is not None and len(candidate) == reference.size_bytes
                     and hashlib.sha256(candidate).hexdigest() == reference.sha256):
                 retained_data = (retained_candidate_data or {}).get(

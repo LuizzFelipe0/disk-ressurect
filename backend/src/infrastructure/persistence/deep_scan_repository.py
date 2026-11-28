@@ -12,7 +12,10 @@ from pathlib import Path
 
 from modules.disk.entities import CachedDeepScan
 from modules.disk.entities import NTFSVolume
-from modules.deep_scan.entities import CarvedCandidateReference, CarvingCheckpoint
+from modules.deep_scan.entities import (
+    CarvedCandidateReference,
+    CarvingCheckpoint,
+)
 from modules.storage.entities import ScanCheckpoint
 from infrastructure.filesystems.user_ownership import (
     ensure_pkexec_user_owned_directory,
@@ -109,6 +112,10 @@ class JsonDeepScanRepository:
         """Persist compact carving state separately from lost-partition scans."""
         if checkpoint is not None and not isinstance(checkpoint, CarvingCheckpoint):
             raise TypeError("checkpoint must be a CarvingCheckpoint or None")
+        serialized_checkpoint = (
+            self._serialize_carving_checkpoint(checkpoint)
+            if checkpoint is not None else None
+        )
         disk_key = self.disk_key(disk)
         volume_key = self._carving_volume_key(volume)
         if self.path is None or not self._can_persist_for(disk):
@@ -128,7 +135,7 @@ class JsonDeepScanRepository:
             if not disk_entries:
                 carving.pop(disk_key, None)
         else:
-            disk_entries[volume_key] = self._serialize_carving_checkpoint(checkpoint)
+            disk_entries[volume_key] = serialized_checkpoint
         self._write_document(document)
         return checkpoint
 

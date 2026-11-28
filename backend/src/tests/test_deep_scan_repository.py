@@ -98,6 +98,8 @@ class DeepScanRepositoryTests(unittest.TestCase):
             restored = JsonDeepScanRepository(
                 path, disk_mapper=safe_test_disk_mapper,
             ).load_carving_checkpoint(disk, volume)
+            repository.save_carving_checkpoint(disk, volume, None)
+            self.assertIsNone(repository.load_carving_checkpoint(disk, volume))
 
         self.assertEqual(restored, checkpoint)
 

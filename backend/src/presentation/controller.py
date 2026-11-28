@@ -1,3 +1,5 @@
+import threading
+
 from modules.catalog.dto import CatalogNodeRequestDto, CatalogSearchRequestDto, FilePreviewRequestDto, VolumeSelectionRequestDto
 from modules.catalog.mapper import CatalogMapper
 from application.session import RecoverySession
@@ -35,6 +37,8 @@ class RecoveryCommandHandler:
         self.source_resolver = source_resolver
         self.storage_service = storage_service
         self.session = session if session is not None else RecoverySession()
+        self._cancel_lock = threading.RLock()
+        self._active_cancellations = {}
         self.catalog_scan_workflow = CatalogScanWorkflow(
             disk_service,
             deep_scan_service,
@@ -43,11 +47,30 @@ class RecoveryCommandHandler:
             session=self.session,
         )
 
+    def prepare_cancellation(self, message):
+        """Register a scan token before the transport starts its worker thread."""
+        if not isinstance(message, dict) or message.get("operation") != "scan_catalog":
+            return
+        payload = message.get("payload")
+        operation_id = payload.get("operationId") if isinstance(payload, dict) else None
+        if not isinstance(operation_id, str) or not operation_id:
+            return
+        with self._cancel_lock:
+            self._active_cancellations.setdefault(operation_id, threading.Event())
+
     def handle(self, message, emit):
         request_id = message.get("id") if isinstance(message, dict) else None
+        operation_id = None
+        request = None
         try:
             request = CommandRequestDto.from_message(message)
             operation_id = request.payload.get("operationId")
+            cancellation = None
+            if request.operation == "scan_catalog" and isinstance(operation_id, str) and operation_id:
+                with self._cancel_lock:
+                    cancellation = self._active_cancellations.setdefault(
+                        operation_id, threading.Event(),
+                    )
 
             def emit_scoped(event):
                 if event.get("type") == "progress" and isinstance(operation_id, str):
@@ -59,8 +82,29 @@ class RecoveryCommandHandler:
             emit(CommandResultDto(request.request_id, payload).to_dict())
         except Exception as exc:
             emit(CommandErrorDto(request_id, str(exc), type(exc).__name__).to_dict())
+        finally:
+            raw_payload = message.get("payload") if isinstance(message, dict) else None
+            raw_operation_id = (
+                raw_payload.get("operationId") if isinstance(raw_payload, dict) else None
+            )
+            cleanup_operation_id = operation_id or raw_operation_id
+            scan_request = (
+                request.operation == "scan_catalog" if request is not None else
+                isinstance(message, dict) and message.get("operation") == "scan_catalog"
+            )
+            if scan_request and isinstance(cleanup_operation_id, str) and cleanup_operation_id:
+                with self._cancel_lock:
+                    self._active_cancellations.pop(cleanup_operation_id, None)
 
     def dispatch(self, operation, payload, emit):
+        if operation == "cancel_operation":
+            operation_id = str(payload.get("operationId", ""))
+            with self._cancel_lock:
+                cancellation = self._active_cancellations.get(operation_id)
+            if cancellation is None:
+                return {"accepted": False}
+            cancellation.set()
+            return {"accepted": True}
         if operation == "register_raw_image":
             if self.storage_service is None:
                 raise RuntimeError("Raw image sources are unavailable")
@@ -208,6 +252,23 @@ class RecoveryCommandHandler:
             )
             if current_source.source_id != expected_source_id:
                 raise ValueError("Selected partition belongs to a different storage source; rescan it")
+
+        def source_identity_is_current():
+            if not expected_source_id:
+                return True
+            if expected_source_id.startswith("raw-image:"):
+                if self.storage_service is None:
+                    return False
+                try:
+                    return self.storage_service.get_source(expected_source_id).source_id == expected_source_id
+                except (KeyError, ValueError, OSError):
+                    return False
+            if self.source_resolver is None:
+                current_disk = self.disk_service.get_disk(volume.disk_number)
+                as_source = getattr(current_disk, "as_storage_source", None)
+                return callable(as_source) and as_source(volume.bytes_per_sector).source_id == expected_source_id
+            return self.source_resolver(volume.disk_number).source_id == expected_source_id
+
         progress_callback = self._catalog_progress(emit, include_orphaned=request.include_orphaned)
         outcome = self.catalog_scan_workflow.run(
             volume,
@@ -217,6 +278,11 @@ class RecoveryCommandHandler:
             progress_callback=progress_callback,
             validation_progress_callback=self._validation_progress(emit),
             phase_callback=self._catalog_phase_progress(emit),
+            session_source_id=expected_source_id,
+            cancellation_requested=lambda: self._operation_cancelled(
+                str(payload.get("operationId", "")),
+            ),
+            source_identity_validator=source_identity_is_current,
         )
         ids_by_identity = self.session.set_catalog(outcome.snapshot)
         return CatalogMapper.catalog(
@@ -227,6 +293,13 @@ class RecoveryCommandHandler:
     def _source_id_for_disk(disk):
         as_source = getattr(disk, "as_storage_source", None)
         return as_source().source_id if callable(as_source) else None
+
+    def _operation_cancelled(self, operation_id):
+        if not operation_id:
+            return False
+        with self._cancel_lock:
+            cancellation = self._active_cancellations.get(operation_id)
+        return cancellation.is_set() if cancellation is not None else False
 
     @staticmethod
     def _progress(emit):
